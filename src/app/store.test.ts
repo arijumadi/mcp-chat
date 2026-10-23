@@ -1,0 +1,113 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import { applyCoreEvent, parsePayload, useApp, type AppStore } from "./store";
+import type { CoreEvent } from "@/lib/types";
+
+const set = (partial: Partial<AppStore> | ((state: AppStore) => Partial<AppStore>)) =>
+  useApp.setState(partial as Partial<AppStore>);
+const get = () => useApp.getState();
+
+function apply(event: CoreEvent) {
+  applyCoreEvent(event, set, get);
+}
+
+beforeEach(() => {
+  window.__MCP_CHAT_MOCK__ = {
+    invoke: async <T,>(_command: string) => [] as unknown as T,
+    subscribe: () => () => undefined,
+  };
+  useApp.setState({
+    activeId: "c1",
+    conversations: [],
+    messages: [],
+    approvals: [],
+    inputRequests: [],
+    status: "idle",
+    streamingMessageId: null,
+  });
+});
+
+describe("transcript event reducer", () => {
+  it("creates an assistant message and appends text deltas", () => {
+    apply({
+      type: "message_start",
+      conversationId: "c1",
+      messageId: "m1",
+    });
+    apply({
+      type: "delta",
+      conversationId: "c1",
+      messageId: "m1",
+      partId: "p1",
+      deltaType: "text",
+      text: "Hello",
+    });
+    apply({
+      type: "delta",
+      conversationId: "c1",
+      messageId: "m1",
+      partId: "p1",
+      deltaType: "text",
+      text: " world",
+    });
+    const message = get().messages[0]!;
+    expect(message.id).toBe("m1");
+    expect(message.parts).toHaveLength(1);
+    expect(parsePayload(message.parts[0]!).text).toBe("Hello world");
+  });
+
+  it("upserts a tool part and updates its state", () => {
+    apply({ type: "message_start", conversationId: "c1", messageId: "m1" });
+    apply({
+      type: "part",
+      conversationId: "c1",
+      messageId: "m1",
+      partId: "tool1",
+      kind: "tool_call",
+      payload: {
+        callId: "call1",
+        name: "echo",
+        server: "Mock",
+        args: { text: "hi" },
+        state: "running",
+      },
+    });
+    apply({
+      type: "tool",
+      conversationId: "c1",
+      callId: "call1",
+      state: "completed",
+      message: "echo: hi",
+    });
+    const payload = parsePayload(get().messages[0]!.parts[0]!);
+    expect(payload.state).toBe("completed");
+    expect(payload.resultPreview).toBe("echo: hi");
+  });
+
+  it("queues approvals and clears them when the turn ends", () => {
+    apply({
+      type: "approval",
+      conversationId: "c1",
+      callId: "call1",
+      server: "Mock",
+      tool: "echo",
+      args: {},
+    });
+    expect(get().approvals).toHaveLength(1);
+    expect(get().status).toBe("waiting_approval");
+    apply({ type: "status", conversationId: "c1", status: "idle" });
+    expect(get().approvals).toHaveLength(0);
+    expect(get().status).toBe("idle");
+  });
+
+  it("ignores events from another conversation", () => {
+    apply({
+      type: "delta",
+      conversationId: "other",
+      messageId: "m9",
+      partId: "p9",
+      deltaType: "text",
+      text: "nope",
+    });
+    expect(get().messages).toHaveLength(0);
+  });
+});

@@ -1,0 +1,1122 @@
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use futures::StreamExt;
+use serde_json::{Value, json};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+
+use crate::agent::ChatEngine;
+use crate::agent::context::{build_messages, estimate_tokens, transcript_for_summary};
+use crate::agent::permissions::Effect;
+use crate::agent::tools::{ToolExecRequest, builtin_tool_def, builtin_tool_info, persist_result};
+use crate::agent::types::{
+    CONTINUE_PROMPT, MAX_STEPS_PROMPT, OUTPUT_LIMIT_PROMPT, StepError, is_length, retry_delay,
+};
+use crate::db::repo::{conversations, messages, settings};
+use crate::events::{CoreEvent, TurnStatus};
+use crate::llm::{
+    self, ChatMessage, ChatRequest, ChatRole, ContentBlock, Delta, FinishReason, ToolChoice,
+    ToolDef,
+};
+use crate::mcp::tools::ToolRegistry;
+use crate::models::{PartPayload, ProviderKind};
+use crate::{CoreError, Result, now_ms};
+
+struct Resolved {
+    kind: ProviderKind,
+    base_url: String,
+    api_key: Option<String>,
+    model: String,
+    context_window: i64,
+    max_tokens: i64,
+    system: Option<String>,
+}
+
+#[derive(Default)]
+struct CallState {
+    index: usize,
+    id: String,
+    name: String,
+    fragment: String,
+    args: Option<Value>,
+    part_id: Option<String>,
+    dispatched: bool,
+    argued: bool,
+}
+
+struct StreamRun {
+    message_id: Option<String>,
+    finish: Option<FinishReason>,
+    error: Option<CoreError>,
+    cancelled: bool,
+    had_output: bool,
+    had_tools: bool,
+}
+
+struct PartWriter {
+    kind: &'static str,
+    part_id: Option<String>,
+    text: String,
+    dirty: bool,
+    last_flush: Instant,
+}
+
+impl PartWriter {
+    fn new(kind: &'static str) -> Self {
+        Self {
+            kind,
+            part_id: None,
+            text: String::new(),
+            dirty: false,
+            last_flush: Instant::now(),
+        }
+    }
+
+    async fn push(
+        &mut self,
+        engine: &ChatEngine,
+        conversation_id: &str,
+        message_id: &str,
+        delta: &str,
+    ) -> Result<()> {
+        if self.part_id.is_none() {
+            let part = messages::append_part(
+                &engine.db.pool,
+                message_id,
+                self.kind,
+                &if self.kind == "reasoning" {
+                    PartPayload::Reasoning {
+                        text: String::new(),
+                    }
+                } else {
+                    PartPayload::Text {
+                        text: String::new(),
+                    }
+                },
+            )
+            .await?;
+            self.part_id = Some(part.id);
+        }
+        self.text.push_str(delta);
+        self.dirty = true;
+        let part_id = self.part_id.clone().unwrap_or_default();
+        let _ = engine.events.send(CoreEvent::Delta {
+            conversation_id: conversation_id.to_owned(),
+            message_id: message_id.to_owned(),
+            part_id,
+            delta_type: self.kind.to_owned(),
+            text: delta.to_owned(),
+        });
+        if self.last_flush.elapsed() > Duration::from_millis(250) {
+            self.flush(engine).await?;
+        }
+        Ok(())
+    }
+
+    async fn flush(&mut self, engine: &ChatEngine) -> Result<()> {
+        if !self.dirty {
+            return Ok(());
+        }
+        if let Some(part_id) = &self.part_id {
+            messages::update_part_text(&engine.db.pool, part_id, &self.text).await?;
+        }
+        self.dirty = false;
+        self.last_flush = Instant::now();
+        Ok(())
+    }
+}
+
+pub async fn run(
+    engine: Arc<ChatEngine>,
+    conversation_id: &str,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let _ = engine.events.send(CoreEvent::Status {
+        conversation_id: conversation_id.to_owned(),
+        status: TurnStatus::Thinking,
+        message: None,
+    });
+    match drive(engine.clone(), conversation_id, cancel).await {
+        Ok(()) => {
+            let _ = engine.events.send(CoreEvent::Status {
+                conversation_id: conversation_id.to_owned(),
+                status: TurnStatus::Idle,
+                message: None,
+            });
+            Ok(())
+        }
+        Err(CoreError::Cancelled) => {
+            let _ = engine.events.send(CoreEvent::Status {
+                conversation_id: conversation_id.to_owned(),
+                status: TurnStatus::Idle,
+                message: Some("Stopped.".into()),
+            });
+            Ok(())
+        }
+        Err(error) => {
+            fail_turn(engine.clone(), conversation_id, None, &error).await;
+            Ok(())
+        }
+    }
+}
+
+async fn drive(
+    engine: Arc<ChatEngine>,
+    conversation_id: &str,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let conversation = conversations::get(&engine.db.pool, conversation_id).await?;
+    let (provider, model, api_key, context_window, max_tokens) =
+        engine.resolve(&conversation).await?;
+    let kind = ProviderKind::parse(&provider.kind)
+        .ok_or_else(|| CoreError::Message(format!("Unknown provider kind {:?}", provider.kind)))?;
+    let default_system = settings::get(&engine.db.pool, "default_system_prompt").await?;
+    let system = conversation
+        .system_prompt
+        .clone()
+        .or(default_system)
+        .filter(|prompt| !prompt.trim().is_empty());
+    let resolved = Resolved {
+        kind,
+        base_url: provider.base_url.clone(),
+        api_key,
+        model,
+        context_window,
+        max_tokens,
+        system,
+    };
+
+    let (registry, defaults, tool_defs) = load_tools(&engine).await;
+    let mut tool_choice = ToolChoice::Auto;
+    let mut tools_disabled = false;
+    let mut max_notice_sent = false;
+    let mut final_step = false;
+    let max_steps = conversation.max_steps.max(1);
+
+    let mut step = 1_i64;
+    let mut retries = 0_usize;
+    let mut recover_used = false;
+    let mut length_count = 0_usize;
+    let mut compacted_once = false;
+
+    loop {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        if step > max_steps && !max_notice_sent {
+            append_synthetic(&engine, conversation_id, MAX_STEPS_PROMPT).await?;
+            max_notice_sent = true;
+            tools_disabled = true;
+            final_step = true;
+            tool_choice = ToolChoice::None;
+        }
+
+        let history = messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
+        let (mut chat_messages, summary) = build_messages(&history);
+        let mut system = resolved.system.clone();
+        if let Some(summary) = summary {
+            let base = system.unwrap_or_default();
+            system = Some(format!(
+                "{base}{}Summary of earlier conversation:\n{summary}",
+                if base.is_empty() { "" } else { "\n\n" }
+            ));
+        }
+        let mut estimate = estimate_tokens(&chat_messages, &tool_defs, system.as_deref());
+
+        if estimate > (resolved.context_window as usize * 8 / 10) {
+            match compact(&engine, &conversation, &resolved, &cancel).await {
+                Ok(()) => {
+                    compacted_once = true;
+                    let history =
+                        messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
+                    let (messages, summary) = build_messages(&history);
+                    chat_messages = messages;
+                    if let Some(summary) = summary {
+                        let base = resolved.system.clone().unwrap_or_default();
+                        system = Some(format!(
+                            "{base}{}Summary of earlier conversation:\n{summary}",
+                            if base.is_empty() { "" } else { "\n\n" }
+                        ));
+                    }
+                    estimate = estimate_tokens(&chat_messages, &tool_defs, system.as_deref());
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error.user_message(), "compaction failed");
+                }
+            }
+        }
+        if estimate > resolved.context_window as usize {
+            return Err(CoreError::ContextOverflow);
+        }
+
+        let request = ChatRequest {
+            kind: resolved.kind,
+            base_url: resolved.base_url.clone(),
+            api_key: resolved.api_key.clone(),
+            model: resolved.model.clone(),
+            system: system.clone(),
+            messages: chat_messages,
+            tools: tool_defs.clone(),
+            tool_choice,
+            max_tokens: resolved.max_tokens,
+            temperature: None,
+        };
+
+        let mut run = run_stream(
+            &engine,
+            conversation_id,
+            request,
+            &registry,
+            &defaults,
+            tools_disabled,
+            cancel.clone(),
+        )
+        .await;
+        if cancel.is_cancelled() {
+            run.cancelled = true;
+        }
+
+        if run.cancelled {
+            if let Some(message_id) = &run.message_id {
+                let _ =
+                    messages::set_status(&engine.db.pool, message_id, "interrupted", None).await;
+                let _ = engine.events.send(CoreEvent::MessageEnd {
+                    conversation_id: conversation_id.to_owned(),
+                    message_id: message_id.clone(),
+                    status: "interrupted".into(),
+                    error: None,
+                });
+            }
+            return Ok(());
+        }
+
+        if let Some(error) = run.error {
+            let step_error = StepError::from_core(&error);
+            if step_error.context_overflow && !compacted_once {
+                compacted_once = true;
+                if let Ok(()) = compact(&engine, &conversation, &resolved, &cancel).await {
+                    continue;
+                }
+            }
+            if run.had_output {
+                if let Some(message_id) = &run.message_id {
+                    let _ = messages::set_status(
+                        &engine.db.pool,
+                        message_id,
+                        "interrupted",
+                        Some(&step_error.message),
+                    )
+                    .await;
+                    let _ = engine.events.send(CoreEvent::MessageEnd {
+                        conversation_id: conversation_id.to_owned(),
+                        message_id: message_id.clone(),
+                        status: "interrupted".into(),
+                        error: Some(step_error.message.clone()),
+                    });
+                }
+                if step_error.retryable {
+                    append_synthetic(&engine, conversation_id, CONTINUE_PROMPT).await?;
+                    step += 1;
+                    retries = 0;
+                    continue;
+                }
+                fail_turn(engine.clone(), conversation_id, run.message_id, &error).await;
+                return Ok(());
+            }
+            if step_error.retryable && retries < 3 {
+                let delay = retry_delay(retries);
+                retries += 1;
+                tokio::time::sleep(Duration::from_millis(delay.delay_ms)).await;
+                recover_used = true;
+                continue;
+            }
+            if step_error.auth {
+                fail_turn(engine.clone(), conversation_id, run.message_id, &error).await;
+                return Ok(());
+            }
+            if recover_used && step_error.retryable {
+                fail_turn(engine.clone(), conversation_id, run.message_id, &error).await;
+                return Ok(());
+            }
+            fail_turn(engine.clone(), conversation_id, run.message_id, &error).await;
+            return Ok(());
+        }
+
+        retries = 0;
+        if let Some(message_id) = &run.message_id {
+            let finish = run.finish.clone();
+            if is_length(&finish.unwrap_or(FinishReason::Stop)) {
+                length_count += 1;
+                if length_count > 2 {
+                    let error = CoreError::OutputLimit;
+                    fail_turn(engine.clone(), conversation_id, run.message_id, &error).await;
+                    return Ok(());
+                }
+                let _ = messages::set_status(&engine.db.pool, message_id, "completed", None).await;
+                let _ = engine.events.send(CoreEvent::MessageEnd {
+                    conversation_id: conversation_id.to_owned(),
+                    message_id: message_id.clone(),
+                    status: "completed".into(),
+                    error: None,
+                });
+                append_synthetic(&engine, conversation_id, OUTPUT_LIMIT_PROMPT).await?;
+                step += 1;
+                continue;
+            }
+            let _ = messages::set_status(&engine.db.pool, message_id, "completed", None).await;
+            let _ = engine.events.send(CoreEvent::MessageEnd {
+                conversation_id: conversation_id.to_owned(),
+                message_id: message_id.clone(),
+                status: "completed".into(),
+                error: None,
+            });
+        }
+
+        if run.had_tools {
+            if final_step {
+                break;
+            }
+            step += 1;
+            length_count = 0;
+            continue;
+        }
+        break;
+    }
+
+    conversations::touch(&engine.db.pool, conversation_id).await?;
+    let _ = engine.events.send(CoreEvent::ConversationUpdated {
+        conversation_id: conversation_id.to_owned(),
+    });
+    Ok(())
+}
+
+async fn load_tools(engine: &ChatEngine) -> (ToolRegistry, HashMap<String, Effect>, Vec<ToolDef>) {
+    let servers = engine
+        .mcp
+        .tools_for_enabled_servers()
+        .await
+        .unwrap_or_default();
+    let mut input = Vec::new();
+    let mut defaults = HashMap::new();
+    for (server, tools) in &servers {
+        defaults.insert(
+            server.slug.clone(),
+            match server.policy.as_str() {
+                "auto" => Effect::Allow,
+                "deny" => Effect::Deny,
+                _ => Effect::Ask,
+            },
+        );
+        input.push((
+            server.id.clone(),
+            server.slug.clone(),
+            server.name.clone(),
+            tools.clone(),
+        ));
+    }
+    let registry = ToolRegistry::from_servers(&input).unwrap_or_default();
+    let mut defs: Vec<ToolDef> = registry
+        .tools
+        .iter()
+        .map(|tool| ToolDef {
+            name: tool.exposed_name.clone(),
+            description: if tool.server_name.is_empty() {
+                tool.description.clone()
+            } else {
+                format!("{}\n\nServer: {}", tool.description, tool.server_name)
+            },
+            input_schema: tool.input_schema.clone(),
+        })
+        .collect();
+    defs.push(builtin_tool_def());
+    (registry, defaults, defs)
+}
+
+async fn run_stream(
+    engine: &ChatEngine,
+    conversation_id: &str,
+    request: ChatRequest,
+    registry: &ToolRegistry,
+    defaults: &HashMap<String, Effect>,
+    tools_disabled: bool,
+    cancel: CancellationToken,
+) -> StreamRun {
+    let mut result = StreamRun {
+        message_id: None,
+        finish: None,
+        error: None,
+        cancelled: false,
+        had_output: false,
+        had_tools: false,
+    };
+    let provider = llm::provider_for(request.kind);
+    let mut stream = match provider.stream(request, cancel.clone()).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            result.error = Some(error);
+            return result;
+        }
+    };
+
+    let mut text = PartWriter::new("text");
+    let mut reasoning = PartWriter::new("reasoning");
+    let mut message_id: Option<String> = None;
+    let mut calls: BTreeMap<usize, CallState> = BTreeMap::new();
+    let mut handles: Vec<(usize, JoinHandle<crate::agent::tools::ToolExecResult>)> = Vec::new();
+    let mut tool_order: Vec<usize> = Vec::new();
+
+    loop {
+        let item = tokio::select! {
+            _ = cancel.cancelled() => {
+                result.cancelled = true;
+                break;
+            }
+            item = stream.next() => item,
+        };
+        let Some(item) = item else {
+            result
+                .finish
+                .get_or_insert(FinishReason::Unknown("end_of_stream".into()));
+            break;
+        };
+        match item {
+            Err(error) => {
+                result.error = Some(error);
+                break;
+            }
+            Ok(Delta::Text(delta)) => {
+                if let Some(id) = ensure_message(engine, conversation_id, &mut message_id).await {
+                    if let Err(error) = text.push(engine, conversation_id, &id, &delta).await {
+                        result.error = Some(error);
+                        break;
+                    }
+                    result.had_output = true;
+                }
+            }
+            Ok(Delta::Reasoning(delta)) => {
+                if let Some(id) = ensure_message(engine, conversation_id, &mut message_id).await {
+                    if let Err(error) = reasoning.push(engine, conversation_id, &id, &delta).await {
+                        result.error = Some(error);
+                        break;
+                    }
+                    result.had_output = true;
+                }
+            }
+            Ok(Delta::ToolCallStart { index, id, name }) => {
+                let Some(message) = ensure_message(engine, conversation_id, &mut message_id).await
+                else {
+                    continue;
+                };
+                result.had_output = true;
+                result.had_tools = true;
+                let call = calls.entry(index).or_insert_with(|| CallState {
+                    index,
+                    id: id.clone(),
+                    name: name.clone(),
+                    fragment: String::new(),
+                    args: None,
+                    part_id: None,
+                    dispatched: false,
+                    argued: false,
+                });
+                call.id = id;
+                call.name = name.clone();
+                call.argued = true;
+                let server_label = if name == "read_tool_output" {
+                    "mcp-chat".to_owned()
+                } else {
+                    registry
+                        .get(&name)
+                        .map(|tool| tool.server_name.clone())
+                        .unwrap_or_default()
+                };
+                let part = create_tool_part(
+                    engine,
+                    conversation_id,
+                    &message,
+                    &call.id,
+                    &call.name,
+                    &server_label,
+                    json!({}),
+                )
+                .await;
+                if let Ok(part) = part {
+                    call.part_id = Some(part.id);
+                }
+                if !tool_order.contains(&index) {
+                    tool_order.push(index);
+                }
+            }
+            Ok(Delta::ToolCallArgs {
+                index,
+                id,
+                fragment,
+            }) => {
+                let Some(message) = ensure_message(engine, conversation_id, &mut message_id).await
+                else {
+                    continue;
+                };
+                result.had_output = true;
+                result.had_tools = true;
+                let call = calls.entry(index).or_insert_with(|| CallState {
+                    index,
+                    id: id.clone(),
+                    name: "tool".into(),
+                    fragment: String::new(),
+                    args: None,
+                    part_id: None,
+                    dispatched: false,
+                    argued: false,
+                });
+                call.fragment.push_str(&fragment);
+                if call.part_id.is_none() {
+                    if let Ok(part) = create_tool_part(
+                        engine,
+                        conversation_id,
+                        &message,
+                        &call.id,
+                        &call.name,
+                        "",
+                        json!({}),
+                    )
+                    .await
+                    {
+                        call.part_id = Some(part.id);
+                    }
+                }
+                if !tool_order.contains(&index) {
+                    tool_order.push(index);
+                }
+                if call.args.is_none() {
+                    if let Some(args) = parse_args(&call.fragment) {
+                        call.args = Some(args.clone());
+                        if let Err(error) = dispatch_call(
+                            engine,
+                            conversation_id,
+                            message_id.as_deref(),
+                            registry,
+                            defaults,
+                            tools_disabled,
+                            cancel.clone(),
+                            call,
+                            &mut handles,
+                        )
+                        .await
+                        {
+                            result.error = Some(error);
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok(Delta::ToolCallEnd { index, id }) => {
+                if let Some(call) = calls.get_mut(&index) {
+                    if call.id.is_empty() {
+                        call.id = id;
+                    }
+                    if call.args.is_none() {
+                        if let Some(args) = parse_args(&call.fragment) {
+                            call.args = Some(args);
+                        }
+                    }
+                }
+            }
+            Ok(Delta::Usage(_)) => {}
+            Ok(Delta::Done(reason)) => {
+                result.finish = Some(reason);
+                break;
+            }
+        }
+    }
+
+    if let Some(message) = &message_id {
+        let _ = text.flush(engine).await;
+        let _ = reasoning.flush(engine).await;
+        let _ = message;
+    }
+
+    // Settle every call exactly once.
+    let mut outcomes: BTreeMap<usize, crate::agent::tools::ToolExecResult> = BTreeMap::new();
+    if result.cancelled || result.error.is_some() {
+        for index in tool_order.clone() {
+            let call = calls.get_mut(&index).expect("call");
+            if !call.dispatched {
+                let message = if result.cancelled {
+                    "Tool execution interrupted"
+                } else if !call.fragment.trim().is_empty() && call.args.is_none() {
+                    "Invalid tool input: arguments are not valid JSON."
+                } else {
+                    "Provider did not return a tool result"
+                };
+                let outcome =
+                    settle_call_error(engine, conversation_id, registry, defaults, call, message)
+                        .await;
+                outcomes.insert(index, outcome);
+            }
+        }
+    } else {
+        for index in tool_order.clone() {
+            let call = calls.get_mut(&index).expect("call");
+            if !call.dispatched {
+                if call.args.is_none() {
+                    if call.fragment.trim().is_empty() {
+                        call.args = Some(json!({}));
+                    } else if let Some(args) = parse_args(&call.fragment) {
+                        call.args = Some(args);
+                    } else {
+                        let outcome = settle_call_error(
+                            engine,
+                            conversation_id,
+                            registry,
+                            defaults,
+                            call,
+                            "Invalid tool input: arguments are not valid JSON.",
+                        )
+                        .await;
+                        outcomes.insert(index, outcome);
+                        continue;
+                    }
+                }
+                let _ = dispatch_call(
+                    engine,
+                    conversation_id,
+                    message_id.as_deref(),
+                    registry,
+                    defaults,
+                    tools_disabled,
+                    cancel.clone(),
+                    call,
+                    &mut handles,
+                )
+                .await;
+            }
+        }
+    }
+
+    for (index, handle) in handles {
+        match handle.await {
+            Ok(outcome) => {
+                outcomes.insert(outcome.index, outcome);
+            }
+            Err(_) => {
+                if let Some(call) = calls.get_mut(&index) {
+                    let outcome = settle_call_error(
+                        engine,
+                        conversation_id,
+                        registry,
+                        defaults,
+                        call,
+                        "The tool task crashed before returning a result.",
+                    )
+                    .await;
+                    outcomes.insert(index, outcome);
+                }
+            }
+        }
+    }
+
+    for index in &tool_order {
+        if !outcomes.contains_key(index) {
+            let call = calls.get_mut(index).expect("call");
+            let outcome = settle_call_error(
+                engine,
+                conversation_id,
+                registry,
+                defaults,
+                call,
+                "Provider did not return a tool result",
+            )
+            .await;
+            outcomes.insert(*index, outcome);
+        }
+    }
+
+    for index in &tool_order {
+        if let Some(outcome) = outcomes.get(index) {
+            if let Some(message) = &message_id {
+                let _ = persist_result(engine.executor.as_ref(), conversation_id, message, outcome)
+                    .await;
+            }
+        }
+    }
+
+    result.message_id = message_id;
+    result
+}
+
+async fn ensure_message(
+    engine: &ChatEngine,
+    conversation_id: &str,
+    message_id: &mut Option<String>,
+) -> Option<String> {
+    if let Some(id) = message_id {
+        return Some(id.clone());
+    }
+    match messages::create(&engine.db.pool, conversation_id, "assistant", "streaming").await {
+        Ok(message) => {
+            *message_id = Some(message.id.clone());
+            let _ = engine.events.send(CoreEvent::MessageStart {
+                conversation_id: conversation_id.to_owned(),
+                message_id: message.id.clone(),
+            });
+            let _ = engine.events.send(CoreEvent::Status {
+                conversation_id: conversation_id.to_owned(),
+                status: TurnStatus::Streaming,
+                message: None,
+            });
+            Some(message.id)
+        }
+        Err(_) => None,
+    }
+}
+
+async fn create_tool_part(
+    engine: &ChatEngine,
+    conversation_id: &str,
+    message_id: &str,
+    call_id: &str,
+    name: &str,
+    server: &str,
+    args: Value,
+) -> Result<crate::models::Part> {
+    let payload = json!({
+        "callId": call_id,
+        "name": name,
+        "server": server,
+        "args": args,
+        "state": "streaming",
+        "startedAt": now_ms(),
+        "endedAt": null,
+        "executed": false,
+        "approval": null,
+    });
+    let part =
+        messages::append_raw_part(&engine.db.pool, message_id, "tool_call", &payload).await?;
+    let _ = engine.events.send(CoreEvent::Part {
+        conversation_id: conversation_id.to_owned(),
+        message_id: message_id.to_owned(),
+        part_id: part.id.clone(),
+        kind: "tool_call".into(),
+        payload: payload.clone(),
+    });
+    Ok(part)
+}
+
+fn parse_args(fragment: &str) -> Option<Value> {
+    let trimmed = fragment.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(value) if value.is_object() => Some(value),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_call(
+    engine: &ChatEngine,
+    conversation_id: &str,
+    message_id: Option<&str>,
+    registry: &ToolRegistry,
+    defaults: &HashMap<String, Effect>,
+    tools_disabled: bool,
+    cancel: CancellationToken,
+    call: &mut CallState,
+    handles: &mut Vec<(usize, JoinHandle<crate::agent::tools::ToolExecResult>)>,
+) -> Result<()> {
+    if call.dispatched {
+        return Ok(());
+    }
+    let Some(args) = call.args.clone() else {
+        return Ok(());
+    };
+    call.dispatched = true;
+    let (server_id, slug, server_name, default, tool) = if call.name == "read_tool_output" {
+        (
+            String::new(),
+            "builtin".to_owned(),
+            "mcp-chat".to_owned(),
+            Effect::Allow,
+            Some(builtin_tool_info()),
+        )
+    } else if let Some(tool) = registry.get(&call.name) {
+        (
+            tool.server_id.clone(),
+            tool.server_slug.clone(),
+            tool.server_name.clone(),
+            defaults
+                .get(&tool.server_slug)
+                .copied()
+                .unwrap_or(Effect::Ask),
+            Some(tool.to_info()),
+        )
+    } else {
+        (
+            String::new(),
+            "unknown".to_owned(),
+            "unknown".to_owned(),
+            Effect::Ask,
+            None,
+        )
+    };
+    let part_id = call.part_id.clone().unwrap_or_default();
+    if part_id.is_empty() {
+        return Ok(());
+    }
+    let payload = json!({
+        "callId": call.id,
+        "name": call.name,
+        "server": server_name,
+        "args": args,
+        "state": "queued",
+        "startedAt": now_ms(),
+        "endedAt": null,
+        "executed": false,
+        "approval": null,
+    });
+    let _ = messages::update_part_payload(&engine.db.pool, &part_id, &payload).await;
+    if let Some(message_id) = message_id {
+        let _ = engine.events.send(CoreEvent::Part {
+            conversation_id: conversation_id.to_owned(),
+            message_id: message_id.to_owned(),
+            part_id: part_id.clone(),
+            kind: "tool_call".into(),
+            payload: payload.clone(),
+        });
+    }
+    let remote_name = tool
+        .as_ref()
+        .map(|tool| tool.name.clone())
+        .unwrap_or_else(|| call.name.clone());
+    let request = ToolExecRequest {
+        conversation_id: conversation_id.to_owned(),
+        message_id: String::new(),
+        part_id,
+        call_id: call.id.clone(),
+        index: call.index,
+        exposed_name: call.name.clone(),
+        remote_name,
+        server_id,
+        server_slug: slug,
+        server_name,
+        args,
+        tool,
+        default_effect: default,
+        disabled: tools_disabled,
+        cancel,
+    };
+    let executor = engine.executor.clone();
+    let handle = tokio::spawn(async move { executor.execute(request).await });
+    handles.push((call.index, handle));
+    Ok(())
+}
+
+async fn settle_call_error(
+    engine: &ChatEngine,
+    conversation_id: &str,
+    registry: &ToolRegistry,
+    defaults: &HashMap<String, Effect>,
+    call: &mut CallState,
+    message: &str,
+) -> crate::agent::tools::ToolExecResult {
+    let (server_id, slug, server_name, default, tool) = if call.name == "read_tool_output" {
+        (
+            String::new(),
+            "builtin".to_owned(),
+            "mcp-chat".to_owned(),
+            Effect::Allow,
+            Some(builtin_tool_info()),
+        )
+    } else if let Some(tool) = registry.get(&call.name) {
+        (
+            tool.server_id.clone(),
+            tool.server_slug.clone(),
+            tool.server_name.clone(),
+            defaults
+                .get(&tool.server_slug)
+                .copied()
+                .unwrap_or(Effect::Ask),
+            Some(tool.to_info()),
+        )
+    } else {
+        (
+            String::new(),
+            "unknown".to_owned(),
+            "unknown".to_owned(),
+            Effect::Ask,
+            None,
+        )
+    };
+    let remote_name = tool
+        .as_ref()
+        .map(|tool| tool.name.clone())
+        .unwrap_or_else(|| call.name.clone());
+    let request = ToolExecRequest {
+        conversation_id: conversation_id.to_owned(),
+        message_id: String::new(),
+        part_id: call.part_id.clone().unwrap_or_default(),
+        call_id: call.id.clone(),
+        index: call.index,
+        exposed_name: call.name.clone(),
+        remote_name,
+        server_id,
+        server_slug: slug,
+        server_name,
+        args: call.args.clone().unwrap_or_else(|| json!({})),
+        tool,
+        default_effect: default,
+        disabled: false,
+        cancel: CancellationToken::new(),
+    };
+    call.dispatched = true;
+    let state = if message.contains("interrupted") {
+        "aborted"
+    } else {
+        "error"
+    };
+    engine
+        .executor
+        .settle_error(request, state, message.to_owned())
+        .await
+}
+
+async fn append_synthetic(engine: &ChatEngine, conversation_id: &str, text: &str) -> Result<()> {
+    let message = messages::create(&engine.db.pool, conversation_id, "user", "synthetic").await?;
+    messages::append_part(
+        &engine.db.pool,
+        &message.id,
+        "text",
+        &PartPayload::Text {
+            text: text.to_owned(),
+        },
+    )
+    .await?;
+    conversations::touch(&engine.db.pool, conversation_id).await?;
+    let _ = engine.events.send(CoreEvent::ConversationUpdated {
+        conversation_id: conversation_id.to_owned(),
+    });
+    Ok(())
+}
+
+async fn fail_turn(
+    engine: Arc<ChatEngine>,
+    conversation_id: &str,
+    message_id: Option<String>,
+    error: &CoreError,
+) {
+    let message = error.user_message();
+    let message_id = match message_id {
+        Some(id) => id,
+        None => {
+            match messages::create(&engine.db.pool, conversation_id, "assistant", "error").await {
+                Ok(message) => {
+                    let _ = engine.events.send(CoreEvent::MessageStart {
+                        conversation_id: conversation_id.to_owned(),
+                        message_id: message.id.clone(),
+                    });
+                    message.id
+                }
+                Err(_) => return,
+            }
+        }
+    };
+    let _ = messages::set_status(&engine.db.pool, &message_id, "error", Some(&message)).await;
+    if let Ok(part) = messages::append_part(
+        &engine.db.pool,
+        &message_id,
+        "error",
+        &PartPayload::Error {
+            message: message.clone(),
+        },
+    )
+    .await
+    {
+        let _ = engine.events.send(CoreEvent::Part {
+            conversation_id: conversation_id.to_owned(),
+            message_id: message_id.clone(),
+            part_id: part.id,
+            kind: "error".into(),
+            payload: json!({"message": message}),
+        });
+    }
+    let _ = engine.events.send(CoreEvent::MessageEnd {
+        conversation_id: conversation_id.to_owned(),
+        message_id,
+        status: "error".into(),
+        error: Some(message.clone()),
+    });
+    let _ = engine.events.send(CoreEvent::Status {
+        conversation_id: conversation_id.to_owned(),
+        status: TurnStatus::Error,
+        message: Some(message.clone()),
+    });
+}
+
+async fn compact(
+    engine: &ChatEngine,
+    conversation: &crate::models::Conversation,
+    resolved: &Resolved,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    let history = messages::list_for_conversation(&engine.db.pool, &conversation.id).await?;
+    if history.len() < 8 {
+        return Err(CoreError::Message("Not enough history to compact.".into()));
+    }
+    let mut keep_start = history.len().saturating_sub(6);
+    while keep_start > 0 && history[keep_start].message.role == "tool" {
+        keep_start -= 1;
+    }
+    if keep_start == 0 {
+        return Err(CoreError::Message("Not enough history to compact.".into()));
+    }
+    let boundary = &history[keep_start - 1];
+    let transcript = transcript_for_summary(&history[..keep_start]);
+    if transcript.trim().is_empty() {
+        return Err(CoreError::Message("Nothing to summarize.".into()));
+    }
+    let request = ChatRequest {
+        kind: resolved.kind,
+        base_url: resolved.base_url.clone(),
+        api_key: resolved.api_key.clone(),
+        model: resolved.model.clone(),
+        system: Some(
+            "You are a precise conversation compactor. Preserve decisions, facts, user preferences, file paths, tool results and open tasks. Be compact but complete. Do not add commentary.".into(),
+        ),
+        messages: vec![ChatMessage {
+            role: ChatRole::User,
+            content: vec![ContentBlock::Text(format!(
+                "Summarize this conversation transcript:\n\n{transcript}"
+            ))],
+        }],
+        tools: Vec::new(),
+        tool_choice: ToolChoice::None,
+        max_tokens: resolved.max_tokens.min(2048),
+        temperature: None,
+    };
+    let summary = llm::complete(resolved.kind, request, cancel.clone()).await?;
+    if summary.trim().is_empty() {
+        return Err(CoreError::Message(
+            "The summarizer returned an empty result.".into(),
+        ));
+    }
+    let message =
+        messages::create(&engine.db.pool, &conversation.id, "system", "completed").await?;
+    messages::append_part(
+        &engine.db.pool,
+        &message.id,
+        "summary",
+        &PartPayload::Summary {
+            text: summary,
+            covers_until: boundary.message.id.clone(),
+        },
+    )
+    .await?;
+    conversations::touch(&engine.db.pool, &conversation.id).await?;
+    let _ = engine.events.send(CoreEvent::ConversationUpdated {
+        conversation_id: conversation.id.clone(),
+    });
+    Ok(())
+}

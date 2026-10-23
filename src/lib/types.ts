@@ -1,0 +1,326 @@
+export type Iso = number;
+
+export interface Conversation {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  providerId: string | null;
+  model: string | null;
+  systemPrompt: string | null;
+  archived: boolean;
+  maxSteps: number;
+}
+
+export interface Message {
+  id: string;
+  conversationId: string;
+  role: "user" | "assistant" | "system" | "tool" | string;
+  createdAt: number;
+  status: string;
+  error: string | null;
+}
+
+export interface Part {
+  id: string;
+  messageId: string;
+  idx: number;
+  kind: string;
+  payloadJson: string;
+}
+
+export interface MessageWithParts extends Message {
+  parts: Part[];
+}
+
+export interface SearchHit {
+  conversationId: string;
+  title: string;
+  snippet: string;
+  updatedAt: number;
+}
+
+export interface Provider {
+  id: string;
+  name: string;
+  kind: "openai_compat" | "anthropic" | string;
+  baseUrl: string;
+  model: string;
+  apiKeyRef: string | null;
+  contextWindow: number;
+  maxOutputTokens: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProviderView extends Provider {
+  hasKey: boolean;
+  keyHint: string | null;
+}
+
+export type ServerPolicy = "auto" | "ask" | "deny";
+export type AuthKind = "none" | "bearer" | "oauth";
+export type TransportKind = "streamable_http" | "legacy_http" | "sse";
+
+export interface Server {
+  id: string;
+  name: string;
+  slug: string;
+  url: string;
+  transport: TransportKind | string;
+  authKind: AuthKind | string;
+  headersJson: string;
+  enabled: boolean;
+  policy: ServerPolicy | string;
+  protocolVersion: string | null;
+  createdAt: number;
+  lastStatus: string | null;
+  lastError: string | null;
+  lastCheckedAt: number | null;
+  serverInfoJson: string | null;
+  capabilitiesJson: string | null;
+  toolsJson: string | null;
+  toolsCachedAt: number | null;
+  oauthIssuer: string | null;
+  oauthClientId: string | null;
+  negotiatedAt: number | null;
+}
+
+export interface ServerView extends Server {
+  hasBearer: boolean;
+  toolCount: number;
+}
+
+export interface ServerInfo {
+  name: string;
+  version: string;
+  title?: string | null;
+}
+
+export interface ToolInfo {
+  name: string;
+  title?: string | null;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown> | null;
+  annotations?: Record<string, unknown> | null;
+}
+
+export interface CallToolResult {
+  content: Array<Record<string, unknown>>;
+  structuredContent?: unknown;
+  isError: boolean;
+  resultType?: string;
+  inputRequests?: unknown;
+  requestState?: unknown;
+}
+
+export interface ConnectionReport {
+  protocolVersion: string;
+  transport: string;
+  serverInfo: ServerInfo | null;
+  capabilities: Record<string, unknown> | null;
+  instructions: string | null;
+  tools: ToolInfo[];
+}
+
+export type ToolState =
+  | "streaming"
+  | "queued"
+  | "running"
+  | "completed"
+  | "error"
+  | "aborted";
+
+export interface TextPayload {
+  text: string;
+}
+
+export interface ReasoningPayload {
+  text: string;
+}
+
+export interface ToolCallPayload {
+  callId: string;
+  name: string;
+  server: string;
+  args: Record<string, unknown>;
+  state: ToolState;
+  startedAt?: number | null;
+  endedAt?: number | null;
+  executed: boolean;
+  approval?: "pending" | "allowed" | "rejected" | null;
+  error?: string | null;
+  resultPreview?: string | null;
+  fullResultRef?: string | null;
+  truncated?: boolean;
+}
+
+export interface ToolResultPayload {
+  callId: string;
+  name: string;
+  server: string;
+  ok: boolean;
+  content: string;
+  structured?: unknown;
+  fullResultRef?: string | null;
+  truncated?: boolean;
+}
+
+export interface ErrorPayload {
+  message: string;
+}
+
+export interface SummaryPayload {
+  text: string;
+  coversUntil?: string;
+}
+
+export interface ApprovalEvent {
+  type: "approval";
+  conversationId: string;
+  callId: string;
+  server: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+export interface InputRequestEvent {
+  type: "input_request";
+  conversationId: string;
+  callId: string;
+  request: {
+    inputRequests?: Record<string, InputRequest>;
+    requestState?: unknown;
+  };
+}
+
+export interface InputRequest {
+  method: string;
+  params: {
+    mode?: "form" | "url";
+    message?: string;
+    url?: string;
+    requestedSchema?: {
+      type: "object";
+      properties?: Record<string, InputSchemaProperty>;
+      required?: string[];
+    };
+    [key: string]: unknown;
+  };
+}
+
+export interface InputSchemaProperty {
+  type?: string;
+  title?: string;
+  description?: string;
+  enum?: Array<string | number>;
+  minimum?: number;
+  maximum?: number;
+  default?: unknown;
+}
+
+export type TurnStatus =
+  | "thinking"
+  | "streaming"
+  | "waiting_approval"
+  | "running_tool"
+  | "idle"
+  | "error";
+
+export type CoreEvent =
+  | { type: "status"; conversationId: string; status: TurnStatus; message?: string | null }
+  | { type: "message_start"; conversationId: string; messageId: string }
+  | {
+      type: "delta";
+      conversationId: string;
+      messageId: string;
+      partId: string;
+      deltaType: "text" | "reasoning";
+      text: string;
+    }
+  | {
+      type: "part";
+      conversationId: string;
+      messageId: string;
+      partId: string;
+      kind: string;
+      payload: Record<string, unknown>;
+    }
+  | {
+      type: "message_end";
+      conversationId: string;
+      messageId: string;
+      status: string;
+      error?: string | null;
+    }
+  | {
+      type: "tool";
+      conversationId: string;
+      callId: string;
+      state: string;
+      progress?: number | null;
+      message?: string | null;
+    }
+  | ApprovalEvent
+  | InputRequestEvent
+  | { type: "conversation_updated"; conversationId: string }
+  | { type: "error"; conversationId?: string | null; message: string };
+
+export interface AppInfo {
+  name: string;
+  version: string;
+  dataDir: string;
+  platform: string;
+}
+
+export interface KeyTest {
+  ok: boolean;
+  models: string[];
+  message: string;
+}
+
+export interface ExportResult {
+  filename: string;
+  content: string;
+  mime: string;
+}
+
+export interface PermissionRule {
+  id: string;
+  serverId: string | null;
+  action: string;
+  resource: string;
+  effect: string;
+  createdAt: number;
+}
+
+export interface ProviderInput {
+  name: string;
+  kind: string;
+  baseUrl: string;
+  model: string;
+  contextWindow: number;
+  maxOutputTokens: number;
+  apiKey?: string;
+}
+
+export interface ServerInput {
+  name: string;
+  url: string;
+  authKind: string;
+  headersJson: string;
+  policy: string;
+  bearer?: string;
+  transport?: string;
+}
+
+export interface TestServerInput {
+  serverId?: string;
+  name: string;
+  url: string;
+  authKind: string;
+  headersJson: string;
+  bearer?: string;
+  transport?: string;
+}

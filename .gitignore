@@ -1,0 +1,16 @@
+node_modules/
+dist/
+target/
+src-tauri/target/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+playwright-report/
+test-results/
+*.db
+*.db-shm
+*.db-wal
+coverage/
+.mcp-chat-dev/
