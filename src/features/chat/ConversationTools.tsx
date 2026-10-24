@@ -28,6 +28,12 @@ export function ConversationTools({
   const selectedCount = allServers
     ? enabledServers.length
     : enabledServers.filter((server) => serverIds.includes(server.id)).length;
+  const selectedServers = allServers
+    ? enabledServers
+    : enabledServers.filter((server) => serverIds.includes(server.id));
+  const mcpIssue = selectedServers.find(
+    (server) => server.lastError || (server.lastStatus && server.lastStatus !== "connected"),
+  );
 
   useEffect(() => {
     setOpen(false);
@@ -104,13 +110,24 @@ export function ConversationTools({
         onClick={toggleOpen}
         className="focus-ring flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)]"
         style={{ borderColor: "var(--border)", color: "var(--muted)" }}
-        title="Choose MCP tools for this chat"
+        title={
+          mcpIssue
+            ? `MCP issue: ${mcpIssue.name}${mcpIssue.lastError ? ` — ${mcpIssue.lastError}` : ""}`
+            : "Choose MCP tools for this chat"
+        }
       >
         <SlidersHorizontal size={13} />
         <span>MCP</span>
         <span className="font-medium" style={{ color: "var(--fg)" }}>
           {selectedCount}/{enabledServers.length}
         </span>
+        {mcpIssue ? (
+          <span
+            className="h-1.5 w-1.5 rounded-full"
+            style={{ background: "var(--danger)" }}
+            aria-label="MCP connection issue"
+          />
+        ) : null}
         <ChevronDown size={11} />
       </button>
 

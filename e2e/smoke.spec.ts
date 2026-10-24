@@ -61,6 +61,7 @@ test("revert moves a user message back into the composer", async ({ page }) => {
 
   await page.getByTestId("user-message").last().hover();
   await page.getByRole("button", { name: "Revert message" }).click();
+  await page.getByRole("button", { name: "Revert", exact: true }).click();
 
   await expect(composer).toHaveValue("Edit this message");
   await expect(page.getByText(/I received/)).toHaveCount(0);

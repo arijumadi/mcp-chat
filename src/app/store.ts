@@ -18,10 +18,16 @@ import type {
 export type View = "chat" | "settings" | "servers";
 export type Theme = "system" | "light" | "dark";
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface Toast {
   id: string;
   text: string;
   kind: "error" | "info";
+  actions?: ToastAction[];
 }
 
 export interface AppStore {
@@ -75,7 +81,11 @@ export interface AppStore {
     feedback?: string,
   ) => Promise<void>;
   respondInput: (callId: string, responses: unknown, cancelled: boolean) => Promise<void>;
-  toast: (text: string, kind?: "error" | "info") => void;
+  toast: (
+    text: string,
+    kind?: "error" | "info",
+    actions?: ToastAction[],
+  ) => void;
   dismissToast: (id: string) => void;
   setTheme: (theme: Theme) => Promise<void>;
   reloadActive: () => Promise<void>;
@@ -285,8 +295,11 @@ export const useApp = create<AppStore>()((set, get) => ({
       set((state) => ({
         messages: state.messages.filter((item) => item.id !== tempId),
         status: "error",
+        draft: text,
       }));
-      get().toast(String(error), "error");
+      get().toast(String(error), "error", [
+        { label: "Retry", onClick: () => void get().sendMessage(text) },
+      ]);
     }
   },
 
@@ -319,7 +332,9 @@ export const useApp = create<AppStore>()((set, get) => ({
       await get().reloadActive();
     } catch (error) {
       set({ status: "error" });
-      get().toast(String(error), "error");
+      get().toast(String(error), "error", [
+        { label: "Retry", onClick: () => void get().regenerate() },
+      ]);
     }
   },
 
@@ -498,12 +513,23 @@ export const useApp = create<AppStore>()((set, get) => ({
     }
   },
 
-  toast(text, kind = "error") {
+  toast(text, kind = "error", actions = []) {
+    if (
+      get().toasts.some(
+        (toast) => toast.text === text && toast.kind === kind,
+      )
+    ) {
+      return;
+    }
     const id = `toast-${Date.now()}-${Math.random()}`;
-    set((state) => ({ toasts: [...state.toasts, { id, text, kind }] }));
-    setTimeout(() => {
-      set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) }));
-    }, 5000);
+    set((state) => ({
+      toasts: [...state.toasts.slice(-4), { id, text, kind, actions }],
+    }));
+    window.setTimeout(() => {
+      set((state) => ({
+        toasts: state.toasts.filter((toast) => toast.id !== id),
+      }));
+    }, kind === "error" ? 12_000 : 5_000);
   },
 
   dismissToast(id) {

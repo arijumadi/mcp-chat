@@ -59,6 +59,18 @@ export function ModelPicker({
             ? shortModelName(conversation.model ?? provider.model ?? "model")
             : "No provider"}
         </span>
+        {provider &&
+        !provider.hasKey &&
+        !/^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/i.test(
+          provider.baseUrl,
+        ) ? (
+          <span
+            className="h-1.5 w-1.5 shrink-0 rounded-full"
+            style={{ background: "var(--danger)" }}
+            title="Provider API key is missing"
+            aria-label="Provider key missing"
+          />
+        ) : null}
         <ChevronDown size={12} className="shrink-0" />
       </button>
 

@@ -1,9 +1,10 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { AlertTriangle, RotateCcw, Undo2 } from "lucide-react";
 import type { MessageWithParts, Part } from "@/lib/types";
 import { parsePayload, partText, useApp } from "@/app/store";
 import { Markdown } from "@/components/Markdown";
 import { Button } from "@/components/Button";
+import { Modal } from "@/components/Modal";
 import { ToolCard } from "./ToolCard";
 import { cn } from "@/lib/cn";
 import { formatMessageDateTime } from "@/lib/format";
@@ -27,6 +28,7 @@ export function MessageItem({
     status,
   );
   const copyRoot = useRef<HTMLDivElement>(null);
+  const [confirmRevert, setConfirmRevert] = useState(false);
   if (message.role === "tool") return null;
 
   if (message.role === "user") {
@@ -35,12 +37,13 @@ export function MessageItem({
       .map(partText)
       .join("");
     return (
-      <div className="animate-in flex justify-end py-2">
-        <div
-          className="group flex max-w-[85%] flex-col items-end"
-          data-testid="user-message"
-          data-message-id={message.id}
-        >
+      <>
+        <div className="animate-in flex justify-end py-2">
+          <div
+            className="group flex max-w-[85%] flex-col items-end"
+            data-testid="user-message"
+            data-message-id={message.id}
+          >
           <div
             className="max-w-full rounded-2xl rounded-br-md px-4 py-2.5 text-[14.5px] whitespace-pre-wrap"
             style={{ background: "var(--user)" }}
@@ -58,7 +61,7 @@ export function MessageItem({
             {!busy ? (
               <button
                 type="button"
-                onClick={() => void revertMessage(message.id)}
+                onClick={() => setConfirmRevert(true)}
                 className="focus-ring flex h-6 w-6 items-center justify-center rounded-md transition hover:bg-[var(--panel-2)] hover:text-[var(--fg)]"
                 style={{ color: "var(--muted)" }}
                 title="Revert to this message"
@@ -67,9 +70,39 @@ export function MessageItem({
                 <Undo2 size={12} />
               </button>
             ) : null}
+            </div>
           </div>
         </div>
-      </div>
+        <Modal
+          open={confirmRevert}
+          onClose={() => setConfirmRevert(false)}
+          width="sm"
+          title="Revert to this message?"
+          subtitle="This removes this message and everything after it."
+          footer={
+            <>
+              <Button size="sm" variant="ghost" onClick={() => setConfirmRevert(false)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => {
+                  setConfirmRevert(false);
+                  void revertMessage(message.id);
+                }}
+              >
+                Revert
+              </Button>
+            </>
+          }
+        >
+          <p className="text-[13px] leading-relaxed" style={{ color: "var(--muted)" }}>
+            The message text will be placed back in the composer so you can edit
+            and send it again.
+          </p>
+        </Modal>
+      </>
     );
   }
 

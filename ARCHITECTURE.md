@@ -128,7 +128,7 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 | Permissions | last-match-wins, glob, default policy, resource normalization |
 | Agent | text, tool loop, parallel, invalid args, unknown tool, policy deny, approval/rejection/always, auto-approve, per-chat server gating, lazy catalog/schema/call, batch execute, read_tool_output paging, built-in file/shell/search/skill/question tools, shell labels/echo handling, loop guard, continue-turn resume, layered prompt/AGENTS/skill catalog, default time/Jarvis prompt, cache-stable system prompt, length, cut, overflow, manual compaction/context status, unknown finish, max steps, retries, spill/paging |
 | DB | migrations from empty, repo CRUD, FTS sync/cascade, crash sweep |
-| UI | transcript reducer, tool card rendering, date grouping, rich Markdown copy, revert hover actions, Playwright smoke (5) |
+| UI | transcript reducer, tool card rendering, date grouping, rich Markdown copy, confirm-before-revert, auto-approve warning, model/workspace pickers, onboarding checklist, actionable toasts, accessible modals, Playwright smoke (5) |
 
 ## Known gaps
 

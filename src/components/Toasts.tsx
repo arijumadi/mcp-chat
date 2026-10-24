@@ -1,5 +1,6 @@
-import { AlertCircle, CheckCircle2, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, Copy, X } from "lucide-react";
 import { useApp } from "@/app/store";
+import { copyText } from "@/lib/clipboard";
 
 export function Toasts() {
   const toasts = useApp((state) => state.toasts);
@@ -15,14 +16,44 @@ export function Toasts() {
             borderColor: toast.kind === "error" ? "var(--danger)" : "var(--border)",
             color: "var(--fg)",
           }}
-          role="status"
+          role={toast.kind === "error" ? "alert" : "status"}
         >
           {toast.kind === "error" ? (
             <AlertCircle size={16} className="mt-0.5 shrink-0" style={{ color: "var(--danger)" }} />
           ) : (
             <CheckCircle2 size={16} className="mt-0.5 shrink-0" style={{ color: "var(--accent)" }} />
           )}
-          <span className="min-w-0 flex-1 whitespace-pre-wrap">{toast.text}</span>
+          <div className="min-w-0 flex-1">
+            <span className="block whitespace-pre-wrap">{toast.text}</span>
+            {toast.actions?.length ? (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {toast.actions.map((action) => (
+                  <button
+                    key={action.label}
+                    type="button"
+                    onClick={() => {
+                      dismiss(toast.id);
+                      action.onClick();
+                    }}
+                    className="focus-ring rounded-md border px-2 py-1 text-[10.5px] font-medium transition hover:bg-[var(--panel-2)]"
+                    style={{ borderColor: "var(--border)", color: "var(--accent)" }}
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            onClick={() => void copyText(toast.text).catch(() => undefined)}
+            className="focus-ring -mr-0.5 rounded p-0.5"
+            style={{ color: "var(--faint)" }}
+            title="Copy message"
+            aria-label="Copy notification"
+          >
+            <Copy size={13} />
+          </button>
           <button
             onClick={() => dismiss(toast.id)}
             className="focus-ring -mr-1 rounded p-0.5"

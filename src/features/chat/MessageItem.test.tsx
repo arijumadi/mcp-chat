@@ -71,6 +71,8 @@ describe("MessageItem", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Revert message" }));
+    expect(screen.getByText("Revert to this message?")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Revert" }));
     expect(revertMessage).toHaveBeenCalledWith("m1");
   });
 

@@ -5,6 +5,7 @@ import { Button } from "@/components/Button";
 import { Logo } from "@/components/Logo";
 import { cn } from "@/lib/cn";
 import { ConversationTools } from "./ConversationTools";
+import { SetupChecklist } from "./SetupChecklist";
 import { Transcript } from "./Transcript";
 import { Composer } from "./Composer";
 
@@ -28,6 +29,13 @@ export function ChatView() {
     return (
       <EmptyChat
         providers={providers.length}
+        hasProviderKey={providers.some(
+          (provider) =>
+            provider.hasKey ||
+            /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/i.test(
+              provider.baseUrl,
+            ),
+        )}
         servers={servers.length}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={toggleSidebar}
@@ -119,6 +127,7 @@ export function ChatView() {
 
 function EmptyChat({
   providers,
+  hasProviderKey,
   servers,
   sidebarOpen,
   onToggleSidebar,
@@ -127,6 +136,7 @@ function EmptyChat({
   onServers,
 }: {
   providers: number;
+  hasProviderKey: boolean;
   servers: number;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
@@ -187,6 +197,15 @@ function EmptyChat({
               </Button>
             )}
           </div>
+          {providers === 0 || !hasProviderKey ? (
+            <SetupChecklist
+              providers={providers}
+              hasProviderKey={hasProviderKey}
+              servers={servers}
+              onSettings={onSettings}
+              onServers={onServers}
+            />
+          ) : null}
           <div
             className="mt-6 flex items-center justify-center gap-4 text-[10.5px]"
             style={{ color: "var(--faint)" }}
