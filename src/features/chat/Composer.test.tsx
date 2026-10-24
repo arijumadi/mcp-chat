@@ -2,7 +2,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Composer } from "./Composer";
 import { useApp } from "@/app/store";
-import type { ProviderView } from "@/lib/types";
+import type { Conversation, ProviderView } from "@/lib/types";
+
+const conversation: Conversation = {
+  id: "c1",
+  title: "Test",
+  createdAt: 0,
+  updatedAt: 0,
+  providerId: "p1",
+  model: "mock",
+  workspaceRoot: "/home/you/project",
+  systemPrompt: null,
+  archived: false,
+  maxSteps: 25,
+  toolMode: "lazy",
+  serversConfigured: false,
+};
 
 const provider: ProviderView = {
   id: "p1",
@@ -36,7 +51,7 @@ describe("Composer", () => {
       continueTurn,
       draft: "",
     });
-    render(<Composer />);
+    render(<Composer conversation={conversation} />);
     expect(screen.getByText(/Tool step limit reached/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(continueTurn).toHaveBeenCalledOnce();

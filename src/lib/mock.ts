@@ -121,11 +121,12 @@ export function installMock(): void {
   if (!empty) {
     const seeded: Conversation = {
       id: "demo",
-      title: "Welcome to MCP Chat",
+      title: "Welcome to Jarvis",
       createdAt: now() - 1000 * 60 * 8,
       updatedAt: now() - 1000 * 60 * 8,
       providerId: "provider-mock",
       model: "mock-text",
+      workspaceRoot: "/home/you/project",
       systemPrompt: null,
       archived: false,
       maxSteps: 25,
@@ -218,7 +219,7 @@ export function installMock(): void {
     switch (command) {
       case "app_info":
         return {
-          name: "MCP Chat",
+          name: "Jarvis",
           version: "0.1.0-mock",
           dataDir: "/home/you/.local/share/com.mcpchat.app",
           workspaceDir: "/home/you/project",
@@ -253,6 +254,9 @@ export function installMock(): void {
           updatedAt: now(),
           providerId: providers[0]?.id ?? null,
           model: providers[0]?.model ?? null,
+          workspaceRoot:
+            (args.input as { workspaceRoot?: string | null } | undefined)?.workspaceRoot ??
+            "/home/you/project",
           systemPrompt: null,
           archived: false,
           maxSteps: 25,
@@ -288,6 +292,13 @@ export function installMock(): void {
           allServers: !(conversation?.serversConfigured ?? false),
           toolMode: conversation?.toolMode ?? "direct",
         };
+      }
+      case "set_conversation_workspace": {
+        const conversation = conversations.find(
+          (item) => item.id === args.conversationId,
+        );
+        if (conversation) conversation.workspaceRoot = String(args.workspaceRoot);
+        return String(args.workspaceRoot);
       }
       case "set_conversation_tools": {
         const conversation = conversations.find(
@@ -410,7 +421,7 @@ export function installMock(): void {
                 null,
                 2,
               )
-            : `# ${conversation?.title ?? "Conversation"}\n\nExported from MCP Chat.`;
+            : `# ${conversation?.title ?? "Conversation"}\n\nExported from Jarvis.`;
         return {
           filename: `${conversation?.title ?? "conversation"}.${String(args.format) === "json" ? "json" : "md"}`,
           content,

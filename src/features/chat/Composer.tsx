@@ -4,10 +4,13 @@ import { useApp } from "@/app/store";
 import { Button } from "@/components/Button";
 import { cn } from "@/lib/cn";
 import { formatTokens } from "@/lib/format";
+import type { Conversation } from "@/lib/types";
+import { ModelPicker } from "./ModelPicker";
+import { WorkspacePicker } from "./WorkspacePicker";
 
 const ACTIVE: string[] = ["thinking", "streaming", "waiting_approval", "running_tool"];
 
-export function Composer() {
+export function Composer({ conversation }: { conversation: Conversation }) {
   const value = useApp((state) => state.draft);
   const setValue = useApp((state) => state.setDraft);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -87,7 +90,7 @@ export function Composer() {
         ) : null}
         <div
           className={cn(
-            "flex items-end gap-2 rounded-2xl border p-2 transition",
+            "rounded-2xl border p-2 transition",
             active && "opacity-95",
           )}
           style={{
@@ -109,31 +112,37 @@ export function Composer() {
             rows={1}
             disabled={disabled}
             placeholder={disabled ? "Configure a provider first…" : "Message the model…"}
-            className="max-h-[240px] min-h-[38px] flex-1 resize-none bg-transparent px-2 py-2 text-[14.5px] leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:cursor-not-allowed"
+            className="max-h-[240px] min-h-[38px] w-full resize-none bg-transparent px-2 py-2 text-[14.5px] leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:cursor-not-allowed"
             aria-label="Message"
           />
-          {active ? (
-            <button
-              onClick={() => void stop()}
-              className="focus-ring mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition hover:brightness-95"
-              style={{ background: "var(--fg)", color: "var(--bg)" }}
-              title="Stop generating (Esc)"
-              aria-label="Stop generating"
-            >
-              <Square size={13} fill="currentColor" />
-            </button>
-          ) : (
-            <button
-              onClick={submit}
-              disabled={!value.trim() || disabled}
-              className="focus-ring mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-30"
-              style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
-              title="Send (Enter)"
-              aria-label="Send message"
-            >
-              <ArrowUp size={17} strokeWidth={2.2} />
-            </button>
-          )}
+          <div className="mt-1 flex items-center gap-1.5 px-1">
+            <ModelPicker conversation={conversation} disabled={active} />
+            <WorkspacePicker conversation={conversation} disabled={active} />
+            <div className="ml-auto flex items-center gap-2">
+              {active ? (
+                <button
+                  onClick={() => void stop()}
+                  className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition hover:brightness-95"
+                  style={{ background: "var(--fg)", color: "var(--bg)" }}
+                  title="Stop generating (Esc)"
+                  aria-label="Stop generating"
+                >
+                  <Square size={12} fill="currentColor" />
+                </button>
+              ) : (
+                <button
+                  onClick={submit}
+                  disabled={!value.trim() || disabled}
+                  className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-30"
+                  style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
+                  title="Send (Enter)"
+                  aria-label="Send message"
+                >
+                  <ArrowUp size={16} strokeWidth={2.2} />
+                </button>
+              )}
+            </div>
+          </div>
         </div>
         <div
           className="mt-1.5 flex items-center justify-between px-1 text-[10.5px]"

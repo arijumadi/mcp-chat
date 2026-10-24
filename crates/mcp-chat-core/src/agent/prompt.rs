@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use sqlx::SqlitePool;
 
 use crate::Result;
-use crate::agent::tools::{skill_catalog, workspace_root};
+use crate::agent::tools::{skill_catalog, workspace_root_for_conversation};
 use crate::util::truncate_chars;
 
 const MAX_AGENTS_FILE: usize = 32_000;
@@ -60,8 +60,12 @@ fn append(system: &mut Option<String>, part: &str) {
     }
 }
 
-pub async fn runtime_context(pool: &SqlitePool, output_dir: &Path) -> Result<String> {
-    let workspace = workspace_root(pool).await?;
+pub async fn runtime_context(
+    pool: &SqlitePool,
+    output_dir: &Path,
+    conversation_id: &str,
+) -> Result<String> {
+    let workspace = workspace_root_for_conversation(pool, conversation_id).await?;
     let mut parts = vec![environment_block(&workspace)];
     if let Some(instructions) = agents_block(&workspace, output_dir) {
         parts.push(instructions);
@@ -197,8 +201,20 @@ mod tests {
             "---\ndescription: Demo workflow\n---\n\n# Demo\n",
         )
         .unwrap();
+        let conversation = crate::db::repo::conversations::create(&db.pool, "Test", None, None)
+            .await
+            .unwrap();
+        crate::db::repo::conversations::set_workspace(
+            &db.pool,
+            &conversation.id,
+            Some(&workspace.display().to_string()),
+        )
+        .await
+        .unwrap();
         let output = workspace.join("tool-output");
-        let context = runtime_context(&db.pool, &output).await.unwrap();
+        let context = runtime_context(&db.pool, &output, &conversation.id)
+            .await
+            .unwrap();
         assert!(context.contains("<env>"));
         assert!(context.contains("Project instruction."));
         assert!(context.contains("demo: Demo workflow"));

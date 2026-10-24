@@ -14,6 +14,11 @@ export function formatTime(timestamp: number): string {
   }).format(new Date(timestamp));
 }
 
+export function shortModelName(model: string): string {
+  const parts = model.split("/");
+  return parts.at(-1)?.trim() || model;
+}
+
 export function formatMessageDateTime(timestamp: number): string {
   const date = new Intl.DateTimeFormat(undefined, {
     day: "2-digit",

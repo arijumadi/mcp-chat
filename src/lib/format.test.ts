@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDuration, groupConversations } from "./format";
+import { formatDuration, groupConversations, shortModelName } from "./format";
 import type { Conversation } from "./types";
 
 function conversation(id: string, updatedAt: number): Conversation {
@@ -10,6 +10,7 @@ function conversation(id: string, updatedAt: number): Conversation {
     updatedAt,
     providerId: null,
     model: null,
+    workspaceRoot: null,
     systemPrompt: null,
     archived: false,
     maxSteps: 25,
@@ -19,6 +20,13 @@ function conversation(id: string, updatedAt: number): Conversation {
 }
 
 describe("format helpers", () => {
+  it("shows only the model name after the last slash", () => {
+    expect(shortModelName("deepseek/deepseek-v4.1-flash")).toBe(
+      "deepseek-v4.1-flash",
+    );
+    expect(shortModelName("mock-text")).toBe("mock-text");
+  });
+
   it("formats durations", () => {
     expect(formatDuration(340)).toBe("340ms");
     expect(formatDuration(1500)).toBe("1.5s");

@@ -3,7 +3,8 @@ import {
   ArrowLeft,
   Database,
   ExternalLink,
-  FolderOpen,
+  FileJson,
+  FileText,
   KeyRound,
   Monitor,
   Moon,
@@ -14,8 +15,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { useApp } from "@/app/store";
-import { call } from "@/lib/ipc";
-import type { KeyTest, ProviderView } from "@/lib/types";
+import { call, downloadText } from "@/lib/ipc";
+import type { ExportResult, KeyTest, ProviderView } from "@/lib/types";
 import { Button } from "@/components/Button";
 import { Modal } from "@/components/Modal";
 import { inputClass, hintClass } from "@/components/ui";
@@ -30,6 +31,8 @@ export function SettingsView() {
   const refreshProviders = useApp((state) => state.refreshProviders);
   const refreshSettings = useApp((state) => state.refreshSettings);
   const refreshConversations = useApp((state) => state.refreshConversations);
+  const conversations = useApp((state) => state.conversations);
+  const activeId = useApp((state) => state.activeId);
   const setTheme = useApp((state) => state.setTheme);
   const setView = useApp((state) => state.setView);
   const toast = useApp((state) => state.toast);
@@ -52,9 +55,7 @@ export function SettingsView() {
     Number(settings["compaction.buffer"] ?? 0),
   );
   const [savingContext, setSavingContext] = useState(false);
-  const [workspaceRoot, setWorkspaceRoot] = useState(settings["workspace.root"] ?? "");
-  const [savingWorkspace, setSavingWorkspace] = useState(false);
-  const workspaceSetting = settings["workspace.root"];
+  const [exportId, setExportId] = useState(activeId ?? conversations[0]?.id ?? "");
   const compactionKeepSetting = settings["compaction.keep_tokens"];
   const compactionBufferSetting = settings["compaction.buffer"];
 
@@ -63,8 +64,13 @@ export function SettingsView() {
   }, [settings.default_system_prompt]);
 
   useEffect(() => {
-    setWorkspaceRoot(workspaceSetting ?? "");
-  }, [workspaceSetting]);
+    setExportId((current) => {
+      if (conversations.some((conversation) => conversation.id === current)) {
+        return current;
+      }
+      return activeId ?? conversations[0]?.id ?? "";
+    });
+  }, [activeId, conversations]);
 
   useEffect(() => {
     setKeepTokens(Number(compactionKeepSetting ?? 15000));
@@ -141,19 +147,17 @@ export function SettingsView() {
     }
   };
 
-  const saveWorkspace = async () => {
-    setSavingWorkspace(true);
+  const doExport = async (format: "markdown" | "json") => {
+    if (!exportId) return;
     try {
-      await call("set_setting", {
-        key: "workspace.root",
-        value: workspaceRoot.trim(),
+      const result = await call<ExportResult>("export_conversation", {
+        conversationId: exportId,
+        format,
       });
-      await refreshSettings();
-      toast("Workspace folder saved.", "info");
+      downloadText(result.filename, result.content, result.mime);
+      toast(`Exported ${result.filename}`, "info");
     } catch (error) {
       toast(String(error), "error");
-    } finally {
-      setSavingWorkspace(false);
     }
   };
 
@@ -357,36 +361,6 @@ export function SettingsView() {
           </Section>
 
           <Section
-            title="Workspace"
-            description="Built-in file and shell tools operate in this folder. Empty means the app's current working directory."
-          >
-            <label className="block">
-              <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
-                Workspace folder
-              </span>
-              <div className="flex items-center gap-2">
-                <FolderOpen size={14} style={{ color: "var(--muted)" }} />
-                <input
-                  value={workspaceRoot}
-                  onChange={(event) => setWorkspaceRoot(event.target.value)}
-                  placeholder={appInfo?.workspaceDir ?? "Current working directory"}
-                  className={inputClass}
-                  style={{ borderColor: "var(--border)" }}
-                />
-              </div>
-            </label>
-            <span className={hintClass} style={{ color: "var(--faint)" }}>
-              read, grep, glob, edit and write cannot escape this folder. bash starts
-              its command here. Bash, edit and write ask for approval by default.
-            </span>
-            <div className="mt-2 flex justify-end">
-              <Button size="sm" loading={savingWorkspace} onClick={() => void saveWorkspace()}>
-                Save workspace
-              </Button>
-            </div>
-          </Section>
-
-          <Section
             title="Context management"
             description="Compaction summarizes older turns and keeps the most recent tokens verbatim."
           >
@@ -431,6 +405,56 @@ export function SettingsView() {
             </div>
           </Section>
 
+          <Section
+            title="Export conversation"
+            description="Save a transcript as Markdown or JSON. Conversations can be selected independently of the open chat."
+          >
+            {conversations.length === 0 ? (
+              <div
+                className="rounded-lg border px-3 py-2 text-[12px]"
+                style={{ borderColor: "var(--border)", color: "var(--muted)" }}
+              >
+                No conversations to export.
+              </div>
+            ) : (
+              <>
+                <label className="block">
+                  <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
+                    Conversation
+                  </span>
+                  <select
+                    value={exportId}
+                    onChange={(event) => setExportId(event.target.value)}
+                    className={inputClass}
+                    style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+                  >
+                    {conversations.map((conversation) => (
+                      <option key={conversation.id} value={conversation.id}>
+                        {conversation.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="mt-2 flex justify-end gap-2">
+                  <Button
+                    size="sm"
+                    icon={<FileText size={12} />}
+                    onClick={() => void doExport("markdown")}
+                  >
+                    Markdown
+                  </Button>
+                  <Button
+                    size="sm"
+                    icon={<FileJson size={12} />}
+                    onClick={() => void doExport("json")}
+                  >
+                    JSON
+                  </Button>
+                </div>
+              </>
+            )}
+          </Section>
+
           <Section title="Data" description="Everything is stored locally in this app's data directory.">
             <div
               className="flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2.5"
@@ -471,7 +495,7 @@ export function SettingsView() {
             <div className="flex items-start gap-2 text-[12px]" style={{ color: "var(--muted)" }}>
               <ShieldCheck size={15} className="mt-0.5 shrink-0" style={{ color: "var(--accent)" }} />
               <div>
-                MCP Chat {appInfo?.version ?? "0.1.0"} · no telemetry, no accounts, no cloud sync.
+                Jarvis {appInfo?.version ?? "0.1.0"} · no telemetry, no accounts, no cloud sync.
                 Message content is not logged; API keys live in the OS keychain.
               </div>
             </div>

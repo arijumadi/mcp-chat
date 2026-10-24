@@ -231,6 +231,7 @@ async fn drive(
     let runtime_note = match crate::agent::prompt::runtime_context(
         &engine.db.pool,
         &engine.output_dir,
+        conversation_id,
     )
     .await
     {
@@ -1477,9 +1478,10 @@ pub async fn context_status(
     let (_, _, _, context_window, _) = engine.resolve(&conversation).await?;
     let history = messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
     let (chat_messages, summary) = build_messages(&history);
-    let runtime_note = crate::agent::prompt::runtime_context(&engine.db.pool, &engine.output_dir)
-        .await
-        .unwrap_or_default();
+    let runtime_note =
+        crate::agent::prompt::runtime_context(&engine.db.pool, &engine.output_dir, conversation_id)
+            .await
+            .unwrap_or_default();
     let lazy_note = if tool_mode == "lazy" {
         lazy_tool_note(&registry)
     } else {

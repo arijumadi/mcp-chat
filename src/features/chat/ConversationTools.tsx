@@ -107,7 +107,7 @@ export function ConversationTools({
         title="Choose MCP tools for this chat"
       >
         <SlidersHorizontal size={13} />
-        <span>Tools</span>
+        <span>MCP</span>
         <span className="font-medium" style={{ color: "var(--fg)" }}>
           {selectedCount}/{enabledServers.length}
         </span>

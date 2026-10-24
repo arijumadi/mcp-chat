@@ -1,22 +1,9 @@
 import { useState } from "react";
-import {
-  Download,
-  FileJson,
-  FileText,
-  PanelLeft,
-  Plus,
-  Settings,
-  Plug,
-  Trash2,
-} from "lucide-react";
+import { PanelLeft, Plus, Settings, Plug } from "lucide-react";
 import { useApp } from "@/app/store";
 import { Button } from "@/components/Button";
 import { Logo } from "@/components/Logo";
-import { Modal } from "@/components/Modal";
 import { cn } from "@/lib/cn";
-import { call, downloadText } from "@/lib/ipc";
-import type { ExportResult } from "@/lib/types";
-import { ModelPicker } from "./ModelPicker";
 import { ConversationTools } from "./ConversationTools";
 import { Transcript } from "./Transcript";
 import { Composer } from "./Composer";
@@ -31,15 +18,11 @@ export function ChatView() {
   const toggleSidebar = useApp((state) => state.toggleSidebar);
   const setView = useApp((state) => state.setView);
   const newChat = useApp((state) => state.newChat);
-  const deleteConversation = useApp((state) => state.deleteConversation);
   const renameConversation = useApp((state) => state.renameConversation);
-  const toast = useApp((state) => state.toast);
   const conversation = conversations.find((item) => item.id === activeId);
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [title, setTitle] = useState("");
-  const [exportOpen, setExportOpen] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
 
   if (!conversation) {
     return (
@@ -54,20 +37,6 @@ export function ChatView() {
       />
     );
   }
-
-  const doExport = async (format: "markdown" | "json") => {
-    setExportOpen(false);
-    try {
-      const result = await call<ExportResult>("export_conversation", {
-        conversationId: conversation.id,
-        format,
-      });
-      downloadText(result.filename, result.content, result.mime);
-      toast(`Exported ${result.filename}`, "info");
-    } catch (error) {
-      toast(String(error), "error");
-    }
-  };
 
   const saveTitle = () => {
     setEditingTitle(false);
@@ -120,55 +89,10 @@ export function ChatView() {
             </button>
           )}
           <div className="truncate text-[10.5px]" style={{ color: "var(--faint)" }}>
-            {conversation.model ?? "no model"} · local transcript
+            local transcript
           </div>
         </div>
         <ConversationTools conversation={conversation} />
-        <ModelPicker conversation={conversation} />
-        <div className="relative">
-          <button
-            onClick={() => setExportOpen((value) => !value)}
-            className="focus-ring flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)]"
-            style={{ borderColor: "var(--border)", color: "var(--muted)" }}
-            title="Export conversation"
-          >
-            <Download size={13} /> Export
-          </button>
-          {exportOpen ? (
-            <>
-              <button
-                className="fixed inset-0 z-20 cursor-default"
-                aria-label="Close export menu"
-                onClick={() => setExportOpen(false)}
-              />
-              <div
-                className="animate-in absolute top-full right-0 z-30 mt-1.5 w-44 overflow-hidden rounded-xl border py-1 shadow-xl"
-                style={{ background: "var(--panel)", borderColor: "var(--border)" }}
-              >
-                <button
-                  onClick={() => void doExport("markdown")}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] transition hover:bg-[var(--panel-2)]"
-                >
-                  <FileText size={13} /> Markdown
-                </button>
-                <button
-                  onClick={() => void doExport("json")}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] transition hover:bg-[var(--panel-2)]"
-                >
-                  <FileJson size={13} /> JSON
-                </button>
-              </div>
-            </>
-          ) : null}
-        </div>
-        <button
-          onClick={() => setConfirmDelete(true)}
-          className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--danger-soft)] hover:text-[var(--danger)]"
-          title="Delete conversation"
-          aria-label="Delete conversation"
-        >
-          <Trash2 size={15} />
-        </button>
       </header>
 
       {messages.length === 0 ? (
@@ -187,36 +111,8 @@ export function ChatView() {
       ) : (
         <Transcript />
       )}
-      <Composer />
+      <Composer conversation={conversation} />
 
-      <Modal
-        open={confirmDelete}
-        onClose={() => setConfirmDelete(false)}
-        title="Delete this conversation?"
-        subtitle="Messages, tool results and summaries will be removed locally."
-        width="sm"
-        footer={
-          <>
-            <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              variant="danger"
-              onClick={() => {
-                setConfirmDelete(false);
-                void deleteConversation(conversation.id);
-              }}
-            >
-              Delete
-            </Button>
-          </>
-        }
-      >
-        <p className="text-[13px]" style={{ color: "var(--muted)" }}>
-          This cannot be undone.
-        </p>
-      </Modal>
     </div>
   );
 }

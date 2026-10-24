@@ -17,6 +17,7 @@ use crate::state::AppState;
 pub struct CreateConversationInput {
     pub provider_id: Option<String>,
     pub model: Option<String>,
+    pub workspace_root: Option<String>,
 }
 
 #[tauri::command]
@@ -77,14 +78,50 @@ pub async fn create_conversation(
             }
         }
     }
-    conversations::create(
+    let explicit_workspace = match input
+        .workspace_root
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(raw) => Some(
+            mcp_chat_core::agent::tools::resolve_workspace_path(raw)
+                .map_err(cmd_err)?
+                .display()
+                .to_string(),
+        ),
+        None => None,
+    };
+    let inherited_workspace = if explicit_workspace.is_none() {
+        settings::get(&state.db.pool, "workspace.last")
+            .await
+            .map_err(cmd_err)?
+            .or(settings::get(&state.db.pool, "workspace.root")
+                .await
+                .map_err(cmd_err)?)
+            .and_then(|raw| {
+                mcp_chat_core::agent::tools::resolve_workspace_path(&raw)
+                    .ok()
+                    .map(|path| path.display().to_string())
+            })
+    } else {
+        None
+    };
+    let workspace = explicit_workspace.or(inherited_workspace);
+    let mut conversation = conversations::create(
         &state.db.pool,
         "New chat",
         provider_id.as_deref(),
         model.as_deref(),
     )
     .await
-    .map_err(cmd_err)
+    .map_err(cmd_err)?;
+    if let Some(value) = workspace {
+        conversations::set_workspace(&state.db.pool, &conversation.id, Some(&value))
+            .await
+            .map_err(cmd_err)?;
+        conversation.workspace_root = Some(value);
+    }
+    Ok(conversation)
 }
 
 #[tauri::command]
@@ -141,6 +178,45 @@ pub async fn set_conversation_model(
     )
     .await
     .map_err(cmd_err)
+}
+
+#[tauri::command]
+pub async fn set_conversation_workspace(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    workspace_root: String,
+) -> CmdResult<String> {
+    if state.engine.in_flight(&conversation_id) {
+        return Err("Stop the current turn before changing the workspace.".into());
+    }
+    conversations::get(&state.db.pool, &conversation_id)
+        .await
+        .map_err(cmd_err)?;
+    let path =
+        mcp_chat_core::agent::tools::resolve_workspace_path(&workspace_root).map_err(cmd_err)?;
+    let value = path.display().to_string();
+    conversations::set_workspace(&state.db.pool, &conversation_id, Some(&value))
+        .await
+        .map_err(cmd_err)?;
+    settings::set(&state.db.pool, "workspace.last", &value)
+        .await
+        .map_err(cmd_err)?;
+    let mut recent: Vec<String> = settings::get(&state.db.pool, "workspace.recent")
+        .await
+        .map_err(cmd_err)?
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+    recent.retain(|item| item != &value);
+    recent.insert(0, value.clone());
+    recent.truncate(8);
+    settings::set(
+        &state.db.pool,
+        "workspace.recent",
+        &serde_json::to_string(&recent).unwrap_or_else(|_| "[]".into()),
+    )
+    .await
+    .map_err(cmd_err)?;
+    Ok(value)
 }
 
 #[tauri::command]
@@ -301,7 +377,7 @@ pub async fn export_conversation(
         return Err("Unsupported export format".into());
     }
     let mut out = format!(
-        "# {}\n\n_Model: {} · Exported from MCP Chat_\n\n",
+        "# {}\n\n_Model: {} · Exported from Jarvis_\n\n",
         conversation.title,
         conversation
             .model

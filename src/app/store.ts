@@ -60,6 +60,7 @@ export interface AppStore {
   continueTurn: () => Promise<void>;
   revertMessage: (messageId: string) => Promise<void>;
   setModel: (providerId: string, model: string) => Promise<void>;
+  setConversationWorkspace: (conversationId: string, workspaceRoot: string) => Promise<void>;
   renameConversation: (id: string, title: string) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
   setView: (view: View) => void;
@@ -188,13 +189,18 @@ export const useApp = create<AppStore>()((set, get) => ({
     await get().reloadActive();
     const conversation = get().conversations.find((item) => item.id === id);
     if (conversation) {
-      document.title = `${conversation.title} · MCP Chat`;
+      document.title = `${conversation.title} · Jarvis`;
     }
   },
 
   async newChat() {
     try {
-      const conversation = await call<Conversation>("create_conversation", { input: {} });
+      const current = get().conversations.find((item) => item.id === get().activeId);
+      const conversation = await call<Conversation>("create_conversation", {
+        input: {
+          workspaceRoot: current?.workspaceRoot ?? null,
+        },
+      });
       set((state) => ({
         conversations: [conversation, ...state.conversations],
         activeId: conversation.id,
@@ -355,6 +361,22 @@ export const useApp = create<AppStore>()((set, get) => ({
       set({ status: "error" });
       get().toast(String(error), "error");
     }
+  },
+
+  async setConversationWorkspace(conversationId, workspaceRoot) {
+    const resolved = await call<string>("set_conversation_workspace", {
+      conversationId,
+      workspaceRoot,
+    });
+    set((state) => ({
+      conversations: state.conversations.map((conversation) =>
+        conversation.id === conversationId
+          ? { ...conversation, workspaceRoot: resolved }
+          : conversation,
+      ),
+    }));
+    await get().refreshSettings();
+    await get().refreshConversations();
   },
 
   async setModel(providerId, model) {

@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useApp } from "@/app/store";
 import { Button } from "@/components/Button";
+import { Modal } from "@/components/Modal";
 import { Logo } from "@/components/Logo";
 import { cn } from "@/lib/cn";
 import { groupConversations } from "@/lib/format";
@@ -34,6 +35,7 @@ export function Sidebar() {
   const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [deleting, setDeleting] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -56,7 +58,7 @@ export function Sidebar() {
       <div className="flex items-center gap-2 px-3 pt-3.5 pb-2">
         <Logo size={24} />
         <div className="min-w-0 flex-1">
-          <div className="text-[13.5px] font-semibold tracking-[-0.01em]">MCP Chat</div>
+          <div className="text-[13.5px] font-semibold tracking-[-0.01em]">Jarvis</div>
           <div className="text-[10.5px]" style={{ color: "var(--faint)" }}>
             local-first · no telemetry
           </div>
@@ -199,7 +201,7 @@ export function Sidebar() {
                       </button>
                     )}
                     <button
-                      onClick={() => void deleteConversation(conversation.id)}
+                      onClick={() => setDeleting(conversation.id)}
                       className="focus-ring mr-1 rounded p-1 opacity-0 transition group-hover:opacity-100 hover:text-[var(--danger)]"
                       title="Delete conversation"
                       aria-label="Delete conversation"
@@ -246,6 +248,36 @@ export function Sidebar() {
           <span className="flex-1">Settings</span>
         </button>
       </div>
+
+      <Modal
+        open={deleting !== null}
+        onClose={() => setDeleting(null)}
+        title="Delete this conversation?"
+        subtitle="Messages, tool results and summaries will be removed locally."
+        width="sm"
+        footer={
+          <>
+            <Button size="sm" variant="ghost" onClick={() => setDeleting(null)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={() => {
+                const id = deleting;
+                setDeleting(null);
+                if (id) void deleteConversation(id);
+              }}
+            >
+              Delete
+            </Button>
+          </>
+        }
+      >
+        <p className="text-[13px]" style={{ color: "var(--muted)" }}>
+          This cannot be undone.
+        </p>
+      </Modal>
     </aside>
   );
 }

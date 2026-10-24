@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "A local-first desktop chat app for LLMs and remote MCP servers"
+description = "Jarvis: a local-first desktop assistant for LLMs and remote MCP servers"
 default-run = "mcp-chat"
 
 [lib]
@@ -20,6 +20,7 @@ serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.12.5", features = [] }
 tauri-plugin-opener = "2.7.2"
+tauri-plugin-dialog = "2.6.0"
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true

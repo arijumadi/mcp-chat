@@ -2,8 +2,8 @@ import { expect, test } from "@playwright/test";
 
 test("boots, sends a scripted message and renders a tool card", async ({ page }) => {
   await page.goto("/?mock=1");
-  await expect(page.getByText("MCP Chat").first()).toBeVisible();
-  await expect(page.getByText("Welcome to MCP Chat").first()).toBeVisible();
+  await expect(page.getByText("Jarvis").first()).toBeVisible();
+  await expect(page.getByText("Welcome to Jarvis").first()).toBeVisible();
 
   await page.getByRole("button", { name: "New chat" }).first().click();
   const composer = page.getByRole("textbox", { name: "Message" });
@@ -30,7 +30,7 @@ test("quick switcher finds the demo conversation", async ({ page }) => {
   const input = page.getByPlaceholder("Search conversations…");
   await expect(input).toBeVisible();
   await input.fill("Welcome");
-  await expect(page.getByRole("dialog").getByText("Welcome to MCP Chat")).toBeVisible();
+  await expect(page.getByRole("dialog").getByText("Welcome to Jarvis")).toBeVisible();
   await page.keyboard.press("Enter");
   await expect(page.getByText("What can you do with MCP tools?")).toBeVisible();
 });
@@ -69,14 +69,14 @@ test("revert moves a user message back into the composer", async ({ page }) => {
 
 test("captures README screenshots", async ({ page }) => {
   await page.goto("/?mock=1");
-  await page.getByText("Welcome to MCP Chat").first().click();
+  await page.getByText("Welcome to Jarvis").first().click();
   await expect(page.getByText("What can you do with MCP tools?")).toBeVisible();
-  await page.getByRole("button", { name: /Tools/ }).click();
+  await page.locator("header").getByRole("button", { name: /MCP/ }).click();
   await expect(page.getByText("MCP servers for this chat")).toBeVisible();
   await expect(page.getByText("Tool delivery")).toHaveCount(0);
   await expect(page.getByText("Context estimate")).toHaveCount(0);
   await expect(page.getByText("Compact now")).toHaveCount(0);
-  await page.getByRole("button", { name: /Tools/ }).click();
+  await page.locator("header").getByRole("button", { name: /MCP/ }).click();
   await page.getByText("What can you do with MCP tools?").click();
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.mouse.move(10, 10);

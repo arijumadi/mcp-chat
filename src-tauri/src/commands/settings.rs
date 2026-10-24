@@ -26,7 +26,7 @@ pub struct AppInfo {
 #[tauri::command]
 pub async fn app_info(state: State<'_, AppState>) -> CmdResult<AppInfo> {
     Ok(AppInfo {
-        name: "MCP Chat".into(),
+        name: "Jarvis".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         data_dir: state.data_dir.display().to_string(),
         workspace_dir: mcp_chat_core::agent::tools::workspace_root(&state.db.pool)

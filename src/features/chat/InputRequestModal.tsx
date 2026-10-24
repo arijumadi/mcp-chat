@@ -224,7 +224,7 @@ export function InputRequestModal() {
           }}
         >
           This server asked for{" "}
-          {unsupported.map(([, item]) => item.method).join(", ")}. MCP Chat does not support
+          {unsupported.map(([, item]) => item.method).join(", ")}. Jarvis does not support
           sampling or roots requests in v1. Decline to let the tool settle with an error.
         </div>
       ) : null}

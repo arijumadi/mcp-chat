@@ -17,7 +17,7 @@ use walkdir::WalkDir;
 use crate::agent::approvals::{ApprovalDecision, ApprovalRegistry, InputAnswer, InputRegistry};
 use crate::agent::permissions::{self, Effect};
 use crate::db::Db;
-use crate::db::repo::{messages, permissions as rules_repo, settings};
+use crate::db::repo::{conversations, messages, permissions as rules_repo, settings};
 use crate::events::CoreEvent;
 use crate::llm::ToolDef;
 use crate::mcp::manager::McpManager;
@@ -168,25 +168,17 @@ pub fn meta_tool_defs() -> Vec<ToolDef> {
 
 /// Resolve the configured workspace, falling back to the process working
 /// directory. Built-in file tools are confined to this root.
-pub async fn workspace_root(pool: &SqlitePool) -> Result<PathBuf> {
-    let configured = settings::get(pool, "workspace.root")
-        .await?
-        .filter(|value| !value.trim().is_empty());
-    let raw = match configured {
-        Some(value) => {
-            let path = PathBuf::from(value);
-            if path.is_absolute() {
-                path
-            } else {
-                std::env::current_dir()?.join(path)
-            }
-        }
-        None => std::env::current_dir()?,
+pub fn resolve_workspace_path(raw: &str) -> Result<PathBuf> {
+    let path = PathBuf::from(raw);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
     };
-    let root = raw.canonicalize().map_err(|_| {
+    let root = path.canonicalize().map_err(|_| {
         CoreError::invalid(format!(
             "Workspace folder is not accessible: {}",
-            raw.display()
+            path.display()
         ))
     })?;
     if !root.is_dir() {
@@ -196,6 +188,31 @@ pub async fn workspace_root(pool: &SqlitePool) -> Result<PathBuf> {
         )));
     }
     Ok(root)
+}
+
+pub async fn workspace_root(pool: &SqlitePool) -> Result<PathBuf> {
+    let configured = settings::get(pool, "workspace.root")
+        .await?
+        .filter(|value| !value.trim().is_empty());
+    match configured {
+        Some(value) => resolve_workspace_path(&value),
+        None => Ok(std::env::current_dir()?.canonicalize()?),
+    }
+}
+
+pub async fn workspace_root_for_conversation(
+    pool: &SqlitePool,
+    conversation_id: &str,
+) -> Result<PathBuf> {
+    let conversation = conversations::get(pool, conversation_id).await?;
+    match conversation
+        .workspace_root
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(path) => resolve_workspace_path(path),
+        None => workspace_root(pool).await,
+    }
 }
 
 fn normalize_lexically(path: &Path) -> PathBuf {
@@ -1591,7 +1608,8 @@ impl ToolExecutor {
                 "The {shell} shell is only available on Windows."
             )));
         }
-        let workspace = workspace_root(&self.db.pool).await?;
+        let workspace =
+            workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let cwd = match req.args.get("cwd").and_then(Value::as_str) {
             Some(raw) if !raw.trim().is_empty() => resolve_in_workspace(&workspace, raw)?,
             _ => workspace.clone(),
@@ -1742,7 +1760,8 @@ impl ToolExecutor {
             .and_then(Value::as_u64)
             .unwrap_or(2_000)
             .clamp(1, 5_000) as usize;
-        let workspace = workspace_root(&self.db.pool).await?;
+        let workspace =
+            workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let path = resolve_in_workspace(&workspace, raw)?;
         let content = read_text_file(&path).await?;
         let lines = content.lines().collect::<Vec<_>>();
@@ -1788,7 +1807,8 @@ impl ToolExecutor {
         if content.len() as u64 > MAX_TEXT_BYTES {
             return Err(CoreError::invalid("File content is too large."));
         }
-        let workspace = workspace_root(&self.db.pool).await?;
+        let workspace =
+            workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let path = resolve_in_workspace(&workspace, raw)?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -1826,7 +1846,8 @@ impl ToolExecutor {
             .get("replaceAll")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let workspace = workspace_root(&self.db.pool).await?;
+        let workspace =
+            workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let path = resolve_in_workspace(&workspace, raw)?;
         let content = read_text_file(&path).await?;
         let count = content.matches(old).count();
@@ -1877,7 +1898,8 @@ impl ToolExecutor {
             .and_then(Value::as_u64)
             .unwrap_or(200)
             .clamp(1, 1_000) as usize;
-        let workspace = workspace_root(&self.db.pool).await?;
+        let workspace =
+            workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let search = resolve_in_workspace(
             &workspace,
             req.args.get("path").and_then(Value::as_str).unwrap_or("."),
@@ -1978,7 +2000,8 @@ impl ToolExecutor {
             .and_then(Value::as_u64)
             .unwrap_or(500)
             .clamp(1, 2_000) as usize;
-        let workspace = workspace_root(&self.db.pool).await?;
+        let workspace =
+            workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let search = resolve_in_workspace(
             &workspace,
             req.args.get("path").and_then(Value::as_str).unwrap_or("."),
@@ -2030,7 +2053,8 @@ impl ToolExecutor {
             .and_then(Value::as_str)
             .unwrap_or("")
             .trim();
-        let workspace = workspace_root(&self.db.pool).await?;
+        let workspace =
+            workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let roots = skill_roots(&workspace, &self.output_dir);
         let catalog = skill_catalog(&workspace, &self.output_dir);
         if name.is_empty() {
@@ -2594,11 +2618,46 @@ mod tests {
         assert_eq!(workspace_root(&db.pool).await.unwrap(), workspace);
     }
 
-    async fn test_executor(workspace: &Path) -> ToolExecutor {
+    #[tokio::test]
+    async fn conversation_workspace_overrides_the_global_default() {
         let db = Db::open_memory().await.unwrap();
-        settings::set(&db.pool, "workspace.root", &workspace.display().to_string())
+        let global = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        settings::set(
+            &db.pool,
+            "workspace.root",
+            &global.path().canonicalize().unwrap().display().to_string(),
+        )
+        .await
+        .unwrap();
+        let conversation = conversations::create(&db.pool, "Test", None, None)
             .await
             .unwrap();
+        conversations::set_workspace(
+            &db.pool,
+            &conversation.id,
+            Some(&local.path().canonicalize().unwrap().display().to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            workspace_root_for_conversation(&db.pool, &conversation.id)
+                .await
+                .unwrap(),
+            local.path().canonicalize().unwrap()
+        );
+    }
+
+    async fn test_executor(workspace: &Path) -> ToolExecutor {
+        let db = Db::open_memory().await.unwrap();
+        sqlx::query(
+            "INSERT INTO conversations (id, title, created_at, updated_at, archived, max_steps, tool_mode, workspace_root) VALUES (?1, 'Test', 0, 0, 0, 25, 'lazy', ?2)",
+        )
+        .bind("test-conversation")
+        .bind(workspace.display().to_string())
+        .execute(&db.pool)
+        .await
+        .unwrap();
         let secrets = Arc::new(crate::secrets::MemoryStore::default());
         let (events, _) = broadcast::channel(16);
         ToolExecutor {
@@ -2614,7 +2673,7 @@ mod tests {
 
     fn request(name: &str, args: Value) -> ToolExecRequest {
         ToolExecRequest {
-            conversation_id: "c".into(),
+            conversation_id: "test-conversation".into(),
             message_id: "m".into(),
             part_id: "p".into(),
             call_id: format!("call-{name}"),

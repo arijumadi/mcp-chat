@@ -7,6 +7,7 @@ export interface Conversation {
   updatedAt: number;
   providerId: string | null;
   model: string | null;
+  workspaceRoot: string | null;
   systemPrompt: string | null;
   archived: boolean;
   maxSteps: number;

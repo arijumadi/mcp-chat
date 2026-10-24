@@ -209,6 +209,16 @@ pub async fn search(pool: &SqlitePool, query: &str, limit: i64) -> Result<Vec<Se
         .collect())
 }
 
+pub async fn set_workspace(pool: &SqlitePool, id: &str, workspace: Option<&str>) -> Result<()> {
+    sqlx::query("UPDATE conversations SET workspace_root = ?2, updated_at = ?3 WHERE id = ?1")
+        .bind(id)
+        .bind(workspace)
+        .bind(now_ms())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn set_tool_mode(pool: &SqlitePool, id: &str, mode: &str) -> Result<()> {
     sqlx::query("UPDATE conversations SET tool_mode = ?2, updated_at = ?3 WHERE id = ?1")
         .bind(id)
