@@ -104,12 +104,13 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 3. **CSP exception for Tauri IPC.** Production CSP is `default-src 'self'; script-src 'self'; ...; connect-src ipc: http://ipc.localhost`. The prompt's `connect-src 'none'` blocks Tauri invoke on the platforms we target. Everything else stays locked down; no remote connect-src.
 4. **Schema additions.** `max_steps`, per-conversation `tool_mode`/server selection, provider context/output limits and saved model lists, cached tool JSON/TTL, negotiated-at and OAuth issuer/client id were added to SQLite because context management and the server cards need them. The original parts/messages shape is unchanged.
 5. **MCP tool delivery is per chat and lazy by default.** Each conversation stores a server selection and a mode. `direct` sends every schema from the selected servers. `lazy` (the default) sends a compact catalog of active tools (server slug, tool name, short description, argument summary) in the system prompt and exposes `mcp_get_tool_schema`, `mcp_call_tool` and `mcp_execute`; `mcp_search_tools` is only kept when the catalog is truncated. The lazy meta-calls resolve the real target, validate the real input schema, and apply the target server's policy and approval rules before calling it. `mcp_execute` batches up to 8 independent calls with 4 in flight, preserving result order. This avoids both the search→schema→call loop and a model round trip per tool in multi-tool turns.
-6. **Usage is streamed.** Each step emits an estimated prompt-token event before the request; provider usage overrides it when available, and completion tokens are estimated when the provider does not report usage. The composer shows it live.
-7. **Compaction follows the V2 shape.** Older turns are summarized, the newest ~15k tokens are kept, and the trigger uses a 15%-of-window buffer with a 16k floor. The buffer and retention are configurable in Settings; a manual compact action is available in the per-chat Tools panel.
-8. **Tool results have two representations.** A `tool_call` part is the UI card and terminal-state record; a `tool` message is the provider protocol block. The UI deliberately hides raw tool messages.
+6. **Time context is cache-friendly.** The local date/time note is appended at the very end of the system prompt, after the static prompt, tool catalog and summary. It is computed once per turn at minute precision and reused for every step, so provider prefix caches can still hit the static prefix. Seconds are omitted deliberately.
+7. **Usage is streamed.** Each step emits an estimated prompt-token event before the request; provider usage overrides it when available, and completion tokens are estimated when the provider does not report usage. The composer shows it live.
+8. **Compaction follows the V2 shape.** Older turns are summarized, the newest ~15k tokens are kept, and the trigger uses a 15%-of-window buffer with a 16k floor. The buffer and retention are configurable in Settings; a manual compact action is available in the per-chat Tools panel.
+9. **Tool results have two representations.** A `tool_call` part is the UI card and terminal-state record; a `tool` message is the provider protocol block. The UI deliberately hides raw tool messages.
 
-9. **Token estimates use `chars / 3`.** No tokenizer dependency; conservative enough to trigger compaction early. Exact provider usage is not required for correctness.
-10. **Frontend verification without Tauri.** The renderer is exercised in Chromium through Playwright with a stubbed IPC bridge. The native shell is intentionally thin so the untested surface is limited to command wiring and window setup (see gaps).
+10. **Token estimates use `chars / 3`.** No tokenizer dependency; conservative enough to trigger compaction early. Exact provider usage is not required for correctness.
+11. **Frontend verification without Tauri.** The renderer is exercised in Chromium through Playwright with a stubbed IPC bridge. The native shell is intentionally thin so the untested surface is limited to command wiring and window setup (see gaps).
 
 ## Test map
 
@@ -121,7 +122,7 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 | MCP HTTP+SSE | endpoint event, GET response correlation, tools call |
 | Namespacing | sanitize, collisions, remote-name mapping |
 | Permissions | last-match-wins, glob, default policy, resource normalization |
-| Agent | text, tool loop, parallel, invalid args, unknown tool, policy deny, approval/rejection/always, per-chat server gating, lazy catalog/schema/call, batch execute, read_tool_output paging, length, cut, overflow, manual compaction/context status, unknown finish, max steps, retries, spill/paging |
+| Agent | text, tool loop, parallel, invalid args, unknown tool, policy deny, approval/rejection/always, per-chat server gating, lazy catalog/schema/call, batch execute, read_tool_output paging, default time/Jarvis prompt, cache-stable system prompt, length, cut, overflow, manual compaction/context status, unknown finish, max steps, retries, spill/paging |
 | DB | migrations from empty, repo CRUD, FTS sync/cascade, crash sweep |
 | UI | transcript reducer, tool card rendering, date grouping, Playwright smoke (4) |
 

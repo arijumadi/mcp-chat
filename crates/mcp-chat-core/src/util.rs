@@ -62,3 +62,27 @@ pub fn redact_secret(value: &str) -> String {
         .collect();
     format!("{prefix}••••{suffix}")
 }
+
+/// A compact, minute-precision local-time note. It is appended at the END of
+/// the system prompt so the static system prompt, tools and history remain a
+/// stable prefix for provider prompt caching.
+pub fn current_time_context() -> String {
+    let now = chrono::Local::now();
+    format!(
+        "Current local date and time: {}. UTC offset: {}. Use this as the current moment when the user asks about the day, date, or time; do not assume an outdated date.",
+        now.format("%A, %d %B %Y, %H:%M"),
+        now.offset()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn time_context_contains_local_date_and_time() {
+        let note = current_time_context();
+        assert!(note.contains("Current local date and time:"));
+        assert!(note.contains("UTC offset:"));
+    }
+}

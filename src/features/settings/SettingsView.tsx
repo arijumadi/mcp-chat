@@ -20,6 +20,7 @@ import { Modal } from "@/components/Modal";
 import { inputClass, hintClass } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { ProviderForm } from "./ProviderForm";
+import { DEFAULT_SYSTEM_PROMPT } from "@/lib/defaults";
 
 export function SettingsView() {
   const appInfo = useApp((state) => state.appInfo);
@@ -39,7 +40,9 @@ export function SettingsView() {
   const [testing, setTesting] = useState<string | null>(null);
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
-  const [systemPrompt, setSystemPrompt] = useState(settings.default_system_prompt ?? "");
+  const [systemPrompt, setSystemPrompt] = useState(
+    settings.default_system_prompt ?? DEFAULT_SYSTEM_PROMPT,
+  );
   const [savingPrompt, setSavingPrompt] = useState(false);
   const [keepTokens, setKeepTokens] = useState(
     Number(settings["compaction.keep_tokens"] ?? 15000),
@@ -52,7 +55,7 @@ export function SettingsView() {
   const compactionBufferSetting = settings["compaction.buffer"];
 
   useEffect(() => {
-    setSystemPrompt(settings.default_system_prompt ?? "");
+    setSystemPrompt(settings.default_system_prompt ?? DEFAULT_SYSTEM_PROMPT);
   }, [settings.default_system_prompt]);
 
   useEffect(() => {
@@ -310,7 +313,19 @@ export function SettingsView() {
               className={inputClass}
               style={{ borderColor: "var(--border)", minHeight: 96 }}
             />
-            <div className="mt-2 flex justify-end">
+            <span className={hintClass} style={{ color: "var(--faint)" }}>
+              Current local date and time are appended automatically at the end of
+              this prompt on every turn, in minute precision, so the static prefix
+              stays cache-friendly.
+            </span>
+            <div className="mt-2 flex justify-end gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setSystemPrompt(DEFAULT_SYSTEM_PROMPT)}
+              >
+                Reset to default
+              </Button>
               <Button size="sm" loading={savingPrompt} onClick={() => void savePrompt()}>
                 Save prompt
               </Button>

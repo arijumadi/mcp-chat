@@ -4,7 +4,7 @@ use std::time::Duration;
 use mcp_chat_core::agent::approvals::{ApprovalAnswer, ApprovalDecision, InputAnswer};
 use mcp_chat_core::agent::{ChatEngine, runner};
 use mcp_chat_core::db::Db;
-use mcp_chat_core::db::repo::{conversations, messages, permissions, providers, servers};
+use mcp_chat_core::db::repo::{conversations, messages, permissions, providers, servers, settings};
 use mcp_chat_core::events::{CoreEvent, TurnStatus};
 use mcp_chat_core::mcp::McpManager;
 use mcp_chat_core::models::PartPayload;
@@ -849,4 +849,24 @@ async fn read_tool_output_pages_are_not_recursively_truncated() {
         paged_content.len()
     );
     assert!(h.assistant_text().await.contains("Paged output complete."));
+}
+
+#[tokio::test]
+async fn custom_default_system_prompt_can_override_jarvis() {
+    let h = Harness::new("mock-text", None, 0).await;
+    settings::set(&h.db.pool, "default_system_prompt", "Custom system prompt.")
+        .await
+        .unwrap();
+    h.send_and_wait("hello", ApprovalDecision::Once, None, "ari")
+        .await;
+    let requests = h.provider.requests();
+    let system = requests[0]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "system")
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or("");
+    assert!(system.contains("Custom system prompt."));
+    assert!(!system.contains("You are Jarvis"));
 }

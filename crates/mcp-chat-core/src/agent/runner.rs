@@ -165,6 +165,19 @@ pub async fn run(
     }
 }
 
+async fn resolve_system_prompt(
+    engine: &ChatEngine,
+    conversation: &crate::models::Conversation,
+) -> Result<Option<String>> {
+    let prompt = match conversation.system_prompt.clone() {
+        Some(prompt) => Some(prompt),
+        None => settings::get(&engine.db.pool, "default_system_prompt")
+            .await?
+            .or_else(|| Some(crate::DEFAULT_SYSTEM_PROMPT.to_owned())),
+    };
+    Ok(prompt.filter(|value| !value.trim().is_empty()))
+}
+
 async fn drive(
     engine: Arc<ChatEngine>,
     conversation_id: &str,
@@ -175,12 +188,7 @@ async fn drive(
         engine.resolve(&conversation).await?;
     let kind = ProviderKind::parse(&provider.kind)
         .ok_or_else(|| CoreError::Message(format!("Unknown provider kind {:?}", provider.kind)))?;
-    let default_system = settings::get(&engine.db.pool, "default_system_prompt").await?;
-    let system = conversation
-        .system_prompt
-        .clone()
-        .or(default_system)
-        .filter(|prompt| !prompt.trim().is_empty());
+    let system = resolve_system_prompt(&engine, &conversation).await?;
     let resolved = Resolved {
         kind,
         base_url: provider.base_url.clone(),
@@ -204,6 +212,7 @@ async fn drive(
     let mut recover_used = false;
     let mut length_count = 0_usize;
     let mut compacted_once = false;
+    let time_note = crate::util::current_time_context();
 
     loop {
         if cancel.is_cancelled() {
@@ -236,6 +245,11 @@ async fn drive(
                 if base.is_empty() { "" } else { "\n\n" }
             ));
         }
+        let base = system.unwrap_or_default();
+        system = Some(format!(
+            "{base}{}{time_note}",
+            if base.is_empty() { "" } else { "\n\n" }
+        ));
         let mut estimate = estimate_tokens(&chat_messages, &tool_defs, system.as_deref());
         let context_window = resolved.context_window as usize;
         let configured_buffer = settings::get_i64(&engine.db.pool, "compaction.buffer", 0)
@@ -1399,7 +1413,7 @@ pub async fn context_status(
     let (_, _, _, context_window, _) = engine.resolve(&conversation).await?;
     let history = messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
     let (chat_messages, summary) = build_messages(&history);
-    let mut system = conversation.system_prompt.clone();
+    let mut system = resolve_system_prompt(&engine, &conversation).await?;
     if let Some(summary) = summary {
         let base = system.unwrap_or_default();
         system = Some(format!(
@@ -1416,6 +1430,12 @@ pub async fn context_status(
             ));
         }
     }
+    let base = system.unwrap_or_default();
+    system = Some(format!(
+        "{base}{}{}",
+        if base.is_empty() { "" } else { "\n\n" },
+        crate::util::current_time_context()
+    ));
     let tokens = estimate_tokens(&chat_messages, &tool_defs, system.as_deref()) as i64;
     let window = context_window;
     let keep_tokens = settings::get_i64(&engine.db.pool, "compaction.keep_tokens", 15_000)
@@ -1454,12 +1474,7 @@ pub async fn compact_now(engine: Arc<ChatEngine>, conversation_id: &str) -> Resu
         engine.resolve(&conversation).await?;
     let kind = ProviderKind::parse(&provider.kind)
         .ok_or_else(|| CoreError::Message("Unknown provider kind.".into()))?;
-    let default_system = settings::get(&engine.db.pool, "default_system_prompt").await?;
-    let system = conversation
-        .system_prompt
-        .clone()
-        .or(default_system)
-        .filter(|prompt| !prompt.trim().is_empty());
+    let system = resolve_system_prompt(&engine, &conversation).await?;
     let resolved = Resolved {
         kind,
         base_url: provider.base_url.clone(),
