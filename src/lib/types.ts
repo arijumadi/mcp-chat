@@ -10,6 +10,7 @@ export interface Conversation {
   workspaceRoot: string | null;
   systemPrompt: string | null;
   archived: boolean;
+  pinned: boolean;
   maxSteps: number;
   toolMode: "direct" | "lazy";
   serversConfigured: boolean;

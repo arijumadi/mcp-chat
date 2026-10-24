@@ -32,7 +32,7 @@ There is no API key, MCP call, or provider request in the webview. The frontend 
 
 SQLite in WAL mode, foreign keys on, migrations via `sqlx::migrate!`.
 
-- `conversations` — title, timestamps, provider/model, per-conversation `workspace_root`, system prompt, archived flag, `max_steps` (default 25).
+- `conversations` — title, timestamps, provider/model, per-conversation `workspace_root`, system prompt, archived/pinned flags, `max_steps` (default 25).
 - `messages` — role, status (`completed`, `streaming`, `interrupted`, `error`, `synthetic`), error.
 - `parts` — ordered typed JSON payloads: `text`, `reasoning`, `tool_call`, `tool_result`, `error`, `summary`, and a hidden `time` marker used for the user-message timestamp.
 - `providers` — kind, base URL, model, `api_key_ref` account id, context window, max output.

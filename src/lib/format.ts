@@ -41,16 +41,18 @@ export function groupConversations(conversations: Conversation[]): ConversationG
   const yesterday = today - 86_400_000;
   const week = today - 7 * 86_400_000;
   const groups: ConversationGroup[] = [
+    { label: "Pinned", items: [] },
     { label: "Today", items: [] },
     { label: "Yesterday", items: [] },
     { label: "Previous 7 days", items: [] },
     { label: "Older", items: [] },
   ];
   for (const conversation of conversations) {
-    if (conversation.updatedAt >= today) groups[0]?.items.push(conversation);
-    else if (conversation.updatedAt >= yesterday) groups[1]?.items.push(conversation);
-    else if (conversation.updatedAt >= week) groups[2]?.items.push(conversation);
-    else groups[3]?.items.push(conversation);
+    if (conversation.pinned) groups[0]?.items.push(conversation);
+    else if (conversation.updatedAt >= today) groups[1]?.items.push(conversation);
+    else if (conversation.updatedAt >= yesterday) groups[2]?.items.push(conversation);
+    else if (conversation.updatedAt >= week) groups[3]?.items.push(conversation);
+    else groups[4]?.items.push(conversation);
   }
   return groups.filter((group) => group.items.length > 0);
 }

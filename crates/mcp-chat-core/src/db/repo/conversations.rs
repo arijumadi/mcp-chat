@@ -52,7 +52,7 @@ pub async fn list(pool: &SqlitePool, limit: i64, offset: i64) -> Result<Vec<Conv
     let rows = sqlx::query_as::<_, Conversation>(
         r#"SELECT * FROM conversations
            WHERE archived = 0
-           ORDER BY updated_at DESC
+           ORDER BY pinned DESC, updated_at DESC
            LIMIT ?1 OFFSET ?2"#,
     )
     .bind(limit.clamp(1, 500))
@@ -64,7 +64,7 @@ pub async fn list(pool: &SqlitePool, limit: i64, offset: i64) -> Result<Vec<Conv
 
 pub async fn list_all(pool: &SqlitePool) -> Result<Vec<Conversation>> {
     let rows = sqlx::query_as::<_, Conversation>(
-        "SELECT * FROM conversations WHERE archived = 0 ORDER BY updated_at DESC",
+        "SELECT * FROM conversations WHERE archived = 0 ORDER BY pinned DESC, updated_at DESC",
     )
     .fetch_all(pool)
     .await?;
@@ -118,6 +118,15 @@ pub async fn set_system_prompt(pool: &SqlitePool, id: &str, prompt: Option<&str>
         .bind(id)
         .bind(prompt)
         .bind(now_ms())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_pinned(pool: &SqlitePool, id: &str, pinned: bool) -> Result<()> {
+    sqlx::query("UPDATE conversations SET pinned = ?2 WHERE id = ?1")
+        .bind(id)
+        .bind(pinned as i64)
         .execute(pool)
         .await?;
     Ok(())
@@ -274,6 +283,18 @@ mod tests {
 
         delete(&db.pool, &b.id).await.unwrap();
         assert_eq!(list(&db.pool, 20, 0).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pinned_conversations_sort_before_newer_ones() {
+        let db = Db::open_memory().await.unwrap();
+        let older = create(&db.pool, "Older", None, None).await.unwrap();
+        let newer = create(&db.pool, "Newer", None, None).await.unwrap();
+        set_pinned(&db.pool, &older.id, true).await.unwrap();
+        let threads = list(&db.pool, 20, 0).await.unwrap();
+        assert_eq!(threads[0].id, older.id);
+        assert!(threads[0].pinned);
+        assert!(!threads.iter().find(|c| c.id == newer.id).unwrap().pinned);
     }
 
     #[tokio::test]

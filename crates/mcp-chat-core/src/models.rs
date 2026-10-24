@@ -15,6 +15,7 @@ pub struct Conversation {
     pub workspace_root: Option<String>,
     pub system_prompt: Option<String>,
     pub archived: bool,
+    pub pinned: bool,
     pub max_steps: i64,
     pub tool_mode: String,
     pub servers_configured: bool,

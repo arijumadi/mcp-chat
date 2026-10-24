@@ -67,6 +67,7 @@ pub fn run() {
             commands::chat::get_conversation,
             commands::chat::create_conversation,
             commands::chat::rename_conversation,
+            commands::chat::set_conversation_pinned,
             commands::chat::delete_conversation,
             commands::chat::set_conversation_model,
             commands::chat::set_conversation_workspace,

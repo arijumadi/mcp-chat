@@ -33,6 +33,8 @@ export interface Toast {
 export interface AppStore {
   booted: boolean;
   conversations: Conversation[];
+  conversationLimit: number;
+  conversationHasMore: boolean;
   activeId: string | null;
   messages: MessageWithParts[];
   draft: string;
@@ -55,6 +57,7 @@ export interface AppStore {
   searching: boolean;
   init: () => Promise<void>;
   refreshConversations: () => Promise<void>;
+  loadMoreConversations: () => Promise<void>;
   refreshProviders: () => Promise<void>;
   refreshServers: () => Promise<void>;
   refreshSettings: () => Promise<void>;
@@ -70,6 +73,7 @@ export interface AppStore {
   setModel: (providerId: string, model: string) => Promise<void>;
   setConversationWorkspace: (conversationId: string, workspaceRoot: string) => Promise<void>;
   renameConversation: (id: string, title: string) => Promise<void>;
+  setConversationPinned: (id: string, pinned: boolean) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
   setView: (view: View) => void;
   toggleSidebar: () => void;
@@ -97,6 +101,8 @@ let initializing = false;
 export const useApp = create<AppStore>()((set, get) => ({
   booted: false,
   conversations: [],
+  conversationLimit: 200,
+  conversationHasMore: false,
   activeId: null,
   messages: [],
   draft: "",
@@ -139,6 +145,8 @@ export const useApp = create<AppStore>()((set, get) => ({
         servers,
         settings,
         conversations,
+        conversationLimit: 200,
+        conversationHasMore: conversations.length >= 200,
         booted: true,
       });
     } catch (error) {
@@ -151,13 +159,36 @@ export const useApp = create<AppStore>()((set, get) => ({
 
   async refreshConversations() {
     try {
+      const limit = Math.min(get().conversationLimit, 500);
       const conversations = await call<Conversation[]>("list_conversations", {
-        limit: 200,
+        limit,
         offset: 0,
       });
       // Do not touch activeId/messages here. A slow list response from before a
       // new chat was created must not make the open conversation disappear.
-      set({ conversations });
+      set({
+        conversations,
+        conversationHasMore: conversations.length >= limit && limit < 500,
+      });
+    } catch (error) {
+      get().toast(String(error), "error");
+    }
+  },
+
+  async loadMoreConversations() {
+    const current = get().conversations;
+    try {
+      const next = await call<Conversation[]>("list_conversations", {
+        limit: 100,
+        offset: current.length,
+      });
+      const seen = new Set(current.map((conversation) => conversation.id));
+      const merged = [...current, ...next.filter((conversation) => !seen.has(conversation.id))];
+      set({
+        conversations: merged,
+        conversationLimit: merged.length,
+        conversationHasMore: next.length >= 100 && merged.length < 500,
+      });
     } catch (error) {
       get().toast(String(error), "error");
     }
@@ -439,6 +470,21 @@ export const useApp = create<AppStore>()((set, get) => ({
       await call("rename_conversation", { conversationId: id, title });
       await get().refreshConversations();
     } catch (error) {
+      get().toast(String(error), "error");
+    }
+  },
+
+  async setConversationPinned(id, pinned) {
+    set((state) => ({
+      conversations: state.conversations.map((conversation) =>
+        conversation.id === id ? { ...conversation, pinned } : conversation,
+      ),
+    }));
+    try {
+      await call("set_conversation_pinned", { conversationId: id, pinned });
+      await get().refreshConversations();
+    } catch (error) {
+      await get().refreshConversations();
       get().toast(String(error), "error");
     }
   },

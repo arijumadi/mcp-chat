@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AlertCircle, ChevronDown, Loader2 } from "lucide-react";
 import type { MessageWithParts, Part } from "@/lib/types";
 import { parsePayload, partText } from "@/app/store";
+import { formatDuration } from "@/lib/format";
 import { MessageItem } from "./MessageItem";
 import { ToolCard } from "./ToolCard";
 
@@ -64,6 +65,25 @@ export function AssistantTurn({
   const thoughtCount = flattened.filter(
     (item) => item.part.kind === "reasoning",
   ).length;
+  const toolCalls = flattened
+    .filter((item) => item.part.kind === "tool_call")
+    .map((item) => parsePayload(item.part));
+  const failedCount = toolCalls.filter((payload) =>
+    ["error", "aborted"].includes(String(payload.state ?? "")),
+  ).length;
+  const runningTool = toolCalls.find((payload) =>
+    ["streaming", "queued", "running"].includes(String(payload.state ?? "")),
+  );
+  const started = toolCalls
+    .map((payload) => Number(payload.startedAt ?? 0))
+    .filter((value) => value > 0);
+  const ended = toolCalls
+    .map((payload) => Number(payload.endedAt ?? 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const duration =
+    started.length > 0 && ended.length > 0
+      ? Math.max(0, Math.max(...ended) - Math.min(...started))
+      : 0;
 
   const running =
     messages.some((message) => message.status === "streaming") ||
@@ -87,7 +107,9 @@ export function AssistantTurn({
 
   const summary =
     toolCount > 0
-      ? `Used ${toolCount} tool${toolCount === 1 ? "" : "s"}`
+      ? `Used ${toolCount} tool${toolCount === 1 ? "" : "s"}${
+          failedCount > 0 ? ` · ${failedCount} failed` : ""
+        }${duration >= 1_000 ? ` · ${formatDuration(duration)}` : ""}`
       : thoughtCount > 0
         ? `${thoughtCount} thought${thoughtCount === 1 ? "" : "s"}`
         : "Activity";
@@ -119,6 +141,20 @@ export function AssistantTurn({
               style={{ color: "var(--warn)" }}
             />
             Thinking…
+          </span>
+        ) : runningTool ? (
+          <span
+            className="flex min-w-0 items-center gap-1 text-[10.5px]"
+            style={{ color: "var(--muted)" }}
+          >
+            <Loader2
+              size={12}
+              className="animate-spin"
+              style={{ color: "var(--warn)" }}
+            />
+            <span className="max-w-[180px] truncate">
+              Running {String(runningTool.name ?? "tool")}
+            </span>
           </span>
         ) : running ? (
           <Loader2

@@ -83,6 +83,63 @@ describe("AssistantTurn", () => {
     expect(screen.queryByText("Interim note")).not.toBeInTheDocument();
   });
 
+  it("reports failed tool calls and total duration", () => {
+    render(
+      <AssistantTurn
+        messages={[
+          assistant("m1", [
+            part("p1", "tool_call", {
+              callId: "call1",
+              name: "echo",
+              server: "Mock",
+              args: { text: "hi" },
+              state: "error",
+              startedAt: 1_000,
+              endedAt: 2_500,
+            }),
+            part("p2", "tool_call", {
+              callId: "call2",
+              name: "add",
+              server: "Mock",
+              args: { a: 1, b: 2 },
+              state: "completed",
+              startedAt: 1_000,
+              endedAt: 2_500,
+            }),
+          ]),
+        ]}
+        canRetry={false}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /Used 2 tools · 1 failed · 1.5s/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("names the tool that is currently running", () => {
+    render(
+      <AssistantTurn
+        messages={[
+          assistant(
+            "m1",
+            [
+              part("p1", "tool_call", {
+                callId: "call1",
+                name: "echo",
+                server: "Mock",
+                args: { text: "hi" },
+                state: "running",
+              }),
+            ],
+            "streaming",
+          ),
+        ]}
+        canRetry={false}
+      />,
+    );
+    expect(screen.getByText("Running echo")).toBeInTheDocument();
+  });
+
   it("shows thoughts when there are no tool calls", () => {
     render(
       <AssistantTurn

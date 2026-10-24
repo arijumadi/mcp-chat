@@ -14,6 +14,7 @@ const conversation: Conversation = {
   workspaceRoot: "/home/you/project",
   systemPrompt: null,
   archived: false,
+  pinned: false,
   maxSteps: 25,
   toolMode: "lazy",
   serversConfigured: false,

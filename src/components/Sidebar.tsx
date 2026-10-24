@@ -3,6 +3,7 @@ import {
   Lock,
   MessageSquare,
   PanelLeftClose,
+  Pin,
   Plug,
   Plus,
   Search,
@@ -19,6 +20,8 @@ import { inputClass } from "@/components/ui";
 
 export function Sidebar() {
   const conversations = useApp((state) => state.conversations);
+  const hasMoreConversations = useApp((state) => state.conversationHasMore);
+  const loadMoreConversations = useApp((state) => state.loadMoreConversations);
   const activeId = useApp((state) => state.activeId);
   const view = useApp((state) => state.view);
   const openConversation = useApp((state) => state.openConversation);
@@ -26,6 +29,7 @@ export function Sidebar() {
   const setView = useApp((state) => state.setView);
   const toggleSidebar = useApp((state) => state.toggleSidebar);
   const renameConversation = useApp((state) => state.renameConversation);
+  const setConversationPinned = useApp((state) => state.setConversationPinned);
   const deleteConversation = useApp((state) => state.deleteConversation);
   const searchHits = useApp((state) => state.searchHits);
   const search = useApp((state) => state.search);
@@ -201,8 +205,33 @@ export function Sidebar() {
                       </button>
                     )}
                     <button
+                      onClick={() =>
+                        void setConversationPinned(
+                          conversation.id,
+                          !conversation.pinned,
+                        )
+                      }
+                      className={cn(
+                        "focus-ring rounded p-1 transition group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:bg-[var(--panel)]",
+                        conversation.pinned ? "opacity-100" : "opacity-0",
+                      )}
+                      style={{
+                        color: conversation.pinned ? "var(--accent)" : undefined,
+                      }}
+                      title={conversation.pinned ? "Unpin conversation" : "Pin conversation"}
+                      aria-label={
+                        conversation.pinned ? "Unpin conversation" : "Pin conversation"
+                      }
+                      aria-pressed={conversation.pinned}
+                    >
+                      <Pin
+                        size={12}
+                        fill={conversation.pinned ? "currentColor" : "none"}
+                      />
+                    </button>
+                    <button
                       onClick={() => setDeleting(conversation.id)}
-                      className="focus-ring mr-1 rounded p-1 opacity-0 transition group-hover:opacity-100 hover:text-[var(--danger)]"
+                      className="focus-ring mr-1 rounded p-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:text-[var(--danger)]"
                       title="Delete conversation"
                       aria-label="Delete conversation"
                     >
@@ -214,6 +243,16 @@ export function Sidebar() {
             </div>
           ))
         )}
+        {!query.trim() && hasMoreConversations ? (
+          <button
+            type="button"
+            onClick={() => void loadMoreConversations()}
+            className="focus-ring mt-1 w-full rounded-lg px-2 py-2 text-[11.5px] transition hover:bg-[var(--panel-2)]"
+            style={{ color: "var(--muted)" }}
+          >
+            Load older conversations
+          </button>
+        ) : null}
       </div>
 
       <div

@@ -4,6 +4,8 @@ import { useApp } from "@/app/store";
 import { MessageItem } from "./MessageItem";
 import { AssistantTurn } from "./AssistantTurn";
 
+const MESSAGE_WINDOW = 80;
+
 export function Transcript() {
   const messages = useApp((state) => state.messages);
   const status = useApp((state) => state.status);
@@ -11,6 +13,7 @@ export function Transcript() {
   const container = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
   const [showJump, setShowJump] = useState(false);
+  const [messageLimit, setMessageLimit] = useState(MESSAGE_WINDOW);
   const previousConversation = useRef<string | null>(null);
 
   const visible = messages.filter(
@@ -19,6 +22,12 @@ export function Transcript() {
       message.status !== "synthetic" &&
       (message.parts.length > 0 || message.status === "streaming"),
   );
+
+  const windowed = useMemo(
+    () => visible.slice(Math.max(0, visible.length - messageLimit)),
+    [visible, messageLimit],
+  );
+  const hiddenMessages = Math.max(0, visible.length - windowed.length);
 
   const lastAssistant = [...visible]
     .reverse()
@@ -37,7 +46,7 @@ export function Transcript() {
         buffer = [];
       }
     };
-    for (const message of visible) {
+    for (const message of windowed) {
       if (message.role === "user") {
         flush();
         result.push({ kind: "user", message });
@@ -50,7 +59,7 @@ export function Transcript() {
     }
     flush();
     return result;
-  }, [visible]);
+  }, [windowed]);
 
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
     const element = container.current;
@@ -63,6 +72,7 @@ export function Transcript() {
   useEffect(() => {
     if (previousConversation.current !== activeId) {
       previousConversation.current = activeId;
+      setMessageLimit(MESSAGE_WINDOW);
       atBottom.current = true;
       requestAnimationFrame(() => scrollToBottom("auto"));
     }
@@ -83,7 +93,7 @@ export function Transcript() {
     setShowJump(!atBottom.current);
   };
 
-  const hasStreamingAssistant = visible.some(
+  const hasStreamingAssistant = windowed.some(
     (message) => message.role === "assistant" && message.status === "streaming",
   );
   const showThinking =
@@ -97,6 +107,27 @@ export function Transcript() {
         className="h-full overflow-y-auto"
       >
         <div className="mx-auto w-full max-w-[760px] px-6 pt-8 pb-10">
+          {hiddenMessages > 0 ? (
+            <div className="mb-4 flex justify-center">
+              <button
+                type="button"
+                onClick={() => {
+                  const element = container.current;
+                  const before = element?.scrollHeight ?? 0;
+                  setMessageLimit((limit) => limit + MESSAGE_WINDOW);
+                  requestAnimationFrame(() => {
+                    if (element) {
+                      element.scrollTop += element.scrollHeight - before;
+                    }
+                  });
+                }}
+                className="focus-ring rounded-full border px-3 py-1.5 text-[11px] transition hover:bg-[var(--panel-2)]"
+                style={{ borderColor: "var(--border)", color: "var(--muted)" }}
+              >
+                Show earlier messages ({hiddenMessages})
+              </button>
+            </div>
+          ) : null}
           {rows.map((row) => {
             if (row.kind === "user" || row.kind === "system") {
               return (

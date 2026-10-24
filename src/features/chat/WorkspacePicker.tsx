@@ -21,6 +21,7 @@ export function WorkspacePicker({
   const toast = useApp((state) => state.toast);
   const [openPicker, setOpenPicker] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const current = conversation.workspaceRoot ?? appInfo?.workspaceDir ?? "";
 
@@ -36,6 +37,10 @@ export function WorkspacePicker({
   }, [settings]);
 
   useEffect(() => {
+    if (openPicker) setError(null);
+  }, [openPicker]);
+
+  useEffect(() => {
     if (!openPicker) return;
     const onClick = (event: MouseEvent) => {
       if (ref.current && !ref.current.contains(event.target as Node)) {
@@ -49,12 +54,15 @@ export function WorkspacePicker({
   const apply = async (path: string) => {
     if (!path.trim()) return;
     setSaving(true);
+    setError(null);
     try {
       await setWorkspace(conversation.id, path);
       setOpenPicker(false);
       toast("Workspace updated for this chat.", "info");
     } catch (error) {
-      toast(String(error), "error");
+      const message = String(error);
+      setError(message);
+      toast(message, "error");
     } finally {
       setSaving(false);
     }
@@ -131,7 +139,16 @@ export function WorkspacePicker({
               </button>
             ))}
           </div>
-          <div className="mt-3 flex items-center justify-between gap-2">
+          {error ? (
+            <div
+              className="mt-2 rounded-lg px-2 py-1.5 text-[10.5px] leading-relaxed"
+              style={{ background: "var(--danger-soft)", color: "var(--danger)" }}
+              role="alert"
+            >
+              {error}
+            </div>
+          ) : null}
+          <div className="mt-3 flex flex-wrap items-center gap-1">
             <button
               type="button"
               onClick={() => void choose()}
@@ -142,10 +159,21 @@ export function WorkspacePicker({
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Folder size={12} />}
               Choose folder…
             </button>
+            {appInfo?.workspaceDir && appInfo.workspaceDir !== current ? (
+              <button
+                type="button"
+                onClick={() => void apply(appInfo.workspaceDir)}
+                disabled={saving}
+                className="focus-ring rounded-lg px-2 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)] disabled:opacity-50"
+                style={{ color: "var(--muted)" }}
+              >
+                Use app directory
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => setOpenPicker(false)}
-              className="focus-ring rounded-lg px-2 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)]"
+              className="focus-ring ml-auto rounded-lg px-2 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)]"
               style={{ color: "var(--muted)" }}
             >
               Cancel

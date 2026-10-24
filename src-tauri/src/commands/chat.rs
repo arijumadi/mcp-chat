@@ -136,6 +136,17 @@ pub async fn rename_conversation(
 }
 
 #[tauri::command]
+pub async fn set_conversation_pinned(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    pinned: bool,
+) -> CmdResult<()> {
+    conversations::set_pinned(&state.db.pool, &conversation_id, pinned)
+        .await
+        .map_err(cmd_err)
+}
+
+#[tauri::command]
 pub async fn delete_conversation(
     state: State<'_, AppState>,
     conversation_id: String,

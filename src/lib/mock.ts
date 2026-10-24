@@ -130,6 +130,7 @@ export function installMock(): void {
       workspaceRoot: "/home/you/project",
       systemPrompt: null,
       archived: false,
+      pinned: false,
       maxSteps: 25,
       toolMode: "lazy",
       serversConfigured: false,
@@ -232,8 +233,13 @@ export function installMock(): void {
         settingsStore[String(args.key)] = String(args.value);
         if (args.key === "theme") localStorage.setItem("theme", String(args.value));
         return null;
-      case "list_conversations":
-        return [...conversations].sort((a, b) => b.updatedAt - a.updatedAt);
+      case "list_conversations": {
+        const offset = Number(args.offset ?? 0);
+        const limit = Number(args.limit ?? 200);
+        return [...conversations]
+          .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt)
+          .slice(offset, offset + limit);
+      }
       case "search_conversations": {
         const query = String(args.query ?? "").toLowerCase();
         return conversations
@@ -260,6 +266,7 @@ export function installMock(): void {
             "/home/you/project",
           systemPrompt: null,
           archived: false,
+          pinned: false,
           maxSteps: 25,
           toolMode: "lazy",
           serversConfigured: false,
@@ -274,6 +281,11 @@ export function installMock(): void {
           conversation.title = String(args.title ?? conversation.title);
           conversation.updatedAt = now();
         }
+        return null;
+      }
+      case "set_conversation_pinned": {
+        const conversation = conversations.find((item) => item.id === args.conversationId);
+        if (conversation) conversation.pinned = Boolean(args.pinned);
         return null;
       }
       case "delete_conversation": {

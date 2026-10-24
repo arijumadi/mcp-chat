@@ -19,12 +19,17 @@ export function ModelPicker({
   const [open, setOpen] = useState(false);
   const [providerId, setProviderId] = useState(conversation.providerId ?? "");
   const [selectedModel, setSelectedModel] = useState(conversation.model ?? "");
+  const [modelQuery, setModelQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setProviderId(conversation.providerId ?? providers[0]?.id ?? "");
     setSelectedModel(conversation.model ?? providers[0]?.model ?? "");
   }, [conversation.providerId, conversation.model, providers]);
+
+  useEffect(() => {
+    if (open) setModelQuery("");
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -38,6 +43,14 @@ export function ModelPicker({
   const provider = providers.find((item) => item.id === providerId);
   const models = provider?.models ?? [];
   const usesCustom = models.length === 0 || !models.includes(selectedModel);
+  const filteredModels = models.filter((model) => {
+    const needle = modelQuery.trim().toLowerCase();
+    return (
+      !needle ||
+      model.toLowerCase().includes(needle) ||
+      shortModelName(model).toLowerCase().includes(needle)
+    );
+  });
 
   const save = async () => {
     if (!providerId || !selectedModel.trim()) return;
@@ -102,6 +115,7 @@ export function ModelPicker({
                 value={providerId}
                 onChange={(event) => {
                   setProviderId(event.target.value);
+                  setModelQuery("");
                   const next = providers.find((item) => item.id === event.target.value);
                   if (next) {
                     setSelectedModel(
@@ -123,26 +137,44 @@ export function ModelPicker({
                 Model
               </label>
               {models.length > 0 ? (
-                <select
-                  value={usesCustom ? "__custom__" : selectedModel}
-                  onChange={(event) => {
-                    if (event.target.value === "__custom__") {
-                      setSelectedModel("");
-                    } else {
-                      setSelectedModel(event.target.value);
-                    }
-                  }}
-                  className={inputClass}
-                  style={{ borderColor: "var(--border)", background: "var(--panel)" }}
-                >
-                  {usesCustom ? <option value="__custom__">Custom model…</option> : null}
-                  {models.map((item) => (
-                    <option key={item} value={item}>
-                      {shortModelName(item)}
-                    </option>
-                  ))}
-                  {!usesCustom ? <option value="__custom__">Custom model…</option> : null}
-                </select>
+                <>
+                  <input
+                    value={modelQuery}
+                    onChange={(event) => setModelQuery(event.target.value)}
+                    className={inputClass}
+                    style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+                    placeholder="Search models…"
+                    aria-label="Search models"
+                  />
+                  <div
+                    className="mt-1.5 max-h-48 overflow-y-auto rounded-lg border p-1"
+                    style={{ borderColor: "var(--border)" }}
+                    data-testid="model-options"
+                  >
+                    {filteredModels.length === 0 ? (
+                      <div className="px-2 py-2 text-[11px]" style={{ color: "var(--faint)" }}>
+                        No matching models.
+                      </div>
+                    ) : (
+                      filteredModels.map((item) => {
+                        const active = selectedModel === item;
+                        return (
+                          <button
+                            key={item}
+                            type="button"
+                            onClick={() => setSelectedModel(item)}
+                            className="focus-ring flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] transition hover:bg-[var(--panel-2)]"
+                            style={{ background: active ? "var(--panel-2)" : "transparent" }}
+                            title={item}
+                          >
+                            <span className="min-w-0 flex-1 truncate">{shortModelName(item)}</span>
+                            {active ? <Check size={12} style={{ color: "var(--accent)" }} /> : null}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </>
               ) : null}
               {usesCustom ? (
                 <input
@@ -155,8 +187,18 @@ export function ModelPicker({
                     marginTop: models.length > 0 ? 6 : 0,
                   }}
                   placeholder={provider?.model ?? "model id"}
+                  aria-label="Custom model"
                 />
-              ) : null}
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setSelectedModel("")}
+                  className="focus-ring mt-1.5 rounded px-1 text-[10.5px] font-medium transition hover:bg-[var(--panel-2)]"
+                  style={{ color: "var(--accent)" }}
+                >
+                  Use a custom model…
+                </button>
+              )}
               <div className="mt-1 text-[9.5px]" style={{ color: "var(--faint)" }}>
                 {models.length > 0
                   ? "Model list saved with this provider."

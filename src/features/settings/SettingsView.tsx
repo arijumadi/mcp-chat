@@ -32,6 +32,8 @@ export function SettingsView() {
   const refreshSettings = useApp((state) => state.refreshSettings);
   const refreshConversations = useApp((state) => state.refreshConversations);
   const conversations = useApp((state) => state.conversations);
+  const conversationHasMore = useApp((state) => state.conversationHasMore);
+  const loadMoreConversations = useApp((state) => state.loadMoreConversations);
   const activeId = useApp((state) => state.activeId);
   const setTheme = useApp((state) => state.setTheme);
   const setView = useApp((state) => state.setView);
@@ -198,7 +200,9 @@ export function SettingsView() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[820px] px-6 py-7">
+          <SettingsNav />
           <Section
+            id="providers"
             title="Providers"
             description="Models are called from Rust. API keys stay in the OS keychain and are never exposed to the webview."
             action={
@@ -302,6 +306,7 @@ export function SettingsView() {
           </Section>
 
           <Section
+            id="appearance"
             title="Appearance"
             description="The interface follows the system theme by default."
           >
@@ -331,6 +336,7 @@ export function SettingsView() {
           </Section>
 
           <Section
+            id="chat-defaults"
             title="Chat defaults"
             description="Applied to new conversations that do not set their own system prompt."
           >
@@ -361,6 +367,7 @@ export function SettingsView() {
           </Section>
 
           <Section
+            id="context"
             title="Context management"
             description="Compaction summarizes older turns and keeps the most recent tokens verbatim."
           >
@@ -406,6 +413,7 @@ export function SettingsView() {
           </Section>
 
           <Section
+            id="export"
             title="Export conversation"
             description="Save a transcript as Markdown or JSON. Conversations can be selected independently of the open chat."
           >
@@ -435,6 +443,16 @@ export function SettingsView() {
                     ))}
                   </select>
                 </label>
+                {conversationHasMore ? (
+                  <button
+                    type="button"
+                    onClick={() => void loadMoreConversations()}
+                    className="focus-ring mt-1 rounded px-1 text-[10.5px] font-medium transition hover:bg-[var(--panel-2)]"
+                    style={{ color: "var(--accent)" }}
+                  >
+                    Load older conversations…
+                  </button>
+                ) : null}
                 <div className="mt-2 flex justify-end gap-2">
                   <Button
                     size="sm"
@@ -455,7 +473,7 @@ export function SettingsView() {
             )}
           </Section>
 
-          <Section title="Data" description="Everything is stored locally in this app's data directory.">
+          <Section id="data" title="Data" description="Everything is stored locally in this app's data directory.">
             <div
               className="flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2.5"
               style={{ borderColor: "var(--border)", background: "var(--panel)" }}
@@ -491,7 +509,7 @@ export function SettingsView() {
             </div>
           </Section>
 
-          <Section title="About" description="">
+          <Section id="about" title="About" description="">
             <div className="flex items-start gap-2 text-[12px]" style={{ color: "var(--muted)" }}>
               <ShieldCheck size={15} className="mt-0.5 shrink-0" style={{ color: "var(--accent)" }} />
               <div>
@@ -600,19 +618,56 @@ export function SettingsView() {
   );
 }
 
+function SettingsNav() {
+  const items = [
+    ["providers", "Providers"],
+    ["appearance", "Appearance"],
+    ["chat-defaults", "Chat defaults"],
+    ["context", "Context"],
+    ["export", "Export"],
+    ["data", "Data"],
+    ["about", "About"],
+  ] as const;
+  return (
+    <nav
+      className="sticky top-0 z-10 -mx-6 mb-5 flex gap-1 overflow-x-auto border-b px-6 py-2"
+      style={{ background: "var(--bg)", borderColor: "var(--border)" }}
+      aria-label="Settings sections"
+    >
+      {items.map(([id, label]) => (
+        <button
+          key={id}
+          type="button"
+          onClick={() =>
+            document
+              .getElementById(id)
+              ?.scrollIntoView({ behavior: "smooth", block: "start" })
+          }
+          className="focus-ring shrink-0 rounded-md px-2 py-1 text-[11px] transition hover:bg-[var(--panel-2)]"
+          style={{ color: "var(--muted)" }}
+        >
+          {label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
 function Section({
+  id,
   title,
   description,
   action,
   children,
 }: {
+  id?: string;
   title: string;
   description: string;
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <section className="mb-8">
+    <section id={id} className="mb-8 scroll-mt-14">
       <div className="mb-2.5 flex items-start justify-between gap-3">
         <div>
           <h2 className="text-[14px] font-semibold tracking-[-0.01em]">{title}</h2>
