@@ -223,6 +223,23 @@ async fn drive(
 
     let (registry, defaults, tool_defs, active_server_slugs, tool_mode) =
         load_tools(&engine, &conversation).await;
+    let lazy_note = if tool_mode == "lazy" {
+        lazy_tool_note(&registry)
+    } else {
+        None
+    };
+    let runtime_note = match crate::agent::prompt::runtime_context(
+        &engine.db.pool,
+        &engine.output_dir,
+    )
+    .await
+    {
+        Ok(note) => note,
+        Err(error) => {
+            tracing::warn!(error = %error.user_message(), "could not build workspace prompt context");
+            String::new()
+        }
+    };
     let mut tool_choice = ToolChoice::Auto;
     let mut tools_disabled = false;
     let mut max_notice_sent = false;
@@ -256,23 +273,12 @@ async fn drive(
 
         let history = messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
         let (mut chat_messages, summary) = build_messages(&history);
-        let mut system = resolved.system.clone();
-        if tool_mode == "lazy" {
-            if let Some(note) = lazy_tool_note(&registry) {
-                let base = system.unwrap_or_default();
-                system = Some(format!(
-                    "{base}{}{note}",
-                    if base.is_empty() { "" } else { "\n\n" }
-                ));
-            }
-        }
-        if let Some(summary) = summary {
-            let base = system.unwrap_or_default();
-            system = Some(format!(
-                "{base}{}Summary of earlier conversation:\n{summary}",
-                if base.is_empty() { "" } else { "\n\n" }
-            ));
-        }
+        let mut system = crate::agent::prompt::compose_system(
+            resolved.system.clone(),
+            &runtime_note,
+            lazy_note.as_deref(),
+            summary.as_deref(),
+        );
         let mut estimate = estimate_tokens(&chat_messages, &tool_defs, system.as_deref());
         let context_window = resolved.context_window as usize;
         let configured_buffer = settings::get_i64(&engine.db.pool, "compaction.buffer", 0)
@@ -296,13 +302,12 @@ async fn drive(
                         messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
                     let (messages, summary) = build_messages(&history);
                     chat_messages = messages;
-                    if let Some(summary) = summary {
-                        let base = resolved.system.clone().unwrap_or_default();
-                        system = Some(format!(
-                            "{base}{}Summary of earlier conversation:\n{summary}",
-                            if base.is_empty() { "" } else { "\n\n" }
-                        ));
-                    }
+                    system = crate::agent::prompt::compose_system(
+                        resolved.system.clone(),
+                        &runtime_note,
+                        lazy_note.as_deref(),
+                        summary.as_deref(),
+                    );
                     estimate = estimate_tokens(&chat_messages, &tool_defs, system.as_deref());
                 }
                 Err(error) => {
@@ -1472,23 +1477,20 @@ pub async fn context_status(
     let (_, _, _, context_window, _) = engine.resolve(&conversation).await?;
     let history = messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
     let (chat_messages, summary) = build_messages(&history);
-    let mut system = resolve_system_prompt(&engine, &conversation).await?;
-    if let Some(summary) = summary {
-        let base = system.unwrap_or_default();
-        system = Some(format!(
-            "{base}{}Summary of earlier conversation:\n{summary}",
-            if base.is_empty() { "" } else { "\n\n" }
-        ));
-    }
-    if tool_mode == "lazy" {
-        if let Some(note) = lazy_tool_note(&registry) {
-            let base = system.unwrap_or_default();
-            system = Some(format!(
-                "{base}{}{note}",
-                if base.is_empty() { "" } else { "\n\n" }
-            ));
-        }
-    }
+    let runtime_note = crate::agent::prompt::runtime_context(&engine.db.pool, &engine.output_dir)
+        .await
+        .unwrap_or_default();
+    let lazy_note = if tool_mode == "lazy" {
+        lazy_tool_note(&registry)
+    } else {
+        None
+    };
+    let system = crate::agent::prompt::compose_system(
+        resolve_system_prompt(&engine, &conversation).await?,
+        &runtime_note,
+        lazy_note.as_deref(),
+        summary.as_deref(),
+    );
     let tokens = estimate_tokens(&chat_messages, &tool_defs, system.as_deref()) as i64;
     let window = context_window;
     let keep_tokens = settings::get_i64(&engine.db.pool, "compaction.keep_tokens", 15_000)

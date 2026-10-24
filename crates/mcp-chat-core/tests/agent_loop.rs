@@ -236,6 +236,9 @@ async fn streams_text_and_persists_it() {
         .and_then(|message| message["content"].as_str())
         .unwrap_or("");
     assert!(system.contains("You are Jarvis"));
+    assert!(system.contains("# Harness rules"));
+    assert!(system.contains("<env>"));
+    assert!(system.contains("Default shell:"));
     assert!(!system.contains("Message sent at"));
     let user = messages
         .iter()

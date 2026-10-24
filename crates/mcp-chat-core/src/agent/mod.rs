@@ -1,6 +1,7 @@
 pub mod approvals;
 pub mod context;
 pub mod permissions;
+pub mod prompt;
 pub mod runner;
 pub mod tools;
 pub mod types;

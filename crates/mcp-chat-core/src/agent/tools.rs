@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -664,6 +664,71 @@ pub fn builtin_default_effect(name: &str) -> Effect {
         "bash" | "edit" | "write" => Effect::Ask,
         _ => Effect::Allow,
     }
+}
+
+pub fn skill_roots(workspace: &Path, output_dir: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![
+        workspace.join(".mcp-chat").join("skills"),
+        workspace.join(".opencode").join("skills"),
+    ];
+    if let Some(parent) = output_dir.parent() {
+        roots.push(parent.join("skills"));
+    }
+    roots
+}
+
+fn skill_description(path: &Path) -> String {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    let content = content.chars().take(8_000).collect::<String>();
+    let mut frontmatter = false;
+    for line in content.lines() {
+        let line = line.trim();
+        if line == "---" {
+            frontmatter = !frontmatter;
+            continue;
+        }
+        if frontmatter {
+            if let Some(value) = line.strip_prefix("description:") {
+                let value = value.trim().trim_matches('"').trim_matches('\'');
+                if !value.is_empty() {
+                    return truncate_chars(value, 200).0;
+                }
+            }
+        }
+    }
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("---") {
+            continue;
+        }
+        return truncate_chars(line, 200).0;
+    }
+    String::new()
+}
+
+pub fn skill_catalog(workspace: &Path, output_dir: &Path) -> Vec<(String, String)> {
+    let mut skills = BTreeMap::new();
+    for root in skill_roots(workspace, output_dir) {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let manifest = path.join("SKILL.md");
+            if !manifest.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            skills
+                .entry(name.to_owned())
+                .or_insert_with(|| skill_description(&manifest));
+        }
+    }
+    skills.into_iter().collect()
 }
 
 impl ToolExecutor {
@@ -1966,40 +2031,30 @@ impl ToolExecutor {
             .unwrap_or("")
             .trim();
         let workspace = workspace_root(&self.db.pool).await?;
-        let mut roots = vec![
-            workspace.join(".mcp-chat").join("skills"),
-            workspace.join(".opencode").join("skills"),
-        ];
-        if let Some(parent) = self.output_dir.parent() {
-            roots.push(parent.join("skills"));
-        }
-        let list = || -> Vec<String> {
-            let mut names = BTreeSet::new();
-            for root in &roots {
-                let Ok(entries) = std::fs::read_dir(root) else {
-                    continue;
-                };
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.join("SKILL.md").is_file() {
-                        if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
-                            names.insert(name.to_owned());
-                        }
-                    }
-                }
-            }
-            names.into_iter().collect()
-        };
+        let roots = skill_roots(&workspace, &self.output_dir);
+        let catalog = skill_catalog(&workspace, &self.output_dir);
         if name.is_empty() {
-            let names = list();
-            let content = if names.is_empty() {
+            let content = if catalog.is_empty() {
                 "No skills found. Create .mcp-chat/skills/<name>/SKILL.md in the workspace.".into()
             } else {
-                format!("Available skills:\n{}", names.join("\n"))
+                format!(
+                    "Available skills:\n{}",
+                    catalog
+                        .iter()
+                        .map(|(name, description)| if description.is_empty() {
+                            format!("- {name}")
+                        } else {
+                            format!("- {name}: {description}")
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
             };
             return Ok(Rendered {
                 content,
-                structured: Some(json!({"skills": names})),
+                structured: Some(
+                    json!({"skills": catalog.iter().map(|(name, _)| name).collect::<Vec<_>>()}),
+                ),
                 ok: true,
             });
         }
@@ -2024,10 +2079,14 @@ impl ToolExecutor {
         }
         Err(CoreError::invalid(format!(
             "Skill {name:?} was not found. Available skills: {}",
-            if list().is_empty() {
+            if catalog.is_empty() {
                 "(none)".into()
             } else {
-                list().join(", ")
+                catalog
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             }
         )))
     }
