@@ -52,11 +52,20 @@ export function AssistantTurn({
     );
   });
 
-  const toolCount = flattened.filter((item) => {
-    if (item.part.kind !== "tool_call") return false;
-    const name = parsePayload(item.part).name;
-    return name !== "mcp_search_tools" && name !== "mcp_get_tool_schema";
-  }).length;
+  const toolCount = flattened.reduce((count, item) => {
+    if (item.part.kind !== "tool_call") return count;
+    const payload = parsePayload(item.part);
+    const name = payload.name;
+    if (name === "mcp_search_tools" || name === "mcp_get_tool_schema") {
+      return count;
+    }
+    if (name === "mcp_execute") {
+      const args = payload.args as Record<string, unknown> | undefined;
+      const calls = args?.calls;
+      return count + (Array.isArray(calls) ? calls.length : 1);
+    }
+    return count + 1;
+  }, 0);
   const thoughtCount = flattened.filter(
     (item) => item.part.kind === "reasoning",
   ).length;

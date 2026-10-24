@@ -32,7 +32,13 @@ export function ToolCard({ part }: { part: Part }) {
   const state = payload.state ?? "running";
   const metaArgs = (payload.args ?? {}) as Record<string, unknown>;
   const isMetaCall = payload.name === "mcp_call_tool";
-  const displayName = isMetaCall ? String(metaArgs.tool ?? payload.name) : payload.name;
+  const isBatch = payload.name === "mcp_execute";
+  const batchCalls = isBatch && Array.isArray(metaArgs.calls) ? metaArgs.calls.length : 0;
+  const displayName = isMetaCall
+    ? String(metaArgs.tool ?? payload.name)
+    : isBatch
+      ? `${payload.name} · ${batchCalls} call${batchCalls === 1 ? "" : "s"}`
+      : payload.name;
   const displayServer = isMetaCall
     ? String(metaArgs.server ?? payload.server)
     : payload.server;

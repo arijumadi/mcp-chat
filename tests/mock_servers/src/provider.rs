@@ -74,7 +74,8 @@ async fn models(State(_state): State<ProviderState>) -> Json<Value> {
             {"id": "mock-badjson"},
             {"id": "mock-flaky"},
             {"id": "mock-sleep"},
-            {"id": "mock-lazy"}
+            {"id": "mock-lazy"},
+            {"id": "mock-batch"}
         ]
     }))
 }
@@ -258,6 +259,23 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
                     .into_response();
             }
             text_response("Recovered after retry.")
+        }
+        "batch" => {
+            if tools_done {
+                return text_response("Batch complete.");
+            }
+            let calls = serde_json::json!({
+                "calls": [
+                    {"server": "mock", "tool": "echo", "arguments": {"text": "batch"}},
+                    {"server": "mock", "tool": "add", "arguments": {"a": 2, "b": 3}}
+                ]
+            });
+            sse(tool_call_frames(&[(
+                0,
+                "call_batch",
+                "mcp_execute",
+                &calls.to_string(),
+            )]))
         }
         "lazy" => {
             let tool_results = messages

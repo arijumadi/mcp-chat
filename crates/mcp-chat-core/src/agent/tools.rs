@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use futures::StreamExt;
 use serde_json::{Value, json};
 use tokio::sync::{Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
@@ -74,9 +75,13 @@ pub struct ToolExecResult {
 pub const MCP_SEARCH_TOOLS: &str = "mcp_search_tools";
 pub const MCP_GET_TOOL_SCHEMA: &str = "mcp_get_tool_schema";
 pub const MCP_CALL_TOOL: &str = "mcp_call_tool";
+pub const MCP_EXECUTE: &str = "mcp_execute";
 
 pub fn is_meta_tool(name: &str) -> bool {
-    matches!(name, MCP_SEARCH_TOOLS | MCP_GET_TOOL_SCHEMA | MCP_CALL_TOOL)
+    matches!(
+        name,
+        MCP_SEARCH_TOOLS | MCP_GET_TOOL_SCHEMA | MCP_CALL_TOOL | MCP_EXECUTE
+    )
 }
 
 pub fn meta_tool_defs() -> Vec<ToolDef> {
@@ -104,6 +109,32 @@ pub fn meta_tool_defs() -> Vec<ToolDef> {
                     "tool": {"type": "string", "description": "Remote tool name from mcp_search_tools."}
                 },
                 "required": ["server", "tool"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            name: MCP_EXECUTE.into(),
+            description: "Execute several independent MCP tool calls in one step (max 8, up to 4 in flight). Use this when you need multiple tools for the same answer. Each call still follows its server policy and may ask for approval.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "calls": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 8,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "server": {"type": "string"},
+                                "tool": {"type": "string"},
+                                "arguments": {"type": "object", "additionalProperties": true}
+                            },
+                            "required": ["server", "tool", "arguments"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "required": ["calls"],
                 "additionalProperties": false
             }),
         },
@@ -235,6 +266,9 @@ impl ToolExecutor {
                 .await;
         }
 
+        if builtin && req.remote_name == MCP_EXECUTE {
+            return self.execute_mcp_batch(req, started).await;
+        }
         if builtin && req.remote_name == MCP_CALL_TOOL {
             return self.execute_mcp_call(req, started).await;
         }
@@ -625,6 +659,214 @@ impl ToolExecutor {
         self.finish(req, started, outcome).await
     }
 
+    async fn execute_mcp_batch(&self, req: ToolExecRequest, started: Instant) -> ToolExecResult {
+        let Some(raw_calls) = req.args.get("calls").and_then(Value::as_array) else {
+            return self
+                .fail(
+                    req,
+                    "error",
+                    "mcp_execute needs a calls array.".into(),
+                    started,
+                    false,
+                )
+                .await;
+        };
+        if raw_calls.is_empty() || raw_calls.len() > 8 {
+            return self
+                .fail(
+                    req,
+                    "error",
+                    "mcp_execute accepts between 1 and 8 calls.".into(),
+                    started,
+                    false,
+                )
+                .await;
+        }
+        let mut calls = Vec::new();
+        for (index, raw) in raw_calls.iter().enumerate() {
+            let server = raw
+                .get("server")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let tool = raw
+                .get("tool")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let arguments = raw.get("arguments").cloned().unwrap_or_else(|| json!({}));
+            let parse_error = if server.is_empty() || tool.is_empty() {
+                Some("server and tool are required".to_owned())
+            } else if !arguments.is_object() {
+                Some("arguments must be an object".to_owned())
+            } else {
+                None
+            };
+            calls.push(BatchCall {
+                index,
+                server,
+                tool,
+                arguments,
+                parse_error,
+            });
+        }
+
+        self.patch_part(
+            &req.part_id,
+            json!({"state": "running", "approval": "allowed"}),
+        )
+        .await;
+        let _ = self.events.send(CoreEvent::Tool {
+            conversation_id: req.conversation_id.clone(),
+            call_id: req.call_id.clone(),
+            state: "running".into(),
+            progress: None,
+            message: Some(format!("Running {} MCP call(s)", calls.len())),
+        });
+
+        let futures = calls
+            .into_iter()
+            .map(|call| self.run_batch_target(&req, call));
+        let mut outcomes = futures::stream::iter(futures)
+            .buffer_unordered(4)
+            .collect::<Vec<_>>()
+            .await;
+        outcomes.sort_by_key(|outcome| outcome.index);
+
+        let ok = outcomes.iter().all(|outcome| outcome.ok);
+        let mut content = format!("Executed {} MCP call(s):", outcomes.len());
+        for outcome in &outcomes {
+            content.push_str(&format!(
+                "\n\n## {} :: {} — {}\n{}",
+                outcome.server,
+                outcome.tool,
+                if outcome.ok { "ok" } else { "error" },
+                outcome.content
+            ));
+        }
+        let structured = json!({
+            "results": outcomes.iter().map(|outcome| json!({
+                "server": outcome.server,
+                "tool": outcome.tool,
+                "ok": outcome.ok,
+                "content": outcome.content,
+            })).collect::<Vec<_>>()
+        });
+        self.finish(
+            req,
+            started,
+            Ok(Rendered {
+                content,
+                structured: Some(structured),
+                ok,
+            }),
+        )
+        .await
+    }
+
+    async fn run_batch_target(&self, req: &ToolExecRequest, call: BatchCall) -> BatchOutcome {
+        let error = |message: String| BatchOutcome {
+            index: call.index,
+            server: call.server.clone(),
+            tool: call.tool.clone(),
+            ok: false,
+            content: message,
+        };
+        if let Some(message) = call.parse_error {
+            return error(format!("Invalid call: {message}"));
+        }
+        if !req
+            .active_server_slugs
+            .iter()
+            .any(|slug| slug == &call.server)
+        {
+            return error(format!(
+                "MCP server {:?} is not enabled for this conversation.",
+                call.server
+            ));
+        }
+        let (server, tool) = match self.mcp.resolve_tool(&call.server, &call.tool).await {
+            Ok(value) => value,
+            Err(err) => return error(err.user_message()),
+        };
+        if let Err(message) = validate_args(&tool.input_schema, &call.arguments) {
+            let schema = serde_json::to_string(&tool.input_schema).unwrap_or_default();
+            let schema = truncate_chars(&schema, 1500).0;
+            return error(format!("Invalid tool input: {message}\nSchema: {schema}"));
+        }
+
+        let action = format!("mcp.{}.{}", server.slug, tool.name);
+        let resource = permissions::permission_resource(&call.arguments);
+        let default = match server.policy.as_str() {
+            "auto" => Effect::Allow,
+            "deny" => Effect::Deny,
+            _ => Effect::Ask,
+        };
+        let rules = rules_repo::list_for_server(&self.db.pool, &server.id)
+            .await
+            .unwrap_or_default();
+        let effect = permissions::evaluate(&action, &resource, default, &rules);
+        match effect {
+            Effect::Allow => {}
+            Effect::Deny => {
+                return error("The user's permission policy denied this tool call.".into());
+            }
+            Effect::Ask => {
+                if let Err(message) = self
+                    .ask_permission_explicit(
+                        &req.conversation_id,
+                        &req.part_id,
+                        &format!("{}:batch:{}", req.call_id, call.index),
+                        &server.id,
+                        &server.name,
+                        &tool.name,
+                        &call.arguments,
+                        &req.cancel,
+                        &action,
+                        &resource,
+                    )
+                    .await
+                {
+                    return error(message);
+                }
+            }
+        }
+
+        let target_call_id = format!("{}:batch:{}", req.call_id, call.index);
+        let target_request = ToolExecRequest {
+            conversation_id: req.conversation_id.clone(),
+            message_id: req.message_id.clone(),
+            part_id: req.part_id.clone(),
+            call_id: target_call_id,
+            index: call.index,
+            exposed_name: MCP_CALL_TOOL.into(),
+            remote_name: tool.name.clone(),
+            server_id: server.id.clone(),
+            server_slug: server.slug.clone(),
+            server_name: server.name.clone(),
+            args: call.arguments,
+            tool: Some(tool.clone()),
+            default_effect: default,
+            disabled: false,
+            cancel: req.cancel.clone(),
+            active_server_slugs: req.active_server_slugs.clone(),
+        };
+        match self.run_mcp(&target_request, &tool).await {
+            Ok(Rendered {
+                content,
+                structured: _,
+                ok,
+            }) => BatchOutcome {
+                index: call.index,
+                server: server.slug,
+                tool: tool.name,
+                ok,
+                content,
+            },
+            Err(err) => error(err.user_message()),
+        }
+    }
+
     async fn run_meta_lookup(&self, req: &ToolExecRequest) -> Result<Rendered> {
         match req.remote_name.as_str() {
             MCP_SEARCH_TOOLS => {
@@ -926,6 +1168,22 @@ struct Rendered {
     content: String,
     structured: Option<Value>,
     ok: bool,
+}
+
+struct BatchCall {
+    index: usize,
+    server: String,
+    tool: String,
+    arguments: Value,
+    parse_error: Option<String>,
+}
+
+struct BatchOutcome {
+    index: usize,
+    server: String,
+    tool: String,
+    ok: bool,
+    content: String,
 }
 
 fn render_call_result(result: &crate::mcp::CallToolResult) -> (String, Option<Value>, bool) {

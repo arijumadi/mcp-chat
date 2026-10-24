@@ -798,3 +798,32 @@ async fn manual_compaction_and_context_status() {
             .any(|part| part.kind == "summary")
     );
 }
+
+#[tokio::test]
+async fn batch_execute_runs_multiple_mcp_tools_in_one_call() {
+    let h = Harness::new("mock-batch", Some("auto"), 0).await;
+    conversations::set_tool_mode(&h.db.pool, &h.conversation_id, "lazy")
+        .await
+        .unwrap();
+    h.send_and_wait("batch", ApprovalDecision::Once, None, "ari")
+        .await;
+    let history = h.history().await;
+    let tool_part = history
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .find(|part| part.kind == "tool_call")
+        .expect("batch tool part");
+    assert_eq!(tool_part.payload()["name"], "mcp_execute");
+    let result = history
+        .iter()
+        .find(|message| message.message.role == "tool")
+        .expect("batch result")
+        .parts[0]
+        .payload();
+    assert_eq!(result["ok"], true);
+    let content = result["content"].as_str().unwrap();
+    assert!(content.contains("mock :: echo"));
+    assert!(content.contains("echo: batch"));
+    assert!(content.contains("sum"));
+    assert!(h.assistant_text().await.contains("Batch complete."));
+}
