@@ -947,3 +947,61 @@ async fn custom_default_system_prompt_can_override_jarvis() {
     assert!(system.contains("Custom system prompt."));
     assert!(!system.contains("You are Jarvis"));
 }
+
+#[tokio::test]
+async fn revert_message_removes_it_and_every_later_message() {
+    let h = Harness::new("mock-text", None, 0).await;
+    h.send_and_wait("first turn", ApprovalDecision::Once, None, "ari")
+        .await;
+    h.send_and_wait("second turn", ApprovalDecision::Once, None, "ari")
+        .await;
+    let history = h.history().await;
+    let first_user = history
+        .iter()
+        .find(|message| message.message.role == "user")
+        .expect("first user message")
+        .message
+        .id
+        .clone();
+
+    let text = h
+        .engine
+        .revert_message(&h.conversation_id, &first_user)
+        .await
+        .unwrap();
+    assert_eq!(text, "first turn");
+    assert!(h.history().await.is_empty());
+    let conversation = conversations::get(&h.db.pool, &h.conversation_id)
+        .await
+        .unwrap();
+    assert_eq!(conversation.title, "New chat");
+}
+
+#[tokio::test]
+async fn revert_message_keeps_earlier_turns() {
+    let h = Harness::new("mock-text", None, 0).await;
+    h.send_and_wait("first turn", ApprovalDecision::Once, None, "ari")
+        .await;
+    h.send_and_wait("second turn", ApprovalDecision::Once, None, "ari")
+        .await;
+    let history = h.history().await;
+    let second_user = history
+        .iter()
+        .filter(|message| message.message.role == "user")
+        .nth(1)
+        .expect("second user message")
+        .message
+        .id
+        .clone();
+
+    let text = h
+        .engine
+        .revert_message(&h.conversation_id, &second_user)
+        .await
+        .unwrap();
+    assert_eq!(text, "second turn");
+    let remaining = h.history().await;
+    assert_eq!(remaining.len(), 2);
+    assert_eq!(remaining[0].message.role, "user");
+    assert_eq!(remaining[1].message.role, "assistant");
+}

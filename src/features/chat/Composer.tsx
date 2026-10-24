@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { ArrowUp, Square } from "lucide-react";
 import { useApp } from "@/app/store";
 import { cn } from "@/lib/cn";
@@ -7,7 +7,8 @@ import { formatTokens } from "@/lib/format";
 const ACTIVE: string[] = ["thinking", "streaming", "waiting_approval", "running_tool"];
 
 export function Composer() {
-  const [value, setValue] = useState("");
+  const value = useApp((state) => state.draft);
+  const setValue = useApp((state) => state.setDraft);
   const ref = useRef<HTMLTextAreaElement>(null);
   const send = useApp((state) => state.sendMessage);
   const stop = useApp((state) => state.stop);

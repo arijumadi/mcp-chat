@@ -1,10 +1,12 @@
-import { AlertTriangle, RotateCcw } from "lucide-react";
+import { AlertTriangle, RotateCcw, Undo2 } from "lucide-react";
 import type { MessageWithParts, Part } from "@/lib/types";
 import { parsePayload, partText, useApp } from "@/app/store";
 import { Markdown } from "@/components/Markdown";
 import { Button } from "@/components/Button";
 import { ToolCard } from "./ToolCard";
 import { cn } from "@/lib/cn";
+import { formatMessageDateTime } from "@/lib/format";
+import { CopyButton } from "./CopyButton";
 
 export function MessageItem({
   message,
@@ -18,17 +20,52 @@ export function MessageItem({
   hideThinking?: boolean;
 }) {
   const regenerate = useApp((state) => state.regenerate);
+  const revertMessage = useApp((state) => state.revertMessage);
+  const status = useApp((state) => state.status);
+  const busy = ["thinking", "streaming", "waiting_approval", "running_tool"].includes(
+    status,
+  );
   if (message.role === "tool") return null;
 
   if (message.role === "user") {
-    const text = (partsOverride ?? message.parts).map(partText).join("");
+    const text = (partsOverride ?? message.parts)
+      .filter((part) => part.kind === "text")
+      .map(partText)
+      .join("");
     return (
       <div className="animate-in flex justify-end py-2">
         <div
-          className="max-w-[85%] rounded-2xl rounded-br-md px-4 py-2.5 text-[14.5px] whitespace-pre-wrap"
-          style={{ background: "var(--user)" }}
+          className="group flex max-w-[85%] flex-col items-end"
+          data-testid="user-message"
+          data-message-id={message.id}
         >
-          {text}
+          <div
+            className="max-w-full rounded-2xl rounded-br-md px-4 py-2.5 text-[14.5px] whitespace-pre-wrap"
+            style={{ background: "var(--user)" }}
+          >
+            {text}
+          </div>
+          <div className="mt-0.5 flex h-6 items-center justify-end gap-0.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+            <span
+              className="mr-1 text-[10.5px] tabular-nums"
+              style={{ color: "var(--muted)" }}
+            >
+              {formatMessageDateTime(message.createdAt)}
+            </span>
+            <CopyButton text={text} />
+            {!busy ? (
+              <button
+                type="button"
+                onClick={() => void revertMessage(message.id)}
+                className="focus-ring flex h-6 w-6 items-center justify-center rounded-md transition hover:bg-[var(--panel-2)] hover:text-[var(--fg)]"
+                style={{ color: "var(--muted)" }}
+                title="Revert to this message"
+                aria-label="Revert message"
+              >
+                <Undo2 size={12} />
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
     );
@@ -37,13 +74,17 @@ export function MessageItem({
   const parts = partsOverride ?? message.parts;
   const streaming = message.status === "streaming";
   const textParts = parts.filter((part) => part.kind === "text");
+  const copyText = textParts
+    .map(partText)
+    .join("\n\n")
+    .trim();
   const lastTextId = textParts.at(-1)?.id ?? null;
   const hasVisible = parts.some((part) =>
     ["text", "reasoning", "tool_call", "error", "summary"].includes(part.kind),
   );
 
   return (
-    <div className="animate-in py-2">
+    <div className="group animate-in py-2">
       {!hasVisible && streaming && !hideThinking ? <Thinking /> : null}
       {parts.map((part) => {
         if (part.kind === "text") {
@@ -133,6 +174,11 @@ export function MessageItem({
       {message.status === "error" && !parts.some((part) => part.kind === "error") ? (
         <div className="mt-1 text-[12px]" style={{ color: "var(--danger)" }}>
           {message.error ?? "The turn failed."}
+        </div>
+      ) : null}
+      {copyText ? (
+        <div className="mt-1 flex h-6 items-center opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+          <CopyButton text={copyText} />
         </div>
       ) : null}
     </div>

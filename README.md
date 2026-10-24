@@ -18,7 +18,8 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - Token-based compaction on context overflow, `finish_reason: length` continuations, retries with backoff, interrupted-stream continuation.
 - Markdown with code blocks (language label, copy, horizontal scroll), tables, reasoning sections and a strict no-raw-HTML renderer.
 - Default system prompt is **Jarvis**, still editable and resettable in Settings.
-- The model receives the local day, date, hour and minute (minute precision) stamped on each user message. Time is injected into the user turn, not the system prompt, so the system + tool catalog prefix stays byte-identical. The timestamp is rendered once at send time and stored as a hidden `time` part, so historical user messages stay byte-identical across later requests.
+- The model receives the local day, date, hour and minute (minute precision) stamped on each user message. Time is injected into the user turn, not the system prompt, so the system + tool catalog prefix stays byte-identical. The timestamp is rendered once at send time and stored as a hidden `time` part, so historical user messages stay byte-identical across later requests; the UI never shows that raw marker.
+- Hovering a user message shows its local date and time below the bubble. Hovering any user or assistant message reveals **Copy**; user messages also show **Revert**, which removes that message and everything after it, then puts the original text back in the composer for editing and resending.
 - Providers, keys and MCP servers are managed from the UI. API keys live in the OS keychain; the webview never receives them back.
 
 Not in this batch: OAuth 2.1/DCR (M6) and packaging (M7). Static bearer tokens and an `X-API-Key` header (stored in the OS keychain) for MCP work.
@@ -98,18 +99,18 @@ Everything below **was run in this repository** on Linux without a GUI/WebKit de
 ```bash
 pnpm lint          # ESLint
 pnpm typecheck     # TypeScript
-pnpm test          # Vitest: 11 tests
+pnpm test          # Vitest: 13 tests
 pnpm build         # Vite production build
 pnpm fmt:check     # cargo fmt --check
-pnpm core:test     # 26 unit + 26 agent + 6 MCP integration + 1 auth + 1 provider test = 60 Rust tests
+pnpm core:test     # 26 unit + 28 agent + 6 MCP integration + 1 auth + 1 provider test = 62 Rust tests
 pnpm core:clippy   # cargo clippy -p mcp-chat-core --all-targets -- -D warnings
 pnpm mock:clippy   # same for the mock server
-pnpm test:e2e      # Playwright: 4 smoke tests against vite preview with a stubbed IPC bridge
+pnpm test:e2e      # Playwright: 5 smoke tests against vite preview with a stubbed IPC bridge
 ```
 
 `pnpm check` runs all of the above except Playwright.
 
-The Rust tests cover the acceptance matrix: split tool arguments, two parallel calls, invalid arguments, unknown tools, `finish_reason: length`, a cut stream, context overflow + compaction, manual compaction/context status, per-chat server selection, lazy MCP catalog/schema/call, batch execute, read_tool_output paging, default/custom system prompt, cache-stable timestamps in user turns, unknown finish reason, policy denial, user rejection with feedback, crash sweep, progress notifications, MRTR elicitation, output spill/paging, max steps, cancellation during a tool, and retryable provider errors.
+The Rust tests cover the acceptance matrix: split tool arguments, two parallel calls, invalid arguments, unknown tools, `finish_reason: length`, a cut stream, context overflow + compaction, manual compaction/context status, per-chat server selection, lazy MCP catalog/schema/call, batch execute, read_tool_output paging, default/custom system prompt, cache-stable timestamps in user turns, revert-to-composer, unknown finish reason, policy denial, user rejection with feedback, crash sweep, progress notifications, MRTR elicitation, output spill/paging, max steps, cancellation during a tool, and retryable provider errors.
 
 **What is not verified on this machine:** the Tauri shell itself could not be compiled or launched here because the machine has no WebKit/GTK development headers and no display. `pnpm tauri dev` is the intended path on a desktop with the prerequisites above. The frontend was verified in a browser through Playwright using a stubbed IPC bridge; screenshots are from that harness, not the native window. No real provider API key was used for automated tests; the keychain path is exercised with an in-memory store in tests.
 

@@ -47,6 +47,26 @@ test("settings and MCP screens render", async ({ page }) => {
   await expect(page.getByText("Echo text back")).toBeVisible();
 });
 
+
+test("revert moves a user message back into the composer", async ({ page }) => {
+  await page.goto("/?mock=1");
+  await page.getByRole("button", { name: "New chat" }).first().click();
+  const composer = page.getByRole("textbox", { name: "Message" });
+  await composer.fill("Edit this message");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.getByText(/I received/)).toBeVisible();
+
+  await page.getByTestId("user-message").last().hover();
+  await page.getByRole("button", { name: "Revert message" }).click();
+
+  await expect(composer).toHaveValue("Edit this message");
+  await expect(page.getByText(/I received/)).toHaveCount(0);
+  await expect(page.getByTestId("user-message")).toHaveCount(0);
+});
+
 test("captures README screenshots", async ({ page }) => {
   await page.goto("/?mock=1");
   await page.getByText("Welcome to MCP Chat").first().click();
@@ -57,6 +77,7 @@ test("captures README screenshots", async ({ page }) => {
   await page.getByRole("button", { name: /Tools/ }).click();
   await page.getByText("What can you do with MCP tools?").click();
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.mouse.move(10, 10);
   await page.screenshot({ path: "docs/screenshots/chat.png", fullPage: false });
 
   await page.getByRole("complementary").getByRole("button", { name: "Settings" }).click();

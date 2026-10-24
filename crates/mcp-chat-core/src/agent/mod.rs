@@ -149,6 +149,61 @@ impl ChatEngine {
         Ok(())
     }
 
+    /// Move a sent user message back into the composer. The target message and
+    /// everything after it are removed, so the next send creates a clean new
+    /// user turn. Returns the original text.
+    pub async fn revert_message(&self, conversation_id: &str, message_id: &str) -> Result<String> {
+        if self.in_flight(conversation_id) {
+            return Err(CoreError::Message(
+                "Stop the current turn before reverting a message.".into(),
+            ));
+        }
+        let history = messages::list_for_conversation(&self.db.pool, conversation_id).await?;
+        let index = history
+            .iter()
+            .position(|item| item.message.id == message_id)
+            .ok_or_else(|| CoreError::NotFound("message".into()))?;
+        let target = &history[index];
+        if target.message.conversation_id != conversation_id {
+            return Err(CoreError::invalid(
+                "message does not belong to conversation",
+            ));
+        }
+        if target.message.role != "user" || target.message.status == "synthetic" {
+            return Err(CoreError::invalid("only user messages can be reverted"));
+        }
+        let text = crate::agent::context::text_parts(&target.parts);
+        if text.trim().is_empty() {
+            return Err(CoreError::invalid("message has no text to revert"));
+        }
+
+        for item in &history[index..] {
+            for part in &item.parts {
+                if part.kind != "tool_call" {
+                    continue;
+                }
+                if let Some(call_id) = part
+                    .payload()
+                    .get("callId")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    let _ = crate::agent::tools::remove_spilled(&self.output_dir, call_id).await;
+                }
+            }
+        }
+
+        messages::delete_from(&self.db.pool, conversation_id, message_id).await?;
+        let remaining = messages::list_for_conversation(&self.db.pool, conversation_id).await?;
+        if remaining.is_empty() {
+            conversations::update_title(&self.db.pool, conversation_id, "New chat").await?;
+        }
+        conversations::touch(&self.db.pool, conversation_id).await?;
+        let _ = self.events.send(CoreEvent::ConversationUpdated {
+            conversation_id: conversation_id.to_owned(),
+        });
+        Ok(text)
+    }
+
     fn start_turn(self: &Arc<Self>, conversation_id: &str) -> Result<()> {
         let token = CancellationToken::new();
         {

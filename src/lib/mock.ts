@@ -105,6 +105,19 @@ export function installMock(): void {
     };
   }
 
+  function plainText(parts: Part[]): string {
+    return parts
+      .filter((part) => part.kind === "text")
+      .map((part) => {
+        try {
+          return String((JSON.parse(part.payloadJson) as { text?: unknown }).text ?? "");
+        } catch {
+          return "";
+        }
+      })
+      .join("");
+  }
+
   if (!empty) {
     const seeded: Conversation = {
       id: "demo",
@@ -342,6 +355,31 @@ export function installMock(): void {
       }
       case "regenerate":
         return null;
+      case "revert_message": {
+        const conversationId = String(args.conversationId);
+        if (generating.has(conversationId)) {
+          throw new Error("Stop the current turn before reverting a message.");
+        }
+        const list = messages.get(conversationId) ?? [];
+        const index = list.findIndex(
+          (message) =>
+            message.id === String(args.messageId) && message.role === "user",
+        );
+        if (index < 0) throw new Error("Message to revert was not found.");
+        const target = list[index];
+        if (!target) throw new Error("Message to revert was not found.");
+        const text = plainText(target.parts).trim();
+        messages.set(conversationId, list.slice(0, index));
+        const conversation = conversations.find((item) => item.id === conversationId);
+        if (conversation) {
+          conversation.updatedAt = now();
+          if ((messages.get(conversationId) ?? []).length === 0) {
+            conversation.title = "New chat";
+          }
+        }
+        emit({ type: "conversation_updated", conversationId });
+        return text;
+      }
       case "respond_approval": {
         emit({
           type: "tool",

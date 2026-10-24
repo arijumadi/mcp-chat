@@ -34,7 +34,7 @@ SQLite in WAL mode, foreign keys on, migrations via `sqlx::migrate!`.
 
 - `conversations` — title, timestamps, provider/model, system prompt, archived flag, `max_steps` (default 25).
 - `messages` — role, status (`completed`, `streaming`, `interrupted`, `error`, `synthetic`), error.
-- `parts` — ordered typed JSON payloads: `text`, `reasoning`, `tool_call`, `tool_result`, `error`, `summary`.
+- `parts` — ordered typed JSON payloads: `text`, `reasoning`, `tool_call`, `tool_result`, `error`, `summary`, and a hidden `time` marker used for the user-message timestamp.
 - `providers` — kind, base URL, model, `api_key_ref` account id, context window, max output.
 - `servers` — URL, transport, auth kind, headers JSON, policy, negotiated version, capability/server info, cached tools + timestamp, OAuth issuer/client id.
 - `settings`, `permission_rules`.
@@ -42,7 +42,7 @@ SQLite in WAL mode, foreign keys on, migrations via `sqlx::migrate!`.
 
 A tool call is one part on the assistant message; its terminal state and result preview live in that payload. A separate `tool` message holds the result block sent back to the provider. The UI hides `tool` messages and renders the call card instead. This keeps the provider transcript valid while giving the renderer a compact card. Assistant text emitted before the last tool call is retained for provider context but omitted from the activity panel; only thoughts, tool cards and the post-tool answer are shown.
 
-Synthetic user messages (continue prompts, max-step notices) are ordinary rows with `status = 'synthetic'`; they are part of the provider context but hidden from the transcript and skipped by Regenerate.
+Synthetic user messages (continue prompts, max-step notices) are ordinary rows with `status = 'synthetic'`; they are part of the provider context but hidden from the transcript and skipped by Regenerate. Reverting a user message deletes that row and every later row with `delete_from`, removes matching spilled tool files, returns the original text to the composer, and resets the title to “New chat” when nothing remains.
 
 ## MCP negotiation
 
@@ -124,7 +124,7 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 | Permissions | last-match-wins, glob, default policy, resource normalization |
 | Agent | text, tool loop, parallel, invalid args, unknown tool, policy deny, approval/rejection/always, per-chat server gating, lazy catalog/schema/call, batch execute, read_tool_output paging, default time/Jarvis prompt, cache-stable system prompt, length, cut, overflow, manual compaction/context status, unknown finish, max steps, retries, spill/paging |
 | DB | migrations from empty, repo CRUD, FTS sync/cascade, crash sweep |
-| UI | transcript reducer, tool card rendering, date grouping, Playwright smoke (4) |
+| UI | transcript reducer, tool card rendering, date grouping, copy/revert hover actions, Playwright smoke (5) |
 
 ## Known gaps
 

@@ -14,6 +14,15 @@ export function formatTime(timestamp: number): string {
   }).format(new Date(timestamp));
 }
 
+export function formatMessageDateTime(timestamp: number): string {
+  const date = new Intl.DateTimeFormat(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(new Date(timestamp));
+  return `${date}, ${formatTime(timestamp)}`;
+}
+
 export function startOfDay(date: Date): number {
   const copy = new Date(date);
   copy.setHours(0, 0, 0, 0);

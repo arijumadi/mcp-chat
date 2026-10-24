@@ -29,6 +29,7 @@ export interface AppStore {
   conversations: Conversation[];
   activeId: string | null;
   messages: MessageWithParts[];
+  draft: string;
   providers: ProviderView[];
   servers: ServerView[];
   settings: Record<string, string>;
@@ -51,8 +52,10 @@ export interface AppStore {
   openConversation: (id: string) => Promise<void>;
   newChat: () => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
+  setDraft: (text: string) => void;
   stop: () => Promise<void>;
   regenerate: () => Promise<void>;
+  revertMessage: (messageId: string) => Promise<void>;
   setModel: (providerId: string, model: string) => Promise<void>;
   renameConversation: (id: string, title: string) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
@@ -80,6 +83,7 @@ export const useApp = create<AppStore>()((set, get) => ({
   conversations: [],
   activeId: null,
   messages: [],
+  draft: "",
   providers: [],
   servers: [],
   settings: {},
@@ -172,6 +176,7 @@ export const useApp = create<AppStore>()((set, get) => ({
       approvals: [],
       inputRequests: [],
       usage: null,
+      draft: "",
     });
     await get().reloadActive();
     const conversation = get().conversations.find((item) => item.id === id);
@@ -187,6 +192,7 @@ export const useApp = create<AppStore>()((set, get) => ({
         conversations: [conversation, ...state.conversations],
         activeId: conversation.id,
         messages: [],
+        draft: "",
         view: "chat",
         status: "idle",
         approvals: [],
@@ -226,6 +232,7 @@ export const useApp = create<AppStore>()((set, get) => ({
     };
     set((state) => ({
       messages: [...state.messages, optimistic],
+      draft: "",
       status: "thinking",
       approvals: [],
       inputRequests: [],
@@ -257,6 +264,10 @@ export const useApp = create<AppStore>()((set, get) => ({
     }
   },
 
+  setDraft(text) {
+    set({ draft: text });
+  },
+
   async stop() {
     const conversationId = get().activeId;
     if (!conversationId) return;
@@ -276,6 +287,35 @@ export const useApp = create<AppStore>()((set, get) => ({
       await get().reloadActive();
     } catch (error) {
       set({ status: "error" });
+      get().toast(String(error), "error");
+    }
+  },
+
+  async revertMessage(messageId) {
+    const conversationId = get().activeId;
+    if (!conversationId) return;
+    try {
+      const text = await call<string>("revert_message", {
+        conversationId,
+        messageId,
+      });
+      if (get().activeId !== conversationId) return;
+      await get().reloadActive();
+      if (get().activeId !== conversationId) return;
+      set({
+        draft: text,
+        status: "idle",
+        usage: null,
+        approvals: [],
+        inputRequests: [],
+      });
+      requestAnimationFrame(() => {
+        document
+          .querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')
+          ?.focus();
+      });
+      get().toast("Message moved to the input box.", "info");
+    } catch (error) {
       get().toast(String(error), "error");
     }
   },
@@ -304,7 +344,7 @@ export const useApp = create<AppStore>()((set, get) => ({
     try {
       await call("delete_conversation", { conversationId: id });
       if (get().activeId === id) {
-        set({ activeId: null, messages: [], status: "idle", usage: null });
+        set({ activeId: null, messages: [], draft: "", status: "idle", usage: null });
       }
       await get().refreshConversations();
     } catch (error) {
