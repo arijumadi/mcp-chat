@@ -21,6 +21,8 @@ use crate::util::truncate_chars;
 use crate::{CoreError, Result, now_ms};
 
 const MODEL_OUTPUT_LIMIT: usize = 8_000;
+const PAGER_OUTPUT_LIMIT: usize = 100_000;
+const READ_PAGE_CHARS: usize = 50_000;
 const PREVIEW_LIMIT: usize = 4_000;
 
 #[derive(Clone)]
@@ -359,13 +361,19 @@ impl ToolExecutor {
                 let full_text = content.clone();
                 let mut full_result_ref = None;
                 let mut truncated = false;
-                if content.chars().count() > MODEL_OUTPUT_LIMIT {
-                    let (cut, _) = truncate_chars(&full_text, MODEL_OUTPUT_LIMIT);
+                let is_pager = req.remote_name == "read_tool_output";
+                let output_limit = if is_pager {
+                    PAGER_OUTPUT_LIMIT
+                } else {
+                    MODEL_OUTPUT_LIMIT
+                };
+                if content.chars().count() > output_limit {
+                    let (cut, _) = truncate_chars(&full_text, output_limit);
                     match self.spill(&req.call_id, &full_text, &structured).await {
                         Ok(reference) => {
                             full_result_ref = Some(reference);
                             content = format!(
-                                "{cut}\nFull output is available as call_id {:?}; use read_tool_output to page it.",
+                                "{cut}\nFull output is available as call_id {:?}; use read_tool_output only if you need details beyond this preview.",
                                 req.call_id
                             );
                         }
@@ -1292,7 +1300,7 @@ pub async fn read_spilled(dir: &Path, call_id: &str, offset: usize) -> Result<St
         })
         .to_string());
     }
-    let chunk: String = content.chars().skip(offset).take(32_000).collect();
+    let chunk: String = content.chars().skip(offset).take(READ_PAGE_CHARS).collect();
     let next = offset + chunk.chars().count();
     Ok(json!({
         "content": chunk,

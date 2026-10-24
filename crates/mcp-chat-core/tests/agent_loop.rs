@@ -490,7 +490,7 @@ async fn large_output_spills_and_can_be_paged() {
     let page = h.engine.read_tool_output(call_id, 0).await.unwrap();
     let page: serde_json::Value = serde_json::from_str(&page).unwrap();
     assert_eq!(page["total"], 50000);
-    assert_eq!(page["content"].as_str().unwrap().len(), 32000);
+    assert_eq!(page["content"].as_str().unwrap().len(), 50000);
 }
 
 #[tokio::test]
@@ -826,4 +826,27 @@ async fn batch_execute_runs_multiple_mcp_tools_in_one_call() {
     assert!(content.contains("echo: batch"));
     assert!(content.contains("sum"));
     assert!(h.assistant_text().await.contains("Batch complete."));
+}
+
+#[tokio::test]
+async fn read_tool_output_pages_are_not_recursively_truncated() {
+    let h = Harness::new("mock-big-read", Some("auto"), 0).await;
+    h.send_and_wait("big read", ApprovalDecision::Once, None, "ari")
+        .await;
+    let requests = h.provider.requests();
+    assert_eq!(requests.len(), 3);
+    let paged_content = requests[2]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .filter_map(|message| message["content"].as_str())
+        .max_by_key(|content| content.len())
+        .unwrap_or("");
+    assert!(
+        paged_content.len() > 20_000,
+        "read_tool_output page was truncated again: {} chars",
+        paged_content.len()
+    );
+    assert!(h.assistant_text().await.contains("Paged output complete."));
 }

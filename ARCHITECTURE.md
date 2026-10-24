@@ -121,7 +121,7 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 | MCP HTTP+SSE | endpoint event, GET response correlation, tools call |
 | Namespacing | sanitize, collisions, remote-name mapping |
 | Permissions | last-match-wins, glob, default policy, resource normalization |
-| Agent | text, tool loop, parallel, invalid args, unknown tool, policy deny, approval/rejection/always, per-chat server gating, lazy catalog/schema/call, batch execute, length, cut, overflow, manual compaction/context status, unknown finish, max steps, retries, spill/paging |
+| Agent | text, tool loop, parallel, invalid args, unknown tool, policy deny, approval/rejection/always, per-chat server gating, lazy catalog/schema/call, batch execute, read_tool_output paging, length, cut, overflow, manual compaction/context status, unknown finish, max steps, retries, spill/paging |
 | DB | migrations from empty, repo CRUD, FTS sync/cascade, crash sweep |
 | UI | transcript reducer, tool card rendering, date grouping, Playwright smoke (4) |
 

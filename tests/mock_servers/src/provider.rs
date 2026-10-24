@@ -75,7 +75,8 @@ async fn models(State(_state): State<ProviderState>) -> Json<Value> {
             {"id": "mock-flaky"},
             {"id": "mock-sleep"},
             {"id": "mock-lazy"},
-            {"id": "mock-batch"}
+            {"id": "mock-batch"},
+            {"id": "mock-big-read"}
         ]
     }))
 }
@@ -259,6 +260,32 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
                     .into_response();
             }
             text_response("Recovered after retry.")
+        }
+        "big-read" => {
+            let tool_results = messages
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter(|message| {
+                            message.get("role").and_then(Value::as_str) == Some("tool")
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+            match tool_results {
+                0 => {
+                    let name = tool_name(tools.as_ref(), "big");
+                    sse(tool_call_frames(&[(0, "call_1", &name, r#"{"n":50000}"#)]))
+                }
+                1 => sse(tool_call_frames(&[(
+                    0,
+                    "call_read",
+                    "read_tool_output",
+                    r#"{"call_id":"call_1","offset":0}"#,
+                )])),
+                _ => text_response("Paged output complete."),
+            }
         }
         "batch" => {
             if tools_done {

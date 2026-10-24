@@ -506,7 +506,7 @@ fn lazy_tool_note(registry: &ToolRegistry) -> Option<String> {
         "All active tools are listed above; do not call mcp_search_tools just to browse."
     };
     Some(format!(
-        "MCP tools are available in lazy mode. Use mcp_call_tool directly with server and tool; call mcp_execute when you need several independent tools in one step (max 8). Call mcp_get_tool_schema only when you need the full JSON schema. {search_note} A trailing * means required.\n\n{catalog}"
+        "MCP tools are available in lazy mode. Use mcp_call_tool directly with server and tool; call mcp_execute when you need several independent tools in one step (max 8). Call mcp_get_tool_schema only when you need the full JSON schema. Request small limits/fields first for tools that can return large data, and page output only when needed. {search_note} A trailing * means required.\n\n{catalog}"
     ))
 }
 
