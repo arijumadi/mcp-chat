@@ -83,7 +83,7 @@ pub fn meta_tool_defs() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: MCP_SEARCH_TOOLS.into(),
-            description: "Search the MCP tool catalog available to this conversation. Returns server slugs, tool names and descriptions. Use this before mcp_get_tool_schema or mcp_call_tool.".into(),
+            description: "Look up an MCP tool only when it is missing from the tool catalog in the system prompt. The catalog already lists every active server and tool; do not call this just to browse.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -527,11 +527,13 @@ impl ToolExecutor {
             }
         };
         if let Err(message) = validate_args(&tool.input_schema, &target_args) {
+            let schema = serde_json::to_string(&tool.input_schema).unwrap_or_default();
+            let schema = truncate_chars(&schema, 1500).0;
             return self
                 .fail(
                     req,
                     "error",
-                    format!("Invalid tool input: {message}"),
+                    format!("Invalid tool input: {message}\nSchema: {schema}"),
                     started,
                     false,
                 )
@@ -642,7 +644,7 @@ impl ToolExecutor {
                     .args
                     .get("limit")
                     .and_then(Value::as_u64)
-                    .unwrap_or(20)
+                    .unwrap_or(30)
                     .clamp(1, 50) as usize;
                 if let Some(server) = &server_filter {
                     if !req.active_server_slugs.iter().any(|slug| slug == server) {
@@ -653,6 +655,7 @@ impl ToolExecutor {
                 }
                 let groups = self.mcp.tools_for_slugs(&req.active_server_slugs).await?;
                 let mut matches = Vec::new();
+                let mut available = Vec::new();
                 for (server, tools) in groups {
                     if let Some(filter) = &server_filter {
                         if &server.slug != filter {
@@ -665,30 +668,42 @@ impl ToolExecutor {
                             server.slug, server.name, tool.name, tool.description
                         )
                         .to_ascii_lowercase();
-                        if !query.is_empty() && !haystack.contains(&query) {
-                            continue;
+                        let hit = query.is_empty() || haystack.contains(&query);
+                        available.push((server.slug.clone(), tool.clone()));
+                        if hit {
+                            matches.push((server.slug.clone(), tool));
                         }
-                        matches.push((server.slug.clone(), tool));
                     }
                 }
                 matches.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.name.cmp(&b.1.name)));
-                if matches.is_empty() {
+                available.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.name.cmp(&b.1.name)));
+                if available.is_empty() {
                     return Ok(Rendered {
-                        content: "No MCP tools matched. Try a broader query or check the selected servers in the Tools menu.".into(),
+                        content: "No MCP tools are available for this conversation. Check the selected servers in the Tools menu.".into(),
                         structured: None,
                         ok: true,
                     });
                 }
-                let mut content = format!(
-                    "MCP tools matching {:?} ({}):\n",
-                    query,
-                    matches.len().min(limit)
-                );
-                for (slug, tool) in matches.into_iter().take(limit) {
+                let no_match = matches.is_empty();
+                let selected = if no_match { available } else { matches };
+                let mut content = if no_match {
+                    format!(
+                        "No exact match for {:?}. These MCP tools are available ({}):\n",
+                        query,
+                        selected.len().min(limit)
+                    )
+                } else {
+                    format!(
+                        "MCP tools matching {:?} ({}):\n",
+                        query,
+                        selected.len().min(limit)
+                    )
+                };
+                for (slug, tool) in selected.into_iter().take(limit) {
                     let description = truncate_chars(&tool.description, 240).0;
                     content.push_str(&format!("- {slug} :: {} — {description}\n", tool.name));
                 }
-                content.push_str("\nUse mcp_get_tool_schema with server and tool to inspect arguments, then mcp_call_tool.");
+                content.push_str("\nUse mcp_get_tool_schema only if you need full JSON schema details, then mcp_call_tool.");
                 Ok(Rendered {
                     content,
                     structured: None,

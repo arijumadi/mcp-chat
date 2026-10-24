@@ -11,8 +11,8 @@ use crate::agent::ChatEngine;
 use crate::agent::context::{build_messages, estimate_tokens, transcript_for_summary};
 use crate::agent::permissions::Effect;
 use crate::agent::tools::{
-    ToolExecRequest, builtin_tool_def, builtin_tool_info, is_meta_tool, meta_tool_defs,
-    meta_tool_info, persist_result,
+    MCP_SEARCH_TOOLS, ToolExecRequest, builtin_tool_def, builtin_tool_info, is_meta_tool,
+    meta_tool_defs, meta_tool_info, persist_result,
 };
 use crate::agent::types::{
     CONTINUE_PROMPT, MAX_STEPS_PROMPT, OUTPUT_LIMIT_PROMPT, StepError, is_length, retry_delay,
@@ -220,12 +220,14 @@ async fn drive(
         let history = messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
         let (mut chat_messages, summary) = build_messages(&history);
         let mut system = resolved.system.clone();
-        if tool_mode == "lazy" && !registry.tools.is_empty() {
-            let base = system.unwrap_or_default();
-            system = Some(format!(
-                "{base}{}MCP tools are in lazy mode. Use mcp_search_tools to discover a tool, mcp_get_tool_schema to inspect its arguments, then mcp_call_tool to execute it.",
-                if base.is_empty() { "" } else { "\n\n" }
-            ));
+        if tool_mode == "lazy" {
+            if let Some(note) = lazy_tool_note(&registry) {
+                let base = system.unwrap_or_default();
+                system = Some(format!(
+                    "{base}{}{note}",
+                    if base.is_empty() { "" } else { "\n\n" }
+                ));
+            }
         }
         if let Some(summary) = summary {
             let base = system.unwrap_or_default();
@@ -425,6 +427,89 @@ async fn drive(
     Ok(())
 }
 
+fn schema_args_summary(schema: &Value) -> Option<String> {
+    let properties = schema.get("properties")?.as_object()?;
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<std::collections::HashSet<_>>()
+        })
+        .unwrap_or_default();
+    let mut parts = Vec::new();
+    for (name, property) in properties.iter().take(8) {
+        let ty = property
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("any");
+        let mut part = format!("{name}:{ty}");
+        if required.contains(name.as_str()) {
+            part.push('*');
+        }
+        if let Some(values) = property.get("enum").and_then(Value::as_array) {
+            let options = values
+                .iter()
+                .take(3)
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("|");
+            if !options.is_empty() {
+                part.push('=');
+                part.push_str(&options);
+            }
+        }
+        parts.push(part);
+    }
+    if properties.len() > 8 {
+        parts.push("…".into());
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
+}
+
+fn tool_catalog(registry: &ToolRegistry) -> (String, bool) {
+    let mut catalog = String::new();
+    let mut truncated = false;
+    for tool in &registry.tools {
+        let description = tool.description.replace('\n', " ");
+        let description = crate::util::truncate_chars(&description, 180).0;
+        let args = schema_args_summary(&tool.input_schema)
+            .map(|args| format!(" | args: {args}"))
+            .unwrap_or_default();
+        let line = format!(
+            "- {} :: {} — {}{}\n",
+            tool.server_slug, tool.remote_name, description, args
+        );
+        if catalog.len() + line.len() > 12_000 {
+            truncated = true;
+            break;
+        }
+        catalog.push_str(&line);
+    }
+    (catalog, truncated)
+}
+
+fn lazy_tool_note(registry: &ToolRegistry) -> Option<String> {
+    if registry.tools.is_empty() {
+        return None;
+    }
+    let (catalog, truncated) = tool_catalog(registry);
+    let search_note = if truncated {
+        "The catalog is truncated; use mcp_search_tools only for tools not listed."
+    } else {
+        "All active tools are listed above; do not call mcp_search_tools just to browse."
+    };
+    Some(format!(
+        "MCP tools are available in lazy mode. Use mcp_call_tool directly with server and tool; call mcp_get_tool_schema only when you need the full JSON schema. {search_note} A trailing * means required.\n\n{catalog}"
+    ))
+}
+
 async fn load_tools(
     engine: &ChatEngine,
     conversation: &crate::models::Conversation,
@@ -468,7 +553,12 @@ async fn load_tools(
     let registry = ToolRegistry::from_servers(&input).unwrap_or_default();
     let tool_mode = conversation.tool_mode.clone();
     let mut defs: Vec<ToolDef> = if tool_mode == "lazy" && !registry.tools.is_empty() {
-        meta_tool_defs()
+        let (_, truncated) = tool_catalog(&registry);
+        let mut meta = meta_tool_defs();
+        if !truncated {
+            meta.retain(|definition| definition.name != MCP_SEARCH_TOOLS);
+        }
+        meta
     } else {
         registry
             .tools
@@ -1317,12 +1407,14 @@ pub async fn context_status(
             if base.is_empty() { "" } else { "\n\n" }
         ));
     }
-    if tool_mode == "lazy" && !registry.tools.is_empty() {
-        let base = system.unwrap_or_default();
-        system = Some(format!(
-            "{base}{}MCP tools are in lazy mode. Use mcp_search_tools to discover a tool, mcp_get_tool_schema to inspect its arguments, then mcp_call_tool to execute it.",
-            if base.is_empty() { "" } else { "\n\n" }
-        ));
+    if tool_mode == "lazy" {
+        if let Some(note) = lazy_tool_note(&registry) {
+            let base = system.unwrap_or_default();
+            system = Some(format!(
+                "{base}{}{note}",
+                if base.is_empty() { "" } else { "\n\n" }
+            ));
+        }
     }
     let tokens = estimate_tokens(&chat_messages, &tool_defs, system.as_deref()) as i64;
     let window = context_window;

@@ -730,7 +730,7 @@ async fn per_conversation_server_selection_hides_tools() {
 }
 
 #[tokio::test]
-async fn lazy_tool_mode_searches_then_calls_the_target() {
+async fn lazy_tool_mode_reads_schema_then_calls_the_target() {
     let h = Harness::new("mock-lazy", Some("auto"), 0).await;
     conversations::set_tool_mode(&h.db.pool, &h.conversation_id, "lazy")
         .await
@@ -744,10 +744,7 @@ async fn lazy_tool_mode_searches_then_calls_the_target() {
         .filter(|part| part.kind == "tool_call")
         .map(|part| part.payload()["name"].as_str().unwrap_or("").to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(
-        names,
-        vec!["mcp_search_tools", "mcp_get_tool_schema", "mcp_call_tool"]
-    );
+    assert_eq!(names, vec!["mcp_get_tool_schema", "mcp_call_tool"]);
     let target_result = history
         .iter()
         .filter(|message| message.message.role == "tool")
@@ -769,8 +766,9 @@ async fn lazy_tool_mode_searches_then_calls_the_target() {
         .iter()
         .map(|tool| tool["function"]["name"].as_str().unwrap_or("").to_owned())
         .collect::<Vec<_>>();
-    assert!(first_request_tools.contains(&"mcp_search_tools".to_string()));
+    assert!(first_request_tools.contains(&"mcp_get_tool_schema".to_string()));
     assert!(first_request_tools.contains(&"mcp_call_tool".to_string()));
+    assert!(!first_request_tools.contains(&"mcp_search_tools".to_string()));
     assert!(
         !first_request_tools
             .iter()

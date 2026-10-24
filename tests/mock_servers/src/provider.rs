@@ -274,17 +274,11 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
             match tool_results {
                 0 => sse(tool_call_frames(&[(
                     0,
-                    "call_search",
-                    "mcp_search_tools",
-                    r#"{"query":"echo"}"#,
-                )])),
-                1 => sse(tool_call_frames(&[(
-                    0,
                     "call_schema",
                     "mcp_get_tool_schema",
                     r#"{"server":"mock","tool":"echo"}"#,
                 )])),
-                2 => sse(tool_call_frames(&[(
+                1 => sse(tool_call_frames(&[(
                     0,
                     "call_meta",
                     "mcp_call_tool",

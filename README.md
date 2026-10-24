@@ -10,7 +10,7 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - Local SQLite transcripts with full-text search, inline rename, delete, regenerate and stop.
 - Remote MCP over **Streamable HTTP 2026-07-28** (stateless headers, `server/discover`, request-scoped SSE progress, MRTR input), with legacy **2025-11-25** `initialize` fallback and deprecated **HTTP+SSE** fallback.
 - The model can call discovered MCP tools inside a normal turn. Tool calls and reasoning are grouped into a collapsible “Used N tools · N thoughts” summary with the final answer below; detail cards stream live (`queued → running → ok / error`) and run in parallel (max 4).
-- Per-chat MCP server selection and **direct vs lazy** tool delivery. New chats default to lazy mode, which exposes `mcp_search_tools`, `mcp_get_tool_schema` and `mcp_call_tool` instead of every tool schema; approval and policy checks still apply to the real target.
+- Per-chat MCP server selection and **direct vs lazy** tool delivery. New chats default to lazy mode: a compact server/tool/argument catalog goes in the system prompt, and the model calls `mcp_call_tool` directly (`mcp_get_tool_schema` only when it needs full JSON Schema; `mcp_search_tools` only when the catalog is truncated). Approval and policy checks still apply to the real target.
 - Context meter per chat, live prompt/completion usage in the composer, manual compaction, token-based retention (~15k recent by default) and a 15%/16k compaction buffer.
 - Provider models are fetched once in the provider form and saved with the provider; the chat model picker uses that saved list. Model is optional on the provider.
 - Approval policies per server (`auto` / `ask` / `deny`), “allow once”, “always allow” rules, rejection with feedback delivered back to the model.
@@ -26,7 +26,7 @@ Not in this batch: OAuth 2.1/DCR (M6) and packaging (M7). Static bearer tokens a
 Use the **Tools** button in the chat header to choose which MCP servers this conversation may use and how their tools are delivered. New conversations default to **lazy**; existing conversations are migrated to lazy once and can be switched back:
 
 - **Direct schemas** — every tool from the selected servers is sent to the model on every step. Best for small catalogs.
-- **Lazy search + call** — the model gets only `mcp_search_tools`, `mcp_get_tool_schema` and `mcp_call_tool`. It discovers a target, reads its schema, then calls it. Approvals and server policy still apply to the real tool.
+- **Lazy catalog + call** — the model gets a compact catalog of servers, tool names, short descriptions and argument summaries, plus `mcp_call_tool` and `mcp_get_tool_schema`. It calls the target directly; it only falls back to `mcp_search_tools` if the catalog was truncated. This avoids the old search→schema→call loop. Approvals and server policy still apply to the real tool.
 
 The same panel shows an approximate context meter, the automatic compaction threshold, and a **Compact now** action. The composer also shows live prompt/completion usage while a turn runs. Context defaults mirror OpenCode V2: keep the most recent ~15k tokens, compact with a 15%-of-window buffer (minimum 16k). Both values are configurable in **Settings → Context management**.
 
