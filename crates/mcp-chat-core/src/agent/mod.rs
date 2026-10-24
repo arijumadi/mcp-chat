@@ -152,6 +152,32 @@ impl ChatEngine {
     /// Move a sent user message back into the composer. The target message and
     /// everything after it are removed, so the next send creates a clean new
     /// user turn. Returns the original text.
+    /// Resume a turn that stopped at the max-step limit. Adds a hidden
+    /// synthetic user message and starts a fresh step budget.
+    pub async fn continue_turn(self: &Arc<Self>, conversation_id: &str) -> Result<()> {
+        if self.in_flight(conversation_id) {
+            return Err(CoreError::Message(
+                "This conversation is already generating a response.".into(),
+            ));
+        }
+        let message = messages::create(&self.db.pool, conversation_id, "user", "synthetic").await?;
+        messages::append_part(
+            &self.db.pool,
+            &message.id,
+            "text",
+            &PartPayload::Text {
+                text: crate::agent::types::CONTINUE_TURN_PROMPT.into(),
+            },
+        )
+        .await?;
+        conversations::touch(&self.db.pool, conversation_id).await?;
+        let _ = self.events.send(CoreEvent::ConversationUpdated {
+            conversation_id: conversation_id.to_owned(),
+        });
+        self.start_turn(conversation_id)?;
+        Ok(())
+    }
+
     pub async fn revert_message(&self, conversation_id: &str, message_id: &str) -> Result<String> {
         if self.in_flight(conversation_id) {
             return Err(CoreError::Message(

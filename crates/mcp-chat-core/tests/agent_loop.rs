@@ -199,6 +199,14 @@ async fn streams_text_and_persists_it() {
             ..
         }
     )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        CoreEvent::Step {
+            step: 1,
+            max_steps: 25,
+            ..
+        }
+    )));
     assert!(
         h.assistant_text()
             .await
@@ -650,8 +658,17 @@ async fn max_steps_disables_tools_with_a_result() {
         .execute(&h.db.pool)
         .await
         .unwrap();
-    h.send_and_wait("loop", ApprovalDecision::Once, None, "ari")
+    let events = h
+        .send_and_wait("loop", ApprovalDecision::Once, None, "ari")
         .await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        CoreEvent::Step {
+            step: 2,
+            max_steps: 1,
+            ..
+        }
+    )));
     let history = h.history().await;
     let results = history
         .iter()
@@ -1080,4 +1097,70 @@ async fn question_builtin_round_trip() {
         })
         .expect("question result");
     assert_eq!(result["ok"], true);
+}
+
+#[tokio::test]
+async fn loop_guard_stops_three_identical_tool_results() {
+    let h = Harness::new("mock-loop", Some("auto"), 0).await;
+    h.send_and_wait("loop", ApprovalDecision::Once, None, "ari")
+        .await;
+    let history = h.history().await;
+    let tool_errors = history
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .filter(|part| part.kind == "tool_result")
+        .filter(|part| part.payload()["ok"] == false)
+        .count();
+    assert!(
+        tool_errors >= 1,
+        "the forced no-tool step should return an error"
+    );
+    let synthetic = history
+        .iter()
+        .filter(|message| message.message.status == "synthetic")
+        .flat_map(|message| message.parts.iter())
+        .map(|part| part.payload())
+        .any(|payload| {
+            payload["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("repeated at least three times"))
+        });
+    assert!(synthetic, "loop guard prompt was not injected");
+}
+
+#[tokio::test]
+async fn continue_turn_adds_a_hidden_resume_prompt() {
+    let h = Harness::new("mock-text", None, 0).await;
+    h.send_and_wait("hello", ApprovalDecision::Once, None, "ari")
+        .await;
+    let mut receiver = h.engine.subscribe();
+    h.engine.continue_turn(&h.conversation_id).await.unwrap();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(31), receiver.recv())
+            .await
+            .expect("continue timed out")
+            .expect("event channel");
+        if let CoreEvent::Status {
+            status: TurnStatus::Idle | TurnStatus::Error,
+            ..
+        } = event
+        {
+            break;
+        }
+    }
+    let history = h.history().await;
+    let resumed = history.iter().any(|message| {
+        message.message.status == "synthetic"
+            && message.parts.iter().any(|part| {
+                part.payload()["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("Continue from where you stopped"))
+            })
+    });
+    assert!(resumed, "continue prompt was not persisted");
+    assert!(
+        h.assistant_text()
+            .await
+            .contains("Hello from the mock provider.")
+    );
 }

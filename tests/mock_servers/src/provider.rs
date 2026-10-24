@@ -77,6 +77,7 @@ async fn models(State(_state): State<ProviderState>) -> Json<Value> {
             {"id": "mock-lazy"},
             {"id": "mock-batch"},
             {"id": "mock-question"},
+            {"id": "mock-loop"},
             {"id": "mock-big-read"}
         ]
     }))
@@ -371,6 +372,15 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
                 "call_loop",
                 &name,
                 r#"{"text":"loop"}"#,
+            )]))
+        }
+        "loop" => {
+            let name = tool_name(tools.as_ref(), "echo");
+            sse(tool_call_frames(&[(
+                0,
+                "call_repeat",
+                &name,
+                r#"{"text":"same"}"#,
             )]))
         }
         "badjson" => {

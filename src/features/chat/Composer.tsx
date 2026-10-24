@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { ArrowUp, Square } from "lucide-react";
 import { useApp } from "@/app/store";
+import { Button } from "@/components/Button";
 import { cn } from "@/lib/cn";
 import { formatTokens } from "@/lib/format";
 
@@ -15,6 +16,9 @@ export function Composer() {
   const status = useApp((state) => state.status);
   const providers = useApp((state) => state.providers);
   const usage = useApp((state) => state.usage);
+  const step = useApp((state) => state.step);
+  const limitReached = useApp((state) => state.limitReached);
+  const continueTurn = useApp((state) => state.continueTurn);
   const setView = useApp((state) => state.setView);
   const active = ACTIVE.includes(status);
   const disabled = providers.length === 0;
@@ -47,6 +51,23 @@ export function Composer() {
   return (
     <div className="shrink-0 px-4 pb-4">
       <div className="mx-auto w-full max-w-[760px]">
+        {limitReached && !active ? (
+          <div
+            className="mb-2 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-[12px]"
+            style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+          >
+            <span style={{ color: "var(--muted)" }}>
+              Tool step limit reached{step ? ` (${step.max})` : ""}. The model stopped with a summary.
+            </span>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => void continueTurn()}
+            >
+              Continue
+            </Button>
+          </div>
+        ) : null}
         {disabled ? (
           <div
             className="mb-2 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-[12px]"
@@ -120,6 +141,7 @@ export function Composer() {
         >
           <span>Enter to send · Shift+Enter for a new line</span>
           <span>
+            {active && step ? `step ${step.current}/${step.max} · ` : ""}
             {usage
               ? `${active ? "Esc to stop · " : ""}ctx ~${formatTokens(usage.promptTokens)} / ${formatTokens(usage.contextWindow)}${
                   usage.completionTokens > 0

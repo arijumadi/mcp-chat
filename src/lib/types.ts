@@ -305,6 +305,12 @@ export type CoreEvent =
   | ApprovalEvent
   | UsageEvent
   | InputRequestEvent
+  | {
+      type: "step";
+      conversationId: string;
+      step: number;
+      maxSteps: number;
+    }
   | { type: "conversation_updated"; conversationId: string }
   | { type: "error"; conversationId?: string | null; message: string };
 

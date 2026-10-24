@@ -72,6 +72,7 @@ pub fn run() {
             commands::chat::get_messages,
             commands::chat::send_message,
             commands::chat::regenerate,
+            commands::chat::continue_turn,
             commands::chat::revert_message,
             commands::chat::stop_generation,
             commands::chat::is_generating,

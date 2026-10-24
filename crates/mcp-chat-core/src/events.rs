@@ -58,6 +58,11 @@ pub enum CoreEvent {
         completion_tokens: i64,
         context_window: i64,
     },
+    Step {
+        conversation_id: String,
+        step: i64,
+        max_steps: i64,
+    },
     InputRequest {
         conversation_id: String,
         call_id: String,

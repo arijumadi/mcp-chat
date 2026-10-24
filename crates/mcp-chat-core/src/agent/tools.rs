@@ -3,6 +3,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use base64::Engine;
 use futures::StreamExt;
 use globset::GlobBuilder;
 use regex::RegexBuilder;
@@ -27,6 +28,7 @@ use crate::util::truncate_chars;
 use crate::{CoreError, Result, now_ms};
 
 const MODEL_OUTPUT_LIMIT: usize = 8_000;
+const SHELL_OUTPUT_LIMIT: usize = 12_000;
 const PAGER_OUTPUT_LIMIT: usize = 100_000;
 const READ_PAGE_CHARS: usize = 50_000;
 const PREVIEW_LIMIT: usize = 4_000;
@@ -299,6 +301,19 @@ fn glob_matcher(pattern: &str) -> Result<globset::GlobMatcher> {
         .map_err(|error| CoreError::invalid(format!("Invalid glob: {error}")))
 }
 
+fn normalize_shell_text(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches('"')
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_echoed(command: &str, stdout: &str) -> bool {
+    !stdout.trim().is_empty() && normalize_shell_text(stdout) == normalize_shell_text(command)
+}
+
 fn line_prefix(content: &str, start_line: usize) -> String {
     let mut output = String::new();
     for (index, line) in content.lines().enumerate() {
@@ -339,11 +354,17 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "bash".into(),
-            description: "Execute a shell command in the workspace. On Windows the command runs through cmd.exe /C; on macOS/Linux it runs through sh -lc. The user must approve potentially destructive commands.".into(),
+            description: "Execute a shell command in the workspace. Each call is a fresh process: cd and shell variables do not persist. Defaults: cmd.exe on Windows, sh on macOS/Linux. Prefer shell=powershell or pwsh on Windows for nested commands; for long or heavily nested scripts, write a .ps1/.sh file first and execute it. Examples: Windows cmd: dir; Windows PowerShell: Get-ChildItem; Unix: ls -la. Potentially destructive commands require approval.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "The command to execute."},
+                    "shell": {
+                        "type": "string",
+                        "enum": ["auto", "cmd", "powershell", "pwsh", "sh", "bash"],
+                        "description": "Shell to use. Default auto: cmd.exe on Windows, sh elsewhere. PowerShell commands are passed with -EncodedCommand, so nested quotes are safe."
+                    },
+                    "cwd": {"type": "string", "description": "Optional working directory relative to the workspace. The process starts here; cd inside the command does not persist."},
                     "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 600000, "description": "Timeout in milliseconds. Default 120000."}
                 },
                 "required": ["command"],
@@ -684,6 +705,8 @@ impl ToolExecutor {
                 let is_pager = req.remote_name == "read_tool_output";
                 let output_limit = if is_pager {
                     PAGER_OUTPUT_LIMIT
+                } else if req.remote_name == "bash" {
+                    SHELL_OUTPUT_LIMIT
                 } else {
                     MODEL_OUTPUT_LIMIT
                 };
@@ -1348,52 +1371,153 @@ impl ToolExecutor {
             .and_then(Value::as_u64)
             .unwrap_or(120_000)
             .clamp(1_000, 600_000);
+        let requested_shell = req
+            .args
+            .get("shell")
+            .and_then(Value::as_str)
+            .unwrap_or("auto");
+        let shell = match requested_shell {
+            "auto" => {
+                if cfg!(windows) {
+                    "cmd"
+                } else {
+                    "sh"
+                }
+            }
+            "cmd" | "powershell" | "pwsh" | "sh" | "bash" => requested_shell,
+            other => {
+                return Err(CoreError::invalid(format!(
+                    "Unknown shell {other:?}. Use auto, cmd, powershell, pwsh, sh or bash."
+                )));
+            }
+        };
+        if matches!(shell, "cmd" | "powershell") && !cfg!(windows) {
+            return Err(CoreError::invalid(format!(
+                "The {shell} shell is only available on Windows."
+            )));
+        }
         let workspace = workspace_root(&self.db.pool).await?;
-        let mut child = if cfg!(windows) {
-            let mut command_line = Command::new("cmd");
-            command_line.arg("/C").arg(command);
-            command_line
-        } else {
-            let mut command_line = Command::new("sh");
-            command_line.arg("-lc").arg(command);
-            command_line
+        let cwd = match req.args.get("cwd").and_then(Value::as_str) {
+            Some(raw) if !raw.trim().is_empty() => resolve_in_workspace(&workspace, raw)?,
+            _ => workspace.clone(),
+        };
+        if !cwd.is_dir() {
+            return Err(CoreError::invalid(format!(
+                "cwd is not a directory: {}",
+                cwd.display()
+            )));
+        }
+
+        let mut cleanup: Option<PathBuf> = None;
+        let mut child = match shell {
+            "cmd" => {
+                // A batch file avoids the cmd.exe/MSVC nested-quote problem. The
+                // user command is written verbatim, one line at a time.
+                let script_dir = std::env::temp_dir().join("mcp-chat-shell");
+                tokio::fs::create_dir_all(&script_dir).await?;
+                let script_path = script_dir.join(format!("{}.cmd", crate::new_id()));
+                let script = format!("@echo off\r\nchcp 65001>nul\r\n{command}\r\n");
+                tokio::fs::write(&script_path, script).await?;
+                cleanup = Some(script_path.clone());
+                let mut process = Command::new("cmd.exe");
+                process.arg("/D").arg("/S").arg("/C").arg(&script_path);
+                process
+            }
+            "powershell" | "pwsh" => {
+                // -EncodedCommand takes UTF-16LE/base64, so neither Rust nor
+                // PowerShell has to guess how nested quotes should be escaped.
+                let prepared = format!(
+                    "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;\n{command}"
+                );
+                let encoded = base64::engine::general_purpose::STANDARD.encode(
+                    prepared
+                        .encode_utf16()
+                        .flat_map(u16::to_le_bytes)
+                        .collect::<Vec<u8>>(),
+                );
+                let executable = if shell == "pwsh" {
+                    "pwsh"
+                } else {
+                    "powershell.exe"
+                };
+                let mut process = Command::new(executable);
+                process.args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-EncodedCommand",
+                    &encoded,
+                ]);
+                process
+            }
+            "bash" => {
+                let mut process = Command::new("bash");
+                process.arg("-lc").arg(command);
+                process
+            }
+            _ => {
+                let mut process = Command::new("sh");
+                process.arg("-lc").arg(command);
+                process
+            }
         };
         child
-            .current_dir(&workspace)
+            .current_dir(&cwd)
             .kill_on_drop(true)
             .stdin(std::process::Stdio::null());
-        let output = tokio::time::timeout(Duration::from_millis(timeout_ms), child.output())
-            .await
-            .map_err(|_| {
-                CoreError::Message(format!("Command timed out after {timeout_ms} ms."))
-            })??;
+
+        let output =
+            match tokio::time::timeout(Duration::from_millis(timeout_ms), child.output()).await {
+                Ok(result) => result,
+                Err(_) => {
+                    if let Some(path) = cleanup {
+                        let _ = tokio::fs::remove_file(path).await;
+                    }
+                    return Err(CoreError::Message(format!(
+                        "Command timed out after {timeout_ms} ms."
+                    )));
+                }
+            };
+        if let Some(path) = cleanup {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+        let output = output?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let mut content = format!("$ {command}\n");
-        if !stdout.trim().is_empty() {
+        let echoed = shell_echoed(command, &stdout);
+        let exit = output
+            .status
+            .code()
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "terminated".into());
+        let mut content = String::new();
+        if echoed {
+            content.push_str(
+                "[warning] The shell echoed the command and did not execute it; this is usually a quoting problem. Change the shell or write a script file.\n",
+            );
+        }
+        content.push_str(&format!(
+            "[shell] {shell}\n[cwd] {}\n$ {command}\n[stdout]\n",
+            cwd.display()
+        ));
+        if stdout.trim().is_empty() {
+            content.push_str("(empty)\n");
+        } else {
             content.push_str(stdout.trim_end());
             content.push('\n');
         }
-        if !stderr.trim().is_empty() {
-            content.push_str("stderr:\n");
+        content.push_str("[stderr]\n");
+        if stderr.trim().is_empty() {
+            content.push_str("(empty)\n");
+        } else {
             content.push_str(stderr.trim_end());
             content.push('\n');
         }
-        if stdout.trim().is_empty() && stderr.trim().is_empty() {
-            content.push_str("(no output)\n");
-        }
-        content.push_str(&format!(
-            "[exit code {}]",
-            output
-                .status
-                .code()
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "terminated".into())
-        ));
+        content.push_str(&format!("[exit code {exit}]"));
         Ok(Rendered {
             content,
             structured: None,
-            ok: output.status.success(),
+            ok: output.status.success() && !echoed,
         })
     }
 
@@ -2203,6 +2327,14 @@ mod tests {
     }
 
     #[test]
+    fn shell_echo_normalization_ignores_whitespace_and_edge_quotes() {
+        assert_eq!(normalize_shell_text("  cmd   /C  dir \n"), "cmd /C dir");
+        assert_eq!(normalize_shell_text("\"echo hi\""), "echo hi");
+        assert!(shell_echoed("cmd /C dir", "cmd /C dir\r\n"));
+        assert!(!shell_echoed("cmd /C dir", "Volume in drive C"));
+    }
+
+    #[test]
     fn line_numbers_start_at_the_requested_offset() {
         let rendered = line_prefix("alpha\nbeta", 41);
         assert!(rendered.starts_with("   41 | alpha\n   42 | beta"));
@@ -2313,6 +2445,10 @@ mod tests {
             .await
             .unwrap();
         assert!(result.content.contains("shell-ok"));
+        assert!(result.content.contains("[shell]"));
+        assert!(result.content.contains("[cwd]"));
+        assert!(result.content.contains("[stdout]"));
+        assert!(result.content.contains("[stderr]"));
         assert!(result.content.contains("[exit code 0]"));
     }
 

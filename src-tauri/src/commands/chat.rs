@@ -187,6 +187,15 @@ pub async fn regenerate(state: State<'_, AppState>, conversation_id: String) -> 
 }
 
 #[tauri::command]
+pub async fn continue_turn(state: State<'_, AppState>, conversation_id: String) -> CmdResult<()> {
+    state
+        .engine
+        .continue_turn(&conversation_id)
+        .await
+        .map_err(cmd_err)
+}
+
+#[tauri::command]
 pub async fn revert_message(
     state: State<'_, AppState>,
     conversation_id: String,

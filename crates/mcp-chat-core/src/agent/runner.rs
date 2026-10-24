@@ -1,4 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashMap};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -16,7 +18,8 @@ use crate::agent::tools::{
     persist_result,
 };
 use crate::agent::types::{
-    CONTINUE_PROMPT, MAX_STEPS_PROMPT, OUTPUT_LIMIT_PROMPT, StepError, is_length, retry_delay,
+    CONTINUE_PROMPT, LOOP_GUARD_PROMPT, MAX_STEPS_PROMPT, OUTPUT_LIMIT_PROMPT, StepError,
+    is_length, retry_delay,
 };
 use crate::db::repo::{conversations, messages, settings};
 use crate::events::{CoreEvent, TurnStatus};
@@ -57,6 +60,24 @@ struct StreamRun {
     cancelled: bool,
     had_output: bool,
     had_tools: bool,
+    tool_signatures: Vec<u64>,
+}
+
+fn tool_signature(name: &str, args: &Value, ok: bool, content: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    name.hash(&mut hasher);
+    serde_json::to_string(args)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    ok.hash(&mut hasher);
+    // Spill hints embed a per-call id; ignore that unstable tail so repeated
+    // large outputs still count as identical.
+    content
+        .split("Full output is available as call_id")
+        .next()
+        .unwrap_or(content)
+        .hash(&mut hasher);
+    hasher.finish()
 }
 
 struct PartWriter {
@@ -213,6 +234,8 @@ async fn drive(
     let mut recover_used = false;
     let mut length_count = 0_usize;
     let mut compacted_once = false;
+    let mut tool_signature_counts: HashMap<u64, usize> = HashMap::new();
+    let mut loop_guard_fired = false;
 
     loop {
         if cancel.is_cancelled() {
@@ -225,6 +248,11 @@ async fn drive(
             final_step = true;
             tool_choice = ToolChoice::None;
         }
+        let _ = engine.events.send(CoreEvent::Step {
+            conversation_id: conversation_id.to_owned(),
+            step,
+            max_steps,
+        });
 
         let history = messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
         let (mut chat_messages, summary) = build_messages(&history);
@@ -418,6 +446,24 @@ async fn drive(
             });
         }
 
+        let mut repeated = false;
+        for signature in &run.tool_signatures {
+            let count = tool_signature_counts.entry(*signature).or_insert(0);
+            *count += 1;
+            if *count >= 3 {
+                repeated = true;
+            }
+        }
+        if repeated && !loop_guard_fired && !final_step {
+            loop_guard_fired = true;
+            append_synthetic(&engine, conversation_id, LOOP_GUARD_PROMPT).await?;
+            tools_disabled = true;
+            tool_choice = ToolChoice::None;
+            final_step = true;
+            step += 1;
+            continue;
+        }
+
         if run.had_tools {
             if final_step {
                 break;
@@ -607,6 +653,7 @@ async fn run_stream(
         cancelled: false,
         had_output: false,
         had_tools: false,
+        tool_signatures: Vec::new(),
     };
     let provider = llm::provider_for(request.kind);
     let mut stream = match provider.stream(request, cancel.clone()).await {
@@ -921,6 +968,14 @@ async fn run_stream(
                 let _ = persist_result(engine.executor.as_ref(), conversation_id, message, outcome)
                     .await;
             }
+            let call = calls.get(index);
+            let name = call.map(|call| call.name.as_str()).unwrap_or("");
+            let args = call
+                .and_then(|call| call.args.clone())
+                .unwrap_or_else(|| json!({}));
+            result
+                .tool_signatures
+                .push(tool_signature(name, &args, outcome.ok, &outcome.content));
         }
     }
 

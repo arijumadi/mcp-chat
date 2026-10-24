@@ -113,3 +113,5 @@ pub fn is_tool_finish(reason: &FinishReason) -> bool {
 pub const CONTINUE_PROMPT: &str = "The previous response was interrupted. Continue from where you left off without repeating completed content.";
 pub const OUTPUT_LIMIT_PROMPT: &str = "You hit the output token limit. Do not apologize or recap. Break the remaining work into smaller pieces.";
 pub const MAX_STEPS_PROMPT: &str = "You have reached the maximum number of tool steps for this turn. Do not call any more tools. Finish with a concise summary of what was accomplished and what remains.";
+pub const LOOP_GUARD_PROMPT: &str = "The same tool call was repeated at least three times with an identical result. Stop retrying it. Explain the blocker, change approach, or ask the user. Do not call another tool in this step.";
+pub const CONTINUE_TURN_PROMPT: &str = "Continue from where you stopped. Do not repeat completed work. Use tools only when they are still necessary.";

@@ -41,6 +41,8 @@ export interface AppStore {
   approvals: ApprovalEvent[];
   inputRequests: InputRequestEvent[];
   usage: UsageEvent | null;
+  step: { current: number; max: number } | null;
+  limitReached: boolean;
   toasts: Toast[];
   searchHits: SearchHit[];
   searching: boolean;
@@ -55,6 +57,7 @@ export interface AppStore {
   setDraft: (text: string) => void;
   stop: () => Promise<void>;
   regenerate: () => Promise<void>;
+  continueTurn: () => Promise<void>;
   revertMessage: (messageId: string) => Promise<void>;
   setModel: (providerId: string, model: string) => Promise<void>;
   renameConversation: (id: string, title: string) => Promise<void>;
@@ -95,6 +98,8 @@ export const useApp = create<AppStore>()((set, get) => ({
   approvals: [],
   inputRequests: [],
   usage: null,
+  step: null,
+  limitReached: false,
   toasts: [],
   searchHits: [],
   searching: false,
@@ -176,6 +181,8 @@ export const useApp = create<AppStore>()((set, get) => ({
       approvals: [],
       inputRequests: [],
       usage: null,
+      step: null,
+      limitReached: false,
       draft: "",
     });
     await get().reloadActive();
@@ -198,6 +205,8 @@ export const useApp = create<AppStore>()((set, get) => ({
         approvals: [],
         inputRequests: [],
         usage: null,
+        step: null,
+        limitReached: false,
       }));
     } catch (error) {
       get().toast(String(error), "error");
@@ -237,6 +246,8 @@ export const useApp = create<AppStore>()((set, get) => ({
       approvals: [],
       inputRequests: [],
       usage: null,
+      step: null,
+      limitReached: false,
     }));
     try {
       const message = await call<MessageWithParts>("send_message", {
@@ -282,7 +293,13 @@ export const useApp = create<AppStore>()((set, get) => ({
     const conversationId = get().activeId;
     if (!conversationId) return;
     try {
-      set({ status: "thinking", approvals: [], inputRequests: [] });
+      set({
+        status: "thinking",
+        approvals: [],
+        inputRequests: [],
+        step: null,
+        limitReached: false,
+      });
       await call("regenerate", { conversationId });
       await get().reloadActive();
     } catch (error) {
@@ -306,6 +323,8 @@ export const useApp = create<AppStore>()((set, get) => ({
         draft: text,
         status: "idle",
         usage: null,
+        step: null,
+        limitReached: false,
         approvals: [],
         inputRequests: [],
       });
@@ -316,6 +335,24 @@ export const useApp = create<AppStore>()((set, get) => ({
       });
       get().toast("Message moved to the input box.", "info");
     } catch (error) {
+      get().toast(String(error), "error");
+    }
+  },
+
+  async continueTurn() {
+    const conversationId = get().activeId;
+    if (!conversationId) return;
+    try {
+      set({
+        status: "thinking",
+        approvals: [],
+        inputRequests: [],
+        step: null,
+        limitReached: false,
+      });
+      await call("continue_turn", { conversationId });
+    } catch (error) {
+      set({ status: "error" });
       get().toast(String(error), "error");
     }
   },
@@ -344,7 +381,15 @@ export const useApp = create<AppStore>()((set, get) => ({
     try {
       await call("delete_conversation", { conversationId: id });
       if (get().activeId === id) {
-        set({ activeId: null, messages: [], draft: "", status: "idle", usage: null });
+        set({
+          activeId: null,
+          messages: [],
+          draft: "",
+          status: "idle",
+          usage: null,
+          step: null,
+          limitReached: false,
+        });
       }
       await get().refreshConversations();
     } catch (error) {
@@ -561,6 +606,13 @@ export function applyCoreEvent(
     }
     case "usage": {
       set({ usage: event });
+      break;
+    }
+    case "step": {
+      set({
+        step: { current: event.step, max: event.maxSteps },
+        limitReached: event.step > event.maxSteps,
+      });
       break;
     }
     case "input_request": {

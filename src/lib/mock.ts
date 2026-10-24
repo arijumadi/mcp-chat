@@ -355,6 +355,7 @@ export function installMock(): void {
         } satisfies Message;
       }
       case "regenerate":
+      case "continue_turn":
         return null;
       case "revert_message": {
         const conversationId = String(args.conversationId);
