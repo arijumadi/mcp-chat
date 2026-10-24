@@ -41,10 +41,24 @@ export function SettingsView() {
   const [deleteConfirm, setDeleteConfirm] = useState("");
   const [systemPrompt, setSystemPrompt] = useState(settings.default_system_prompt ?? "");
   const [savingPrompt, setSavingPrompt] = useState(false);
+  const [keepTokens, setKeepTokens] = useState(
+    Number(settings["compaction.keep_tokens"] ?? 15000),
+  );
+  const [bufferTokens, setBufferTokens] = useState(
+    Number(settings["compaction.buffer"] ?? 0),
+  );
+  const [savingContext, setSavingContext] = useState(false);
+  const compactionKeepSetting = settings["compaction.keep_tokens"];
+  const compactionBufferSetting = settings["compaction.buffer"];
 
   useEffect(() => {
     setSystemPrompt(settings.default_system_prompt ?? "");
   }, [settings.default_system_prompt]);
+
+  useEffect(() => {
+    setKeepTokens(Number(compactionKeepSetting ?? 15000));
+    setBufferTokens(Number(compactionBufferSetting ?? 0));
+  }, [compactionKeepSetting, compactionBufferSetting]);
 
   const theme = (settings.theme as "system" | "light" | "dark") ?? "system";
 
@@ -91,6 +105,26 @@ export function SettingsView() {
       toast(String(error), "error");
     } finally {
       setSavingPrompt(false);
+    }
+  };
+
+  const saveContext = async () => {
+    setSavingContext(true);
+    try {
+      await call("set_setting", {
+        key: "compaction.keep_tokens",
+        value: String(Math.max(1000, keepTokens)),
+      });
+      await call("set_setting", {
+        key: "compaction.buffer",
+        value: String(Math.max(0, bufferTokens)),
+      });
+      await refreshSettings();
+      toast("Context settings saved.", "info");
+    } catch (error) {
+      toast(String(error), "error");
+    } finally {
+      setSavingContext(false);
     }
   };
 
@@ -275,6 +309,51 @@ export function SettingsView() {
             <div className="mt-2 flex justify-end">
               <Button size="sm" loading={savingPrompt} onClick={() => void savePrompt()}>
                 Save prompt
+              </Button>
+            </div>
+          </Section>
+
+          <Section
+            title="Context management"
+            description="Compaction summarizes older turns and keeps the most recent tokens verbatim."
+          >
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
+                  Keep recent tokens
+                </span>
+                <input
+                  type="number"
+                  min={1000}
+                  step={1000}
+                  value={keepTokens}
+                  onChange={(event) => setKeepTokens(Number(event.target.value))}
+                  className={inputClass}
+                  style={{ borderColor: "var(--border)" }}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
+                  Compact buffer
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  step={1000}
+                  value={bufferTokens}
+                  onChange={(event) => setBufferTokens(Number(event.target.value))}
+                  className={inputClass}
+                  style={{ borderColor: "var(--border)" }}
+                />
+              </label>
+            </div>
+            <span className={hintClass} style={{ color: "var(--faint)" }}>
+              Default keep is 15,000 tokens. Buffer 0 means automatic: 15% of the
+              context window, at least 16,000 tokens.
+            </span>
+            <div className="mt-2 flex justify-end">
+              <Button size="sm" loading={savingContext} onClick={() => void saveContext()}>
+                Save context settings
               </Button>
             </div>
           </Section>

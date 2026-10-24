@@ -18,6 +18,15 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 
 Not in this batch: OAuth 2.1/DCR (M6) and packaging (M7). Static bearer tokens and an `X-API-Key` header (stored in the OS keychain) for MCP work.
 
+## Tool loading and context
+
+Use the **Tools** button in the chat header to choose which MCP servers this conversation may use and how their tools are delivered:
+
+- **Direct schemas** — every tool from the selected servers is sent to the model on every step. Best for small catalogs.
+- **Lazy search + call** — the model gets only `mcp_search_tools`, `mcp_get_tool_schema` and `mcp_call_tool`. It discovers a target, reads its schema, then calls it. Approvals and server policy still apply to the real tool.
+
+The same panel shows an approximate context meter, the automatic compaction threshold, and a **Compact now** action. Context defaults mirror OpenCode V2: keep the most recent ~15k tokens, compact with a 15%-of-window buffer (minimum 16k). Both values are configurable in **Settings → Context management**.
+
 ## Quickstart
 
 Requirements: Node.js 22+, pnpm 10+, Rust 1.85+, and the Tauri v2 Linux prerequisites on Linux.
@@ -87,7 +96,7 @@ pnpm typecheck     # TypeScript
 pnpm test          # Vitest: 10 tests
 pnpm build         # Vite production build
 pnpm fmt:check     # cargo fmt --check
-pnpm core:test     # 24 unit + 19 agent + 6 MCP integration + 1 auth + 1 provider test = 51 Rust tests
+pnpm core:test     # 25 unit + 22 agent + 6 MCP integration + 1 auth + 1 provider test = 55 Rust tests
 pnpm core:clippy   # cargo clippy -p mcp-chat-core --all-targets -- -D warnings
 pnpm mock:clippy   # same for the mock server
 pnpm test:e2e      # Playwright: 4 smoke tests against vite preview with a stubbed IPC bridge
@@ -95,7 +104,7 @@ pnpm test:e2e      # Playwright: 4 smoke tests against vite preview with a stubb
 
 `pnpm check` runs all of the above except Playwright.
 
-The Rust tests cover the acceptance matrix: split tool arguments, two parallel calls, invalid arguments, unknown tools, `finish_reason: length`, a cut stream, context overflow + compaction, unknown finish reason, policy denial, user rejection with feedback, crash sweep, progress notifications, MRTR elicitation, output spill/paging, max steps, cancellation during a tool, and retryable provider errors.
+The Rust tests cover the acceptance matrix: split tool arguments, two parallel calls, invalid arguments, unknown tools, `finish_reason: length`, a cut stream, context overflow + compaction, manual compaction/context status, per-chat server selection, lazy MCP search/schema/call, unknown finish reason, policy denial, user rejection with feedback, crash sweep, progress notifications, MRTR elicitation, output spill/paging, max steps, cancellation during a tool, and retryable provider errors.
 
 **What is not verified on this machine:** the Tauri shell itself could not be compiled or launched here because the machine has no WebKit/GTK development headers and no display. `pnpm tauri dev` is the intended path on a desktop with the prerequisites above. The frontend was verified in a browser through Playwright using a stubbed IPC bridge; screenshots are from that harness, not the native window. No real provider API key was used for automated tests; the keychain path is exercised with an in-memory store in tests.
 

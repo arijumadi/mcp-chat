@@ -73,7 +73,8 @@ async fn models(State(_state): State<ProviderState>) -> Json<Value> {
             {"id": "mock-always-tool"},
             {"id": "mock-badjson"},
             {"id": "mock-flaky"},
-            {"id": "mock-sleep"}
+            {"id": "mock-sleep"},
+            {"id": "mock-lazy"}
         ]
     }))
 }
@@ -257,6 +258,40 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
                     .into_response();
             }
             text_response("Recovered after retry.")
+        }
+        "lazy" => {
+            let tool_results = messages
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter(|message| {
+                            message.get("role").and_then(Value::as_str) == Some("tool")
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+            match tool_results {
+                0 => sse(tool_call_frames(&[(
+                    0,
+                    "call_search",
+                    "mcp_search_tools",
+                    r#"{"query":"echo"}"#,
+                )])),
+                1 => sse(tool_call_frames(&[(
+                    0,
+                    "call_schema",
+                    "mcp_get_tool_schema",
+                    r#"{"server":"mock","tool":"echo"}"#,
+                )])),
+                2 => sse(tool_call_frames(&[(
+                    0,
+                    "call_meta",
+                    "mcp_call_tool",
+                    r#"{"server":"mock","tool":"echo","arguments":{"text":"lazy"}}"#,
+                )])),
+                _ => text_response("Lazy tool complete."),
+            }
         }
         "sleep" => {
             if tools_done {

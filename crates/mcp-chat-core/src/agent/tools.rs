@@ -49,6 +49,7 @@ pub struct ToolExecRequest {
     pub default_effect: Effect,
     pub disabled: bool,
     pub cancel: CancellationToken,
+    pub active_server_slugs: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +69,73 @@ pub struct ToolExecResult {
     pub state: String,
     pub duration_ms: i64,
     pub executed: bool,
+}
+
+pub const MCP_SEARCH_TOOLS: &str = "mcp_search_tools";
+pub const MCP_GET_TOOL_SCHEMA: &str = "mcp_get_tool_schema";
+pub const MCP_CALL_TOOL: &str = "mcp_call_tool";
+
+pub fn is_meta_tool(name: &str) -> bool {
+    matches!(name, MCP_SEARCH_TOOLS | MCP_GET_TOOL_SCHEMA | MCP_CALL_TOOL)
+}
+
+pub fn meta_tool_defs() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: MCP_SEARCH_TOOLS.into(),
+            description: "Search the MCP tool catalog available to this conversation. Returns server slugs, tool names and descriptions. Use this before mcp_get_tool_schema or mcp_call_tool.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Optional words to match against server, tool or description."},
+                    "server": {"type": "string", "description": "Optional server slug to restrict the search."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum results. Default 20."}
+                },
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            name: MCP_GET_TOOL_SCHEMA.into(),
+            description: "Return the JSON input schema for one MCP tool, identified by its server slug and tool name.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string", "description": "Server slug from mcp_search_tools."},
+                    "tool": {"type": "string", "description": "Remote tool name from mcp_search_tools."}
+                },
+                "required": ["server", "tool"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            name: MCP_CALL_TOOL.into(),
+            description: "Call a remote MCP tool. Use mcp_search_tools to discover it and mcp_get_tool_schema to see its arguments first. The target server policy still applies and may require approval.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string", "description": "Server slug from mcp_search_tools."},
+                    "tool": {"type": "string", "description": "Remote tool name from mcp_search_tools."},
+                    "arguments": {"type": "object", "description": "Arguments matching the tool's input schema.", "additionalProperties": true}
+                },
+                "required": ["server", "tool", "arguments"],
+                "additionalProperties": false
+            }),
+        },
+    ]
+}
+
+pub fn meta_tool_info(name: &str) -> Option<ToolInfo> {
+    meta_tool_defs()
+        .into_iter()
+        .find(|definition| definition.name == name)
+        .map(|definition| ToolInfo {
+            name: definition.name,
+            title: None,
+            description: definition.description,
+            input_schema: definition.input_schema,
+            output_schema: None,
+            annotations: None,
+        })
 }
 
 pub fn builtin_tool_def() -> ToolDef {
@@ -167,6 +235,10 @@ impl ToolExecutor {
                 .await;
         }
 
+        if builtin && req.remote_name == MCP_CALL_TOOL {
+            return self.execute_mcp_call(req, started).await;
+        }
+
         let action = if builtin {
             format!("builtin.{}", req.remote_name)
         } else {
@@ -225,11 +297,24 @@ impl ToolExecutor {
         });
 
         let outcome = if builtin {
-            self.run_builtin(&req).await
+            if req.remote_name == MCP_SEARCH_TOOLS || req.remote_name == MCP_GET_TOOL_SCHEMA {
+                self.run_meta_lookup(&req).await
+            } else {
+                self.run_builtin(&req).await
+            }
         } else {
             self.run_mcp(&req, &tool).await
         };
 
+        self.finish(req, started, outcome).await
+    }
+
+    async fn finish(
+        &self,
+        req: ToolExecRequest,
+        started: Instant,
+        outcome: Result<Rendered>,
+    ) -> ToolExecResult {
         let duration_ms = started.elapsed().as_millis() as i64;
         match outcome {
             Ok(Rendered {
@@ -312,19 +397,48 @@ impl ToolExecutor {
         action: &str,
         resource: &str,
     ) -> std::result::Result<(), String> {
-        self.patch_part(&req.part_id, json!({"approval": "pending"}))
+        self.ask_permission_explicit(
+            &req.conversation_id,
+            &req.part_id,
+            &req.call_id,
+            &req.server_id,
+            &req.server_name,
+            &req.remote_name,
+            &req.args,
+            &req.cancel,
+            action,
+            resource,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn ask_permission_explicit(
+        &self,
+        conversation_id: &str,
+        part_id: &str,
+        call_id: &str,
+        server_id: &str,
+        server_name: &str,
+        tool_name: &str,
+        args: &Value,
+        cancel: &CancellationToken,
+        action: &str,
+        resource: &str,
+    ) -> std::result::Result<(), String> {
+        self.patch_part(part_id, json!({"approval": "pending"}))
             .await;
         let _ = self.events.send(CoreEvent::Approval {
-            conversation_id: req.conversation_id.clone(),
-            call_id: req.call_id.clone(),
-            server: req.server_name.clone(),
-            tool: req.remote_name.clone(),
-            args: req.args.clone(),
+            conversation_id: conversation_id.to_owned(),
+            call_id: call_id.to_owned(),
+            server: server_name.to_owned(),
+            tool: tool_name.to_owned(),
+            args: args.clone(),
         });
-        let receiver = self.approvals.register(&req.call_id);
+        let receiver = self.approvals.register(call_id);
         let answer = tokio::select! {
-            _ = req.cancel.cancelled() => {
-                self.approvals.cancel(&req.call_id);
+            _ = cancel.cancelled() => {
+                self.approvals.cancel(call_id);
                 return Err("Tool execution interrupted".into());
             }
             answer = receiver => answer.ok(),
@@ -335,7 +449,7 @@ impl ToolExecutor {
         match answer.decision {
             ApprovalDecision::Once => Ok(()),
             ApprovalDecision::Always => {
-                let server_id = (!req.server_id.is_empty()).then_some(req.server_id.as_str());
+                let server_id = (!server_id.is_empty()).then_some(server_id);
                 let _ =
                     rules_repo::create(&self.db.pool, server_id, action, resource, "allow").await;
                 Ok(())
@@ -354,6 +468,256 @@ impl ToolExecutor {
                     Err(format!("User rejected this call: {feedback}"))
                 }
             }
+        }
+    }
+
+    async fn execute_mcp_call(&self, req: ToolExecRequest, started: Instant) -> ToolExecResult {
+        let server_slug = req
+            .args
+            .get("server")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let tool_name = req
+            .args
+            .get("tool")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let target_args = req
+            .args
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        if server_slug.is_empty() || tool_name.is_empty() || !target_args.is_object() {
+            return self
+                .fail(
+                    req,
+                    "error",
+                    "mcp_call_tool needs server, tool and an arguments object.".into(),
+                    started,
+                    false,
+                )
+                .await;
+        }
+        if !req
+            .active_server_slugs
+            .iter()
+            .any(|slug| slug == &server_slug)
+        {
+            return self
+                .fail(
+                    req,
+                    "error",
+                    format!(
+                        "MCP server {server_slug:?} is not enabled for this conversation. Use mcp_search_tools to list available servers."
+                    ),
+                    started,
+                    false,
+                )
+                .await;
+        }
+
+        let (server, tool) = match self.mcp.resolve_tool(&server_slug, &tool_name).await {
+            Ok(value) => value,
+            Err(error) => {
+                return self
+                    .fail(req, "error", error.user_message(), started, false)
+                    .await;
+            }
+        };
+        if let Err(message) = validate_args(&tool.input_schema, &target_args) {
+            return self
+                .fail(
+                    req,
+                    "error",
+                    format!("Invalid tool input: {message}"),
+                    started,
+                    false,
+                )
+                .await;
+        }
+
+        let action = format!("mcp.{}.{}", server.slug, tool.name);
+        let resource = permissions::permission_resource(&target_args);
+        let default = match server.policy.as_str() {
+            "auto" => Effect::Allow,
+            "deny" => Effect::Deny,
+            _ => Effect::Ask,
+        };
+        let rules = rules_repo::list_for_server(&self.db.pool, &server.id)
+            .await
+            .unwrap_or_default();
+        let effect = permissions::evaluate(&action, &resource, default, &rules);
+        match effect {
+            Effect::Allow => {}
+            Effect::Deny => {
+                return self
+                    .fail(
+                        req,
+                        "error",
+                        "The user's permission policy denied this tool call.".into(),
+                        started,
+                        false,
+                    )
+                    .await;
+            }
+            Effect::Ask => {
+                if let Err(message) = self
+                    .ask_permission_explicit(
+                        &req.conversation_id,
+                        &req.part_id,
+                        &req.call_id,
+                        &server.id,
+                        &server.name,
+                        &tool.name,
+                        &target_args,
+                        &req.cancel,
+                        &action,
+                        &resource,
+                    )
+                    .await
+                {
+                    let state = if message == "Tool execution interrupted" {
+                        "aborted"
+                    } else {
+                        "error"
+                    };
+                    return self.fail(req, state, message, started, false).await;
+                }
+            }
+        }
+
+        self.patch_part(
+            &req.part_id,
+            json!({"state": "running", "approval": "allowed"}),
+        )
+        .await;
+        let _ = self.events.send(CoreEvent::Tool {
+            conversation_id: req.conversation_id.clone(),
+            call_id: req.call_id.clone(),
+            state: "running".into(),
+            progress: None,
+            message: None,
+        });
+
+        let target_request = ToolExecRequest {
+            conversation_id: req.conversation_id.clone(),
+            message_id: req.message_id.clone(),
+            part_id: req.part_id.clone(),
+            call_id: req.call_id.clone(),
+            index: req.index,
+            exposed_name: req.exposed_name.clone(),
+            remote_name: tool.name.clone(),
+            server_id: server.id.clone(),
+            server_slug: server.slug.clone(),
+            server_name: server.name.clone(),
+            args: target_args,
+            tool: Some(tool.clone()),
+            default_effect: default,
+            disabled: false,
+            cancel: req.cancel.clone(),
+            active_server_slugs: req.active_server_slugs.clone(),
+        };
+        let outcome = self.run_mcp(&target_request, &tool).await;
+        self.finish(req, started, outcome).await
+    }
+
+    async fn run_meta_lookup(&self, req: &ToolExecRequest) -> Result<Rendered> {
+        match req.remote_name.as_str() {
+            MCP_SEARCH_TOOLS => {
+                let query = req
+                    .args
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase();
+                let server_filter = req
+                    .args
+                    .get("server")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let limit = req
+                    .args
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(20)
+                    .clamp(1, 50) as usize;
+                if let Some(server) = &server_filter {
+                    if !req.active_server_slugs.iter().any(|slug| slug == server) {
+                        return Err(CoreError::Message(format!(
+                            "MCP server {server:?} is not enabled for this conversation."
+                        )));
+                    }
+                }
+                let groups = self.mcp.tools_for_slugs(&req.active_server_slugs).await?;
+                let mut matches = Vec::new();
+                for (server, tools) in groups {
+                    if let Some(filter) = &server_filter {
+                        if &server.slug != filter {
+                            continue;
+                        }
+                    }
+                    for tool in tools {
+                        let haystack = format!(
+                            "{} {} {} {}",
+                            server.slug, server.name, tool.name, tool.description
+                        )
+                        .to_ascii_lowercase();
+                        if !query.is_empty() && !haystack.contains(&query) {
+                            continue;
+                        }
+                        matches.push((server.slug.clone(), tool));
+                    }
+                }
+                matches.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.name.cmp(&b.1.name)));
+                if matches.is_empty() {
+                    return Ok(Rendered {
+                        content: "No MCP tools matched. Try a broader query or check the selected servers in the Tools menu.".into(),
+                        structured: None,
+                        ok: true,
+                    });
+                }
+                let mut content = format!(
+                    "MCP tools matching {:?} ({}):\n",
+                    query,
+                    matches.len().min(limit)
+                );
+                for (slug, tool) in matches.into_iter().take(limit) {
+                    let description = truncate_chars(&tool.description, 240).0;
+                    content.push_str(&format!("- {slug} :: {} — {description}\n", tool.name));
+                }
+                content.push_str("\nUse mcp_get_tool_schema with server and tool to inspect arguments, then mcp_call_tool.");
+                Ok(Rendered {
+                    content,
+                    structured: None,
+                    ok: true,
+                })
+            }
+            MCP_GET_TOOL_SCHEMA => {
+                let server_slug = req.args.get("server").and_then(Value::as_str).unwrap_or("");
+                let tool_name = req.args.get("tool").and_then(Value::as_str).unwrap_or("");
+                if !req
+                    .active_server_slugs
+                    .iter()
+                    .any(|slug| slug == server_slug)
+                {
+                    return Err(CoreError::Message(format!(
+                        "MCP server {server_slug:?} is not enabled for this conversation."
+                    )));
+                }
+                let (_, tool) = self.mcp.resolve_tool(server_slug, tool_name).await?;
+                let content = serde_json::to_string_pretty(&tool.input_schema)?;
+                Ok(Rendered {
+                    content,
+                    structured: Some(tool.input_schema),
+                    ok: true,
+                })
+            }
+            other => Err(CoreError::Message(format!(
+                "Unknown MCP meta tool {other:?}."
+            ))),
         }
     }
 

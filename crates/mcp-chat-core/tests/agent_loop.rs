@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mcp_chat_core::agent::ChatEngine;
 use mcp_chat_core::agent::approvals::{ApprovalAnswer, ApprovalDecision, InputAnswer};
+use mcp_chat_core::agent::{ChatEngine, runner};
 use mcp_chat_core::db::Db;
 use mcp_chat_core::db::repo::{conversations, messages, permissions, providers, servers};
 use mcp_chat_core::events::{CoreEvent, TurnStatus};
@@ -701,4 +701,99 @@ async fn stopping_during_a_tool_marks_it_aborted() {
         .parts[0]
         .payload();
     assert!(result["content"].as_str().unwrap().contains("interrupted"));
+}
+
+#[tokio::test]
+async fn per_conversation_server_selection_hides_tools() {
+    let h = Harness::new("mock-tool", Some("auto"), 0).await;
+    mcp_chat_core::db::repo::conversation_servers::set(&h.db.pool, &h.conversation_id, &[])
+        .await
+        .unwrap();
+    h.send_and_wait("use echo", ApprovalDecision::Once, None, "ari")
+        .await;
+    let history = h.history().await;
+    let result = history
+        .iter()
+        .find(|message| message.message.role == "tool")
+        .expect("tool result")
+        .parts[0]
+        .payload();
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap()
+            .contains("No tool named")
+    );
+}
+
+#[tokio::test]
+async fn lazy_tool_mode_searches_then_calls_the_target() {
+    let h = Harness::new("mock-lazy", Some("auto"), 0).await;
+    conversations::set_tool_mode(&h.db.pool, &h.conversation_id, "lazy")
+        .await
+        .unwrap();
+    h.send_and_wait("use lazy tools", ApprovalDecision::Once, None, "ari")
+        .await;
+    let history = h.history().await;
+    let names = history
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .filter(|part| part.kind == "tool_call")
+        .map(|part| part.payload()["name"].as_str().unwrap_or("").to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec!["mcp_search_tools", "mcp_get_tool_schema", "mcp_call_tool"]
+    );
+    let target_result = history
+        .iter()
+        .filter(|message| message.message.role == "tool")
+        .flat_map(|message| message.parts.iter())
+        .map(|part| part.payload())
+        .find(|payload| {
+            payload["content"]
+                .as_str()
+                .unwrap_or("")
+                .contains("echo: lazy")
+        })
+        .expect("target result");
+    assert_eq!(target_result["ok"], true);
+    assert!(h.assistant_text().await.contains("Lazy tool complete."));
+
+    let first_request_tools = h.provider.requests()[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap_or("").to_owned())
+        .collect::<Vec<_>>();
+    assert!(first_request_tools.contains(&"mcp_search_tools".to_string()));
+    assert!(first_request_tools.contains(&"mcp_call_tool".to_string()));
+    assert!(
+        !first_request_tools
+            .iter()
+            .any(|name| name.ends_with("__echo"))
+    );
+}
+
+#[tokio::test]
+async fn manual_compaction_and_context_status() {
+    let h = Harness::new("mock-text", None, 10).await;
+    let status = runner::context_status(h.engine.clone(), &h.conversation_id)
+        .await
+        .unwrap();
+    assert!(status.tokens > 0);
+    assert!(status.window >= 128_000);
+    assert!(status.threshold > 0 && status.threshold < status.window);
+    assert!(status.keep_tokens >= 1_000);
+
+    runner::compact_now(h.engine.clone(), &h.conversation_id)
+        .await
+        .unwrap();
+    let history = h.history().await;
+    assert!(
+        history
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .any(|part| part.kind == "summary")
+    );
 }

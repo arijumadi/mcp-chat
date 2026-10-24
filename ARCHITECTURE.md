@@ -102,11 +102,13 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 1. **Core crate split.** `crates/mcp-chat-core` holds DB/LLM/MCP/agent so the engine can be tested with `cargo test` on a machine without WebKit. `src-tauri` only wires commands, paths, keychain and events.
 2. **Thin MCP client instead of `rmcp` for this pass.** `rmcp` 3.7.0 is the official SDK and does support 2026-07-28 clients and Streamable HTTP, but this implementation needs exact mirrored header construction, `x-mcp-header`, legacy session/SSE fallback, and a UI-mediated MRTR handshake. The transport surface is isolated in `mcp/client.rs` and `mcp/legacy.rs`, so it can be replaced by `rmcp` later without touching the agent.
 3. **CSP exception for Tauri IPC.** Production CSP is `default-src 'self'; script-src 'self'; ...; connect-src ipc: http://ipc.localhost`. The prompt's `connect-src 'none'` blocks Tauri invoke on the platforms we target. Everything else stays locked down; no remote connect-src.
-4. **Schema additions.** `max_steps`, provider context/output limits, cached tool JSON/TTL, negotiated-at and OAuth issuer/client id were added to SQLite because compaction and the server cards need them. The original parts/messages shape is unchanged.
-5. **Tool results have two representations.** A `tool_call` part is the UI card and terminal-state record; a `tool` message is the provider protocol block. The UI deliberately hides raw tool messages.
-6. **Compaction is synchronous before a step (and on overflow), not a background job after idle.** This is simpler and avoids a race between a background summarizer and the next turn. It costs the summarizer latency once per boundary. Marked as a gap below.
-7. **Token estimates use `chars / 3`.** No tokenizer dependency; conservative enough to trigger compaction early. Exact provider usage is not required for correctness.
-8. **Frontend verification without Tauri.** The renderer is exercised in Chromium through Playwright with a stubbed IPC bridge. The native shell is intentionally thin so the untested surface is limited to command wiring and window setup (see gaps).
+4. **Schema additions.** `max_steps`, per-conversation `tool_mode`/server selection, provider context/output limits, cached tool JSON/TTL, negotiated-at and OAuth issuer/client id were added to SQLite because context management and the server cards need them. The original parts/messages shape is unchanged.
+5. **MCP tool delivery is per chat.** Each conversation stores a server selection and a mode. `direct` sends every schema from the selected servers; `lazy` sends only `mcp_search_tools`, `mcp_get_tool_schema` and `mcp_call_tool`. The lazy meta-call resolves the real target, validates the real input schema, and applies the target server's policy and approval rules before calling it.
+6. **Compaction follows the V2 shape.** Older turns are summarized, the newest ~15k tokens are kept, and the trigger uses a 15%-of-window buffer with a 16k floor. The buffer and retention are configurable in Settings; a manual compact action is available in the per-chat Tools panel.
+7. **Tool results have two representations.** A `tool_call` part is the UI card and terminal-state record; a `tool` message is the provider protocol block. The UI deliberately hides raw tool messages.
+
+8. **Token estimates use `chars / 3`.** No tokenizer dependency; conservative enough to trigger compaction early. Exact provider usage is not required for correctness.
+9. **Frontend verification without Tauri.** The renderer is exercised in Chromium through Playwright with a stubbed IPC bridge. The native shell is intentionally thin so the untested surface is limited to command wiring and window setup (see gaps).
 
 ## Test map
 
@@ -118,7 +120,7 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 | MCP HTTP+SSE | endpoint event, GET response correlation, tools call |
 | Namespacing | sanitize, collisions, remote-name mapping |
 | Permissions | last-match-wins, glob, default policy, resource normalization |
-| Agent | text, tool loop, parallel, invalid args, unknown tool, policy deny, approval/rejection/always, length, cut, overflow, unknown finish, max steps, retries, spill/paging |
+| Agent | text, tool loop, parallel, invalid args, unknown tool, policy deny, approval/rejection/always, per-chat server gating, lazy MCP search/schema/call, length, cut, overflow, manual compaction/context status, unknown finish, max steps, retries, spill/paging |
 | DB | migrations from empty, repo CRUD, FTS sync/cascade, crash sweep |
 | UI | transcript reducer, tool card rendering, date grouping, Playwright smoke (4) |
 
@@ -129,6 +131,6 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 - **M7 packaging is not implemented.** No AppImage/deb/dmg build was produced; `tauri.conf.json` is configured but packaging needs a desktop toolchain.
 - **Legacy Streamable HTTP does not open the optional GET notification stream.** Responses to POST requests are handled; server-initiated messages on a legacy GET stream are not consumed.
 - **`subscriptions/listen` is not implemented.** The `MCP_SUBSCRIPTIONS=1` path and `toolsListChanged` invalidation are deferred.
-- **Compaction runs before a step, not after idle.** See decision 6.
+- **Background compaction is not implemented.** Compaction runs before a step or on context overflow; it is not precomputed at ~85% like OpenCode V2’s experimental background mode.
 - **Real keychain, real API key and native window were not exercised.** Keyring is behind the `SecretStore` trait and is replaced with an in-memory store in tests. The UI screenshots use the mock IPC bridge.
 - **`pnpm tauri build`/AppImage was not run.** Frontend production build is verified; native bundling is not.

@@ -15,6 +15,8 @@ pub struct Conversation {
     pub system_prompt: Option<String>,
     pub archived: bool,
     pub max_steps: i64,
+    pub tool_mode: String,
+    pub servers_configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

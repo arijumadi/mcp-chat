@@ -52,9 +52,11 @@ export function AssistantTurn({
     );
   });
 
-  const toolCount = flattened.filter(
-    (item) => item.part.kind === "tool_call",
-  ).length;
+  const toolCount = flattened.filter((item) => {
+    if (item.part.kind !== "tool_call") return false;
+    const name = parsePayload(item.part).name;
+    return name !== "mcp_search_tools" && name !== "mcp_get_tool_schema";
+  }).length;
   const thoughtCount = flattened.filter(
     (item) => item.part.kind === "reasoning",
   ).length;

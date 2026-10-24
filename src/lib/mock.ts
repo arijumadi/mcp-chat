@@ -34,6 +34,11 @@ export function installMock(): void {
   const messages = new Map<string, MessageWithParts[]>();
   const subscribers = new Set<(event: CoreEvent) => void>();
   const generating = new Set<string>();
+  const settingsStore: Record<string, string> = {
+    theme: localStorage.getItem("theme") ?? "system",
+    "compaction.keep_tokens": "15000",
+    "compaction.buffer": "0",
+  };
   let providers: ProviderView[] = [
     {
       id: "provider-mock",
@@ -110,6 +115,8 @@ export function installMock(): void {
       systemPrompt: null,
       archived: false,
       maxSteps: 25,
+      toolMode: "direct",
+      serversConfigured: false,
     };
     conversations.push(seeded);
     const assistantId = "demo-assistant";
@@ -203,8 +210,9 @@ export function installMock(): void {
           platform: "linux",
         };
       case "list_settings":
-        return { theme: localStorage.getItem("theme") ?? "system" };
+        return { ...settingsStore };
       case "set_setting":
+        settingsStore[String(args.key)] = String(args.value);
         if (args.key === "theme") localStorage.setItem("theme", String(args.value));
         return null;
       case "list_conversations":
@@ -233,6 +241,8 @@ export function installMock(): void {
           systemPrompt: null,
           archived: false,
           maxSteps: 25,
+          toolMode: "direct",
+          serversConfigured: false,
         };
         conversations.unshift(conversation);
         messages.set(conversation.id, []);
@@ -254,6 +264,39 @@ export function installMock(): void {
       }
       case "get_messages":
         return messages.get(String(args.conversationId)) ?? [];
+      case "get_conversation_tools": {
+        const conversation = conversations.find(
+          (item) => item.id === args.conversationId,
+        );
+        return {
+          serverIds: servers.filter((server) => server.enabled).map((server) => server.id),
+          allServers: !(conversation?.serversConfigured ?? false),
+          toolMode: conversation?.toolMode ?? "direct",
+        };
+      }
+      case "set_conversation_tools": {
+        const conversation = conversations.find(
+          (item) => item.id === args.conversationId,
+        );
+        if (conversation) {
+          conversation.toolMode = String(args.toolMode ?? "direct") as
+            | "direct"
+            | "lazy";
+          conversation.serversConfigured = args.serverIds != null;
+        }
+        return null;
+      }
+      case "context_status":
+        return {
+          tokens: 12450,
+          window: 128000,
+          threshold: 108800,
+          keepTokens: 15000,
+          toolCount: 17,
+          toolMode: "direct",
+        };
+      case "compact_conversation":
+        return null;
       case "is_generating":
         return generating.has(String(args.conversationId));
       case "stop_generation": {

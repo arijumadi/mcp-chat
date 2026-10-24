@@ -1,3 +1,4 @@
+pub mod conversation_servers;
 pub mod conversations;
 pub mod messages;
 pub mod permissions;

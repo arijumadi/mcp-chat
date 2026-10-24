@@ -51,6 +51,12 @@ test("captures README screenshots", async ({ page }) => {
   await page.goto("/?mock=1");
   await page.getByText("Welcome to MCP Chat").first().click();
   await expect(page.getByText("What can you do with MCP tools?")).toBeVisible();
+  await page.getByRole("button", { name: /Tools/ }).click();
+  await expect(page.getByText("MCP servers for this chat")).toBeVisible();
+  await expect(page.getByText("Context estimate")).toBeVisible();
+  await page.getByRole("button", { name: /Tools/ }).click();
+  await page.getByText("What can you do with MCP tools?").click();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.screenshot({ path: "docs/screenshots/chat.png", fullPage: false });
 
   await page.getByRole("complementary").getByRole("button", { name: "Settings" }).click();

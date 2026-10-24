@@ -30,6 +30,16 @@ export function ToolCard({ part }: { part: Part }) {
   const raw = parsePayload(part);
   const payload = raw as unknown as ToolCallPayload;
   const state = payload.state ?? "running";
+  const metaArgs = (payload.args ?? {}) as Record<string, unknown>;
+  const isMetaCall = payload.name === "mcp_call_tool";
+  const displayName = isMetaCall ? String(metaArgs.tool ?? payload.name) : payload.name;
+  const displayServer = isMetaCall
+    ? String(metaArgs.server ?? payload.server)
+    : payload.server;
+  const displayArgs =
+    isMetaCall && metaArgs.arguments && typeof metaArgs.arguments === "object"
+      ? (metaArgs.arguments as Record<string, unknown>)
+      : (payload.args ?? {});
   const [full, setFull] = useState<string | null>(null);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [total, setTotal] = useState<number | null>(null);
@@ -93,8 +103,8 @@ export function ToolCard({ part }: { part: Part }) {
         <div className="flex items-center gap-2 px-3 py-2.5">
           <StatusIcon state={state} />
           <Wrench size={13} className="shrink-0" style={{ color: "var(--muted)" }} />
-          <span className="min-w-0 truncate font-medium" title={payload.name}>
-            {payload.name}
+          <span className="min-w-0 truncate font-medium" title={displayName}>
+            {displayName}
           </span>
           <span
             className="truncate rounded border px-1.5 py-0.5 text-[10.5px]"
@@ -103,9 +113,9 @@ export function ToolCard({ part }: { part: Part }) {
               color: "var(--muted)",
               maxWidth: 130,
             }}
-            title={payload.server}
+            title={displayServer}
           >
-            {payload.server || "unknown"}
+            {displayServer || "unknown"}
           </span>
           <span
             className="ml-auto flex items-center gap-1.5 text-[10.5px]"
@@ -159,7 +169,7 @@ export function ToolCard({ part }: { part: Part }) {
               className="max-h-56 overflow-auto rounded-lg border p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap"
               style={{ borderColor: "var(--border)", background: "var(--code)" }}
             >
-              {formatJson(payload.args ?? {})}
+              {formatJson(displayArgs)}
             </pre>
           </div>
         </details>

@@ -17,6 +17,7 @@ import { cn } from "@/lib/cn";
 import { call, downloadText } from "@/lib/ipc";
 import type { ExportResult } from "@/lib/types";
 import { ModelPicker } from "./ModelPicker";
+import { ConversationTools } from "./ConversationTools";
 import { Transcript } from "./Transcript";
 import { Composer } from "./Composer";
 
@@ -122,6 +123,7 @@ export function ChatView() {
             {conversation.model ?? "no model"} · local transcript
           </div>
         </div>
+        <ConversationTools conversation={conversation} />
         <ModelPicker conversation={conversation} />
         <div className="relative">
           <button

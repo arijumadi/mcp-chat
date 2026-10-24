@@ -10,6 +10,23 @@ export interface Conversation {
   systemPrompt: string | null;
   archived: boolean;
   maxSteps: number;
+  toolMode: "direct" | "lazy";
+  serversConfigured: boolean;
+}
+
+export interface ConversationToolsView {
+  serverIds: string[];
+  allServers: boolean;
+  toolMode: "direct" | "lazy";
+}
+
+export interface ContextStatus {
+  tokens: number;
+  window: number;
+  threshold: number;
+  keepTokens: number;
+  toolCount: number;
+  toolMode: string;
 }
 
 export interface Message {

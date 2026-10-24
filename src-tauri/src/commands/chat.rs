@@ -3,7 +3,10 @@ use serde_json::Value;
 use tauri::State;
 
 use mcp_chat_core::agent::approvals::{ApprovalAnswer, ApprovalDecision, InputAnswer};
-use mcp_chat_core::db::repo::{conversations, messages, providers, settings};
+use mcp_chat_core::agent::runner;
+use mcp_chat_core::db::repo::{
+    conversation_servers, conversations, messages, providers, servers, settings,
+};
 use mcp_chat_core::models::{Conversation, Message, MessageWithParts, SearchHit};
 
 use crate::error::{CmdResult, cmd_err};
@@ -360,4 +363,100 @@ fn safe_filename(title: &str) -> String {
     } else {
         trimmed
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationToolsView {
+    pub server_ids: Vec<String>,
+    pub all_servers: bool,
+    pub tool_mode: String,
+}
+
+#[tauri::command]
+pub async fn get_conversation_tools(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> CmdResult<ConversationToolsView> {
+    let conversation = conversations::get(&state.db.pool, &conversation_id)
+        .await
+        .map_err(cmd_err)?;
+    let server_ids = if conversation.servers_configured {
+        conversation_servers::selected(&state.db.pool, &conversation_id)
+            .await
+            .map_err(cmd_err)?
+    } else {
+        servers::list_enabled(&state.db.pool)
+            .await
+            .map_err(cmd_err)?
+            .into_iter()
+            .map(|server| server.id)
+            .collect()
+    };
+    Ok(ConversationToolsView {
+        server_ids,
+        all_servers: !conversation.servers_configured,
+        tool_mode: conversation.tool_mode,
+    })
+}
+
+#[tauri::command]
+pub async fn set_conversation_tools(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    server_ids: Option<Vec<String>>,
+    tool_mode: String,
+) -> CmdResult<()> {
+    if tool_mode != "direct" && tool_mode != "lazy" {
+        return Err("Unknown tool mode".into());
+    }
+    match server_ids {
+        None => {
+            conversation_servers::reset_to_all(&state.db.pool, &conversation_id)
+                .await
+                .map_err(cmd_err)?;
+        }
+        Some(ids) => {
+            let known = servers::list(&state.db.pool)
+                .await
+                .map_err(cmd_err)?
+                .into_iter()
+                .map(|server| server.id)
+                .collect::<std::collections::HashSet<_>>();
+            if let Some(unknown) = ids.iter().find(|id| !known.contains(*id)) {
+                return Err(format!("Unknown MCP server id {unknown:?}"));
+            }
+            conversation_servers::set(&state.db.pool, &conversation_id, &ids)
+                .await
+                .map_err(cmd_err)?;
+        }
+    }
+    conversations::set_tool_mode(&state.db.pool, &conversation_id, &tool_mode)
+        .await
+        .map_err(cmd_err)?;
+    let _ = state
+        .engine
+        .events
+        .send(mcp_chat_core::events::CoreEvent::ConversationUpdated { conversation_id });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn context_status(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> CmdResult<runner::ContextStatus> {
+    runner::context_status(state.engine.clone(), &conversation_id)
+        .await
+        .map_err(cmd_err)
+}
+
+#[tauri::command]
+pub async fn compact_conversation(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> CmdResult<()> {
+    runner::compact_now(state.engine.clone(), &conversation_id)
+        .await
+        .map_err(cmd_err)
 }

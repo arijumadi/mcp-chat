@@ -10,7 +10,10 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::ChatEngine;
 use crate::agent::context::{build_messages, estimate_tokens, transcript_for_summary};
 use crate::agent::permissions::Effect;
-use crate::agent::tools::{ToolExecRequest, builtin_tool_def, builtin_tool_info, persist_result};
+use crate::agent::tools::{
+    ToolExecRequest, builtin_tool_def, builtin_tool_info, is_meta_tool, meta_tool_defs,
+    meta_tool_info, persist_result,
+};
 use crate::agent::types::{
     CONTINUE_PROMPT, MAX_STEPS_PROMPT, OUTPUT_LIMIT_PROMPT, StepError, is_length, retry_delay,
 };
@@ -188,7 +191,8 @@ async fn drive(
         system,
     };
 
-    let (registry, defaults, tool_defs) = load_tools(&engine).await;
+    let (registry, defaults, tool_defs, active_server_slugs, tool_mode) =
+        load_tools(&engine, &conversation).await;
     let mut tool_choice = ToolChoice::Auto;
     let mut tools_disabled = false;
     let mut max_notice_sent = false;
@@ -216,6 +220,13 @@ async fn drive(
         let history = messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
         let (mut chat_messages, summary) = build_messages(&history);
         let mut system = resolved.system.clone();
+        if tool_mode == "lazy" && !registry.tools.is_empty() {
+            let base = system.unwrap_or_default();
+            system = Some(format!(
+                "{base}{}MCP tools are in lazy mode. Use mcp_search_tools to discover a tool, mcp_get_tool_schema to inspect its arguments, then mcp_call_tool to execute it.",
+                if base.is_empty() { "" } else { "\n\n" }
+            ));
+        }
         if let Some(summary) = summary {
             let base = system.unwrap_or_default();
             system = Some(format!(
@@ -224,8 +235,21 @@ async fn drive(
             ));
         }
         let mut estimate = estimate_tokens(&chat_messages, &tool_defs, system.as_deref());
+        let context_window = resolved.context_window as usize;
+        let configured_buffer = settings::get_i64(&engine.db.pool, "compaction.buffer", 0)
+            .await
+            .unwrap_or(0);
+        let mut buffer = if configured_buffer > 0 {
+            configured_buffer as usize
+        } else {
+            (context_window * 15 / 100).max(16_000)
+        };
+        if buffer >= context_window {
+            buffer = 0;
+        }
+        let threshold = context_window.saturating_sub(buffer).max(1);
 
-        if estimate > (resolved.context_window as usize * 8 / 10) {
+        if estimate > threshold {
             match compact(&engine, &conversation, &resolved, &cancel).await {
                 Ok(()) => {
                     compacted_once = true;
@@ -270,6 +294,7 @@ async fn drive(
             request,
             &registry,
             &defaults,
+            &active_server_slugs,
             tools_disabled,
             cancel.clone(),
         )
@@ -392,14 +417,27 @@ async fn drive(
     Ok(())
 }
 
-async fn load_tools(engine: &ChatEngine) -> (ToolRegistry, HashMap<String, Effect>, Vec<ToolDef>) {
+async fn load_tools(
+    engine: &ChatEngine,
+    conversation: &crate::models::Conversation,
+) -> (
+    ToolRegistry,
+    HashMap<String, Effect>,
+    Vec<ToolDef>,
+    Vec<String>,
+    String,
+) {
+    let selected_ids = conversations::selected_server_ids(&engine.db.pool, &conversation.id)
+        .await
+        .unwrap_or_default();
     let servers = engine
         .mcp
-        .tools_for_enabled_servers()
+        .tools_for_ids(&selected_ids)
         .await
         .unwrap_or_default();
     let mut input = Vec::new();
     let mut defaults = HashMap::new();
+    let mut active_slugs = Vec::new();
     for (server, tools) in &servers {
         defaults.insert(
             server.slug.clone(),
@@ -409,6 +447,9 @@ async fn load_tools(engine: &ChatEngine) -> (ToolRegistry, HashMap<String, Effec
                 _ => Effect::Ask,
             },
         );
+        if !active_slugs.contains(&server.slug) {
+            active_slugs.push(server.slug.clone());
+        }
         input.push((
             server.id.clone(),
             server.slug.clone(),
@@ -417,29 +458,36 @@ async fn load_tools(engine: &ChatEngine) -> (ToolRegistry, HashMap<String, Effec
         ));
     }
     let registry = ToolRegistry::from_servers(&input).unwrap_or_default();
-    let mut defs: Vec<ToolDef> = registry
-        .tools
-        .iter()
-        .map(|tool| ToolDef {
-            name: tool.exposed_name.clone(),
-            description: if tool.server_name.is_empty() {
-                tool.description.clone()
-            } else {
-                format!("{}\n\nServer: {}", tool.description, tool.server_name)
-            },
-            input_schema: tool.input_schema.clone(),
-        })
-        .collect();
+    let tool_mode = conversation.tool_mode.clone();
+    let mut defs: Vec<ToolDef> = if tool_mode == "lazy" && !registry.tools.is_empty() {
+        meta_tool_defs()
+    } else {
+        registry
+            .tools
+            .iter()
+            .map(|tool| ToolDef {
+                name: tool.exposed_name.clone(),
+                description: if tool.server_name.is_empty() {
+                    tool.description.clone()
+                } else {
+                    format!("{}\n\nServer: {}", tool.description, tool.server_name)
+                },
+                input_schema: tool.input_schema.clone(),
+            })
+            .collect()
+    };
     defs.push(builtin_tool_def());
-    (registry, defaults, defs)
+    (registry, defaults, defs, active_slugs, tool_mode)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_stream(
     engine: &ChatEngine,
     conversation_id: &str,
     request: ChatRequest,
     registry: &ToolRegistry,
     defaults: &HashMap<String, Effect>,
+    active_server_slugs: &[String],
     tools_disabled: bool,
     cancel: CancellationToken,
 ) -> StreamRun {
@@ -598,6 +646,7 @@ async fn run_stream(
                             message_id.as_deref(),
                             registry,
                             defaults,
+                            active_server_slugs,
                             tools_disabled,
                             cancel.clone(),
                             call,
@@ -650,9 +699,16 @@ async fn run_stream(
                 } else {
                     "Provider did not return a tool result"
                 };
-                let outcome =
-                    settle_call_error(engine, conversation_id, registry, defaults, call, message)
-                        .await;
+                let outcome = settle_call_error(
+                    engine,
+                    conversation_id,
+                    registry,
+                    defaults,
+                    active_server_slugs,
+                    call,
+                    message,
+                )
+                .await;
                 outcomes.insert(index, outcome);
             }
         }
@@ -671,6 +727,7 @@ async fn run_stream(
                             conversation_id,
                             registry,
                             defaults,
+                            active_server_slugs,
                             call,
                             "Invalid tool input: arguments are not valid JSON.",
                         )
@@ -685,6 +742,7 @@ async fn run_stream(
                     message_id.as_deref(),
                     registry,
                     defaults,
+                    active_server_slugs,
                     tools_disabled,
                     cancel.clone(),
                     call,
@@ -707,6 +765,7 @@ async fn run_stream(
                         conversation_id,
                         registry,
                         defaults,
+                        active_server_slugs,
                         call,
                         "The tool task crashed before returning a result.",
                     )
@@ -725,6 +784,7 @@ async fn run_stream(
                 conversation_id,
                 registry,
                 defaults,
+                active_server_slugs,
                 call,
                 "Provider did not return a tool result",
             )
@@ -822,6 +882,7 @@ async fn dispatch_call(
     message_id: Option<&str>,
     registry: &ToolRegistry,
     defaults: &HashMap<String, Effect>,
+    active_server_slugs: &[String],
     tools_disabled: bool,
     cancel: CancellationToken,
     call: &mut CallState,
@@ -841,6 +902,14 @@ async fn dispatch_call(
             "mcp-chat".to_owned(),
             Effect::Allow,
             Some(builtin_tool_info()),
+        )
+    } else if is_meta_tool(&call.name) {
+        (
+            String::new(),
+            "builtin".to_owned(),
+            "mcp-chat".to_owned(),
+            Effect::Allow,
+            meta_tool_info(&call.name),
         )
     } else if let Some(tool) = registry.get(&call.name) {
         (
@@ -907,6 +976,7 @@ async fn dispatch_call(
         default_effect: default,
         disabled: tools_disabled,
         cancel,
+        active_server_slugs: active_server_slugs.to_vec(),
     };
     let executor = engine.executor.clone();
     let handle = tokio::spawn(async move { executor.execute(request).await });
@@ -919,6 +989,7 @@ async fn settle_call_error(
     conversation_id: &str,
     registry: &ToolRegistry,
     defaults: &HashMap<String, Effect>,
+    active_server_slugs: &[String],
     call: &mut CallState,
     message: &str,
 ) -> crate::agent::tools::ToolExecResult {
@@ -929,6 +1000,14 @@ async fn settle_call_error(
             "mcp-chat".to_owned(),
             Effect::Allow,
             Some(builtin_tool_info()),
+        )
+    } else if is_meta_tool(&call.name) {
+        (
+            String::new(),
+            "builtin".to_owned(),
+            "mcp-chat".to_owned(),
+            Effect::Allow,
+            meta_tool_info(&call.name),
         )
     } else if let Some(tool) = registry.get(&call.name) {
         (
@@ -970,6 +1049,7 @@ async fn settle_call_error(
         default_effect: default,
         disabled: false,
         cancel: CancellationToken::new(),
+        active_server_slugs: active_server_slugs.to_vec(),
     };
     call.dispatched = true;
     let state = if message.contains("interrupted") {
@@ -1062,10 +1142,30 @@ async fn compact(
     cancel: &CancellationToken,
 ) -> Result<()> {
     let history = messages::list_for_conversation(&engine.db.pool, &conversation.id).await?;
-    if history.len() < 8 {
+    if history.len() < 4 {
         return Err(CoreError::Message("Not enough history to compact.".into()));
     }
-    let mut keep_start = history.len().saturating_sub(6);
+    let keep_tokens = settings::get_i64(&engine.db.pool, "compaction.keep_tokens", 15_000)
+        .await
+        .unwrap_or(15_000)
+        .max(1_000) as usize;
+    let keep_tokens = keep_tokens
+        .min((resolved.context_window as usize) * 2 / 3)
+        .max(1_000);
+    let mut keep_start = history.len();
+    let mut kept = 0usize;
+    for index in (0..history.len()).rev() {
+        if kept >= keep_tokens && keep_start < history.len() {
+            break;
+        }
+        kept += message_tokens(&history[index]);
+        keep_start = index;
+    }
+    // Even when the whole transcript is smaller than keep_tokens, context
+    // overflow still needs a boundary. Keep at least the last two messages.
+    if keep_start == 0 {
+        keep_start = history.len().saturating_sub(2);
+    }
     while keep_start > 0 && history[keep_start].message.role == "tool" {
         keep_start -= 1;
     }
@@ -1119,4 +1219,128 @@ async fn compact(
         conversation_id: conversation.id.clone(),
     });
     Ok(())
+}
+
+fn message_tokens(message: &crate::models::MessageWithParts) -> usize {
+    let mut chars = 0usize;
+    for part in &message.parts {
+        let payload = part.payload();
+        match part.kind.as_str() {
+            "text" => {
+                chars += payload
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .chars()
+                    .count()
+            }
+            "tool_call" => {
+                chars += serde_json::to_string(&payload.get("args").cloned().unwrap_or(Value::Null))
+                    .map(|value| value.len())
+                    .unwrap_or(0)
+            }
+            "tool_result" => {
+                chars += payload
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .chars()
+                    .count()
+            }
+            _ => {}
+        }
+    }
+    (chars / 3).max(1)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextStatus {
+    pub tokens: i64,
+    pub window: i64,
+    pub threshold: i64,
+    pub keep_tokens: i64,
+    pub tool_count: usize,
+    pub tool_mode: String,
+}
+
+pub async fn context_status(
+    engine: Arc<ChatEngine>,
+    conversation_id: &str,
+) -> Result<ContextStatus> {
+    let conversation = conversations::get(&engine.db.pool, conversation_id).await?;
+    let (registry, _defaults, tool_defs, _slugs, tool_mode) =
+        load_tools(&engine, &conversation).await;
+    let (_, _, _, context_window, _) = engine.resolve(&conversation).await?;
+    let history = messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
+    let (chat_messages, summary) = build_messages(&history);
+    let mut system = conversation.system_prompt.clone();
+    if let Some(summary) = summary {
+        let base = system.unwrap_or_default();
+        system = Some(format!(
+            "{base}{}Summary of earlier conversation:\n{summary}",
+            if base.is_empty() { "" } else { "\n\n" }
+        ));
+    }
+    if tool_mode == "lazy" && !registry.tools.is_empty() {
+        let base = system.unwrap_or_default();
+        system = Some(format!(
+            "{base}{}MCP tools are in lazy mode. Use mcp_search_tools to discover a tool, mcp_get_tool_schema to inspect its arguments, then mcp_call_tool to execute it.",
+            if base.is_empty() { "" } else { "\n\n" }
+        ));
+    }
+    let tokens = estimate_tokens(&chat_messages, &tool_defs, system.as_deref()) as i64;
+    let window = context_window;
+    let keep_tokens = settings::get_i64(&engine.db.pool, "compaction.keep_tokens", 15_000)
+        .await
+        .unwrap_or(15_000)
+        .max(1_000);
+    let configured_buffer = settings::get_i64(&engine.db.pool, "compaction.buffer", 0)
+        .await
+        .unwrap_or(0);
+    let mut buffer = if configured_buffer > 0 {
+        configured_buffer
+    } else {
+        (window * 15 / 100).max(16_000)
+    };
+    if buffer >= window {
+        buffer = 0;
+    }
+    Ok(ContextStatus {
+        tokens,
+        window,
+        threshold: (window - buffer).max(1),
+        keep_tokens,
+        tool_count: registry.tools.len(),
+        tool_mode,
+    })
+}
+
+pub async fn compact_now(engine: Arc<ChatEngine>, conversation_id: &str) -> Result<()> {
+    if engine.in_flight(conversation_id) {
+        return Err(CoreError::Message(
+            "Stop the current turn before compacting.".into(),
+        ));
+    }
+    let conversation = conversations::get(&engine.db.pool, conversation_id).await?;
+    let (provider, model, api_key, context_window, max_tokens) =
+        engine.resolve(&conversation).await?;
+    let kind = ProviderKind::parse(&provider.kind)
+        .ok_or_else(|| CoreError::Message("Unknown provider kind.".into()))?;
+    let default_system = settings::get(&engine.db.pool, "default_system_prompt").await?;
+    let system = conversation
+        .system_prompt
+        .clone()
+        .or(default_system)
+        .filter(|prompt| !prompt.trim().is_empty());
+    let resolved = Resolved {
+        kind,
+        base_url: provider.base_url.clone(),
+        api_key,
+        model,
+        context_window,
+        max_tokens,
+        system,
+    };
+    compact(&engine, &conversation, &resolved, &CancellationToken::new()).await
 }

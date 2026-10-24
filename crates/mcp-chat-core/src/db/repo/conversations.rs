@@ -209,6 +209,34 @@ pub async fn search(pool: &SqlitePool, query: &str, limit: i64) -> Result<Vec<Se
         .collect())
 }
 
+pub async fn set_tool_mode(pool: &SqlitePool, id: &str, mode: &str) -> Result<()> {
+    sqlx::query("UPDATE conversations SET tool_mode = ?2, updated_at = ?3 WHERE id = ?1")
+        .bind(id)
+        .bind(mode)
+        .bind(now_ms())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Server ids that should be exposed for this conversation. A conversation
+/// that has never been configured uses every enabled server.
+pub async fn selected_server_ids(pool: &SqlitePool, id: &str) -> Result<Vec<String>> {
+    let configured: Option<(bool,)> =
+        sqlx::query_as("SELECT servers_configured FROM conversations WHERE id = ?1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+    if !configured.map(|(value,)| value).unwrap_or(false) {
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT id FROM servers WHERE enabled = 1 ORDER BY created_at ASC")
+                .fetch_all(pool)
+                .await?;
+        return Ok(rows.into_iter().map(|(id,)| id).collect());
+    }
+    crate::db::repo::conversation_servers::selected(pool, id).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -13,6 +13,8 @@ function conversation(id: string, updatedAt: number): Conversation {
     systemPrompt: null,
     archived: false,
     maxSteps: 25,
+    toolMode: "direct",
+    serversConfigured: false,
   };
 }
 

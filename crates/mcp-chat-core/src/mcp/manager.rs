@@ -231,6 +231,62 @@ impl McpManager {
 
     pub async fn tools_for_enabled_servers(&self) -> Result<Vec<(Server, Vec<ToolInfo>)>> {
         let servers = servers::list_enabled(&self.db.pool).await?;
+        self.tools_for_server_list(servers).await
+    }
+
+    pub async fn tools_for_ids(&self, ids: &[String]) -> Result<Vec<(Server, Vec<ToolInfo>)>> {
+        let servers = servers::list_enabled(&self.db.pool).await?;
+        let servers = servers
+            .into_iter()
+            .filter(|server| ids.iter().any(|id| id == &server.id))
+            .collect();
+        self.tools_for_server_list(servers).await
+    }
+
+    pub async fn tools_for_slugs(&self, slugs: &[String]) -> Result<Vec<(Server, Vec<ToolInfo>)>> {
+        let servers = servers::list_enabled(&self.db.pool).await?;
+        let servers = servers
+            .into_iter()
+            .filter(|server| slugs.iter().any(|slug| slug == &server.slug))
+            .collect();
+        self.tools_for_server_list(servers).await
+    }
+
+    pub async fn resolve_tool(&self, slug: &str, remote_name: &str) -> Result<(Server, ToolInfo)> {
+        let server = servers::get_by_slug(&self.db.pool, slug)
+            .await?
+            .ok_or_else(|| CoreError::Message(format!("No MCP server with slug {slug:?}.")))?;
+        if !server.enabled {
+            return Err(CoreError::Message(format!(
+                "MCP server {slug:?} is disabled."
+            )));
+        }
+        if server.policy == "deny" {
+            return Err(CoreError::Message(format!(
+                "MCP server {slug:?} is denied by policy."
+            )));
+        }
+        let groups = self.tools_for_server_list(vec![server.clone()]).await?;
+        let tools = groups
+            .into_iter()
+            .next()
+            .map(|(_, tools)| tools)
+            .unwrap_or_default();
+        let tool = tools
+            .into_iter()
+            .find(|tool| tool.name == remote_name)
+            .ok_or_else(|| {
+                CoreError::Message(format!(
+                    "No tool named {remote_name:?} on MCP server {slug:?}."
+                ))
+            })?;
+        Ok((server, tool))
+    }
+
+    async fn tools_for_server_list(
+        &self,
+        servers: Vec<Server>,
+    ) -> Result<Vec<(Server, Vec<ToolInfo>)>> {
         let mut out = Vec::new();
         for server in servers {
             if server.policy == "deny" {
