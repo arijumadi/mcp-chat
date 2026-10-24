@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
 import { useApp } from "@/app/store";
 import { MessageItem } from "./MessageItem";
+import { AssistantTurn } from "./AssistantTurn";
 
 export function Transcript() {
   const messages = useApp((state) => state.messages);
@@ -22,6 +23,34 @@ export function Transcript() {
   const lastAssistant = [...visible]
     .reverse()
     .find((message) => message.role === "assistant");
+
+  const rows = useMemo(() => {
+    type Row =
+      | { kind: "user"; message: (typeof visible)[number] }
+      | { kind: "system"; message: (typeof visible)[number] }
+      | { kind: "assistant"; messages: (typeof visible)[number][] };
+    const result: Row[] = [];
+    let buffer: (typeof visible)[number][] = [];
+    const flush = () => {
+      if (buffer.length > 0) {
+        result.push({ kind: "assistant", messages: buffer });
+        buffer = [];
+      }
+    };
+    for (const message of visible) {
+      if (message.role === "user") {
+        flush();
+        result.push({ kind: "user", message });
+      } else if (message.role === "assistant") {
+        buffer.push(message);
+      } else {
+        flush();
+        result.push({ kind: "system", message });
+      }
+    }
+    flush();
+    return result;
+  }, [visible]);
 
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
     const element = container.current;
@@ -68,18 +97,43 @@ export function Transcript() {
         className="h-full overflow-y-auto"
       >
         <div className="mx-auto w-full max-w-[760px] px-6 pt-8 pb-10">
-          {visible.map((message) => (
-            <MessageItem
-              key={message.id}
-              message={message}
-              canRetry={
-                message.id === lastAssistant?.id &&
-                message.status === "error" &&
-                status !== "streaming" &&
-                status !== "thinking"
-              }
-            />
-          ))}
+          {rows.map((row) => {
+            if (row.kind === "user" || row.kind === "system") {
+              return (
+                <MessageItem
+                  key={row.message.id}
+                  message={row.message}
+                  canRetry={false}
+                />
+              );
+            }
+            const canRetry =
+              row.messages.at(-1)?.id === lastAssistant?.id &&
+              row.messages.at(-1)?.status === "error" &&
+              status !== "streaming" &&
+              status !== "thinking";
+            const hasWork = row.messages.some((message) =>
+              message.parts.some(
+                (part) => part.kind === "reasoning" || part.kind === "tool_call",
+              ),
+            );
+            if (hasWork) {
+              return (
+                <AssistantTurn
+                  key={row.messages[0]?.id ?? "turn"}
+                  messages={row.messages}
+                  canRetry={canRetry}
+                />
+              );
+            }
+            return row.messages.map((message) => (
+              <MessageItem
+                key={message.id}
+                message={message}
+                canRetry={message.id === lastAssistant?.id && canRetry}
+              />
+            ));
+          })}
           {showThinking ? (
             <div className="flex items-center gap-2 py-2 text-[13px]" style={{ color: "var(--muted)" }}>
               <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />

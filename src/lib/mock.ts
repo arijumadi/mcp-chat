@@ -131,9 +131,18 @@ export function installMock(): void {
         status: "completed",
         error: null,
         parts: [
+          {
+            id: "demo-thought",
+            messageId: assistantId,
+            idx: 0,
+            kind: "reasoning",
+            payloadJson: JSON.stringify({
+              text: "The user wants to know what MCP tools can do. I should demonstrate one read-only call.",
+            }),
+          },
           textPart(
             assistantId,
-            "I can call tools exposed by remote MCP servers. Tool calls appear as cards, with the server, arguments and result. Every call needs your approval unless you allow it.",
+            "I can call tools exposed by remote MCP servers. Let me show you with the echo tool.",
           ),
           {
             id: "demo-tool",
@@ -154,6 +163,20 @@ export function installMock(): void {
               truncated: false,
             }),
           },
+        ],
+      },
+      {
+        id: "demo-final",
+        conversationId: "demo",
+        role: "assistant",
+        createdAt: now() - 1000 * 60 * 5,
+        status: "completed",
+        error: null,
+        parts: [
+          textPart(
+            "demo-final",
+            "The tool returned `echo: hello from MCP`. Tool calls are grouped above so the transcript stays readable — click **Show details** to inspect the thoughts, arguments and full result.",
+          ),
         ],
       },
     ]);
@@ -438,9 +461,9 @@ export function installMock(): void {
     emit({ type: "message_start", conversationId, messageId: assistantId });
     emit({ type: "status", conversationId, status: "streaming", message: null });
     const partId = uid();
-    const full = `I received **${text}**. This is the mock IPC bridge, so the response is scripted. Tool cards, approvals and errors are rendered by the same UI that runs in Tauri.`;
+    const interim = "Let me check that with the echo tool.";
     let buffer = "";
-    for (const word of full.split(" ")) {
+    for (const word of interim.split(" ")) {
       if (!generating.has(conversationId)) return;
       buffer += (buffer ? " " : "") + word;
       emit({
@@ -527,11 +550,56 @@ export function installMock(): void {
       }),
     });
     if (target) target.status = "completed";
-    generating.delete(conversationId);
     emit({
       type: "message_end",
       conversationId,
       messageId: assistantId,
+      status: "completed",
+      error: null,
+    });
+
+    const finalId = uid();
+    const finalPartId = uid();
+    const finalMessage: MessageWithParts = {
+      id: finalId,
+      conversationId,
+      role: "assistant",
+      createdAt: now(),
+      status: "streaming",
+      error: null,
+      parts: [],
+    };
+    addMessage(conversationId, finalMessage);
+    emit({ type: "message_start", conversationId, messageId: finalId });
+    emit({ type: "status", conversationId, status: "streaming", message: null });
+    const finalText = `I received **${text}**. This is the mock IPC bridge, so the response is scripted. Tool cards, approvals and errors are rendered by the same UI that runs in Tauri.`;
+    let finalBuffer = "";
+    for (const word of finalText.split(" ")) {
+      if (!generating.has(conversationId)) return;
+      finalBuffer += (finalBuffer ? " " : "") + word;
+      emit({
+        type: "delta",
+        conversationId,
+        messageId: finalId,
+        partId: finalPartId,
+        deltaType: "text",
+        text: word + " ",
+      });
+      await delay(24);
+    }
+    finalMessage.parts.push({
+      id: finalPartId,
+      messageId: finalId,
+      idx: 0,
+      kind: "text",
+      payloadJson: JSON.stringify({ text: finalBuffer }),
+    });
+    finalMessage.status = "completed";
+    generating.delete(conversationId);
+    emit({
+      type: "message_end",
+      conversationId,
+      messageId: finalId,
       status: "completed",
       error: null,
     });

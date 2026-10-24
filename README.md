@@ -84,7 +84,7 @@ Everything below **was run in this repository** on Linux without a GUI/WebKit de
 ```bash
 pnpm lint          # ESLint
 pnpm typecheck     # TypeScript
-pnpm test          # Vitest: 9 tests
+pnpm test          # Vitest: 10 tests
 pnpm build         # Vite production build
 pnpm fmt:check     # cargo fmt --check
 pnpm core:test     # 24 unit + 19 agent + 6 MCP integration + 1 auth + 1 provider test = 51 Rust tests

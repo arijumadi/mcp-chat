@@ -9,15 +9,19 @@ import { cn } from "@/lib/cn";
 export function MessageItem({
   message,
   canRetry,
+  partsOverride,
+  hideThinking,
 }: {
   message: MessageWithParts;
   canRetry: boolean;
+  partsOverride?: Part[];
+  hideThinking?: boolean;
 }) {
   const regenerate = useApp((state) => state.regenerate);
   if (message.role === "tool") return null;
 
   if (message.role === "user") {
-    const text = message.parts.map(partText).join("");
+    const text = (partsOverride ?? message.parts).map(partText).join("");
     return (
       <div className="animate-in flex justify-end py-2">
         <div
@@ -30,17 +34,18 @@ export function MessageItem({
     );
   }
 
+  const parts = partsOverride ?? message.parts;
   const streaming = message.status === "streaming";
-  const textParts = message.parts.filter((part) => part.kind === "text");
+  const textParts = parts.filter((part) => part.kind === "text");
   const lastTextId = textParts.at(-1)?.id ?? null;
-  const hasVisible = message.parts.some((part) =>
+  const hasVisible = parts.some((part) =>
     ["text", "reasoning", "tool_call", "error", "summary"].includes(part.kind),
   );
 
   return (
     <div className="animate-in py-2">
-      {!hasVisible && streaming ? <Thinking /> : null}
-      {message.parts.map((part) => {
+      {!hasVisible && streaming && !hideThinking ? <Thinking /> : null}
+      {parts.map((part) => {
         if (part.kind === "text") {
           const text = partText(part);
           if (!text) return null;
@@ -125,7 +130,7 @@ export function MessageItem({
           Interrupted — the partial answer was kept.
         </div>
       ) : null}
-      {message.status === "error" && !message.parts.some((part) => part.kind === "error") ? (
+      {message.status === "error" && !parts.some((part) => part.kind === "error") ? (
         <div className="mt-1 text-[12px]" style={{ color: "var(--danger)" }}>
           {message.error ?? "The turn failed."}
         </div>

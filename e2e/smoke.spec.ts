@@ -12,6 +12,10 @@ test("boots, sends a scripted message and renders a tool card", async ({ page })
   await composer.press("Enter");
 
   await expect(page.getByText(/I received/)).toBeVisible({ timeout: 15_000 });
+  await expect(
+    page.getByRole("button", { name: /Used 1 tool/ }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /Used 1 tool/ }).click();
   await expect(page.getByText("Mock MCP").first()).toBeVisible();
   await expect(page.getByText("ok").first()).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible({
