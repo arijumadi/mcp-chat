@@ -102,7 +102,7 @@ pnpm typecheck     # TypeScript
 pnpm test          # Vitest: 16 tests
 pnpm build         # Vite production build
 pnpm fmt:check     # cargo fmt --check
-pnpm core:test     # 41 unit + 31 agent + 6 MCP integration + 1 auth + 1 provider test = 80 Rust tests
+pnpm core:test     # 42 unit + 31 agent + 6 MCP integration + 1 auth + 1 provider test = 81 Rust tests
 pnpm core:clippy   # cargo clippy -p mcp-chat-core --all-targets -- -D warnings
 pnpm mock:clippy   # same for the mock server
 pnpm test:e2e      # Playwright: 5 smoke tests against vite preview with a stubbed IPC bridge

@@ -29,6 +29,7 @@ use crate::{CoreError, Result, now_ms};
 
 const MODEL_OUTPUT_LIMIT: usize = 8_000;
 const SHELL_OUTPUT_LIMIT: usize = 12_000;
+const PS_PROLOG: &str = "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;";
 const PAGER_OUTPUT_LIMIT: usize = 100_000;
 const READ_PAGE_CHARS: usize = 50_000;
 const PREVIEW_LIMIT: usize = 4_000;
@@ -357,6 +358,40 @@ fn extract_clixml_errors(block: &str) -> String {
 
 /// PowerShell writes progress records to stderr as CLIXML when stderr is
 /// redirected. Strip those blocks, but keep serialized error text if present.
+fn strip_powershell_prolog(value: &str) -> String {
+    let needle = PS_PROLOG.as_bytes();
+    let mut output = String::new();
+    let mut rest = value;
+    loop {
+        // Ignore whitespace when locating the prolog so PowerShell's arbitrary
+        // line wrapping (and indentation) does not hide the tail.
+        let mut compact = Vec::with_capacity(rest.len());
+        let mut origins = Vec::with_capacity(rest.len());
+        for (index, ch) in rest.char_indices() {
+            if ch.is_whitespace() {
+                continue;
+            }
+            let bytes = &rest.as_bytes()[index..index + ch.len_utf8()];
+            for (offset, byte) in bytes.iter().enumerate() {
+                compact.push(*byte);
+                origins.push(index + offset);
+            }
+        }
+        let Some(position) = compact
+            .windows(needle.len())
+            .position(|window| window == needle)
+        else {
+            output.push_str(rest);
+            break;
+        };
+        let start = origins[position];
+        let end = origins[position + needle.len() - 1] + 1;
+        output.push_str(&rest[..start]);
+        rest = rest[end..].trim_start_matches(['\r', '\n']);
+    }
+    output
+}
+
 fn clean_powershell_stderr(value: &str) -> String {
     let mut output = String::new();
     let mut rest = value;
@@ -385,17 +420,8 @@ fn clean_powershell_stderr(value: &str) -> String {
         rest = &tail[block_end..];
     }
     // The encoding/progress prolog is part of the PowerShell error context on
-    // some versions. It is not part of the command's stderr.
-    output
-        .split_inclusive('\n')
-        .filter(|line| {
-            !line
-                .trim_start()
-                .starts_with("$ProgressPreference='SilentlyContinue';")
-        })
-        .collect::<String>()
-        .trim_end()
-        .to_owned()
+    // some versions, and PowerShell may wrap it across lines.
+    strip_powershell_prolog(&output).trim_end().to_owned()
 }
 
 fn normalize_shell_text(value: &str) -> String {
@@ -1530,9 +1556,7 @@ impl ToolExecutor {
             "powershell" | "pwsh" => {
                 // -EncodedCommand takes UTF-16LE/base64, so neither Rust nor
                 // PowerShell has to guess how nested quotes should be escaped.
-                let prepared = format!(
-                    "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;\n{command}"
-                );
+                let prepared = format!("{PS_PROLOG}\n{command}");
                 let encoded = base64::engine::general_purpose::STANDARD.encode(
                     prepared
                         .encode_utf16()
@@ -2476,8 +2500,14 @@ mod tests {
 
     #[test]
     fn powershell_prolog_is_filtered_from_stderr() {
-        let raw = "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=x;\nreal error";
-        assert_eq!(clean_powershell_stderr(raw), "real error");
+        let raw = format!("{PS_PROLOG}\nreal error");
+        assert_eq!(clean_powershell_stderr(&raw), "real error");
+    }
+
+    #[test]
+    fn wrapped_powershell_prolog_is_filtered_from_stderr() {
+        let wrapped = "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$OutputEncodin\ng=[Console]::OutputEncoding;\nreal error";
+        assert_eq!(clean_powershell_stderr(wrapped), "real error");
     }
 
     #[test]
