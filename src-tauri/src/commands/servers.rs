@@ -324,7 +324,26 @@ pub async fn test_server(
 ) -> CmdResult<ConnectionReport> {
     validate_server_url(&input.url).map_err(cmd_err)?;
     let headers_json = input.headers_json.clone().unwrap_or_else(|| "{}".into());
-    let headers = headers_from_json(&headers_json).map_err(cmd_err)?;
+    let mut headers = headers_from_json(&headers_json).map_err(cmd_err)?;
+    if input.auth_kind == "api_key" {
+        let mut api_key = input
+            .api_key
+            .clone()
+            .filter(|token| !token.trim().is_empty());
+        if api_key.is_none() {
+            if let Some(server_id) = input.server_id.as_deref() {
+                api_key = state
+                    .secrets
+                    .get(&server_api_key_account(server_id))
+                    .await
+                    .ok()
+                    .flatten();
+            }
+        }
+        if let Some(token) = api_key {
+            headers.insert("X-API-Key".into(), token);
+        }
+    }
     let mut bearer = input
         .bearer
         .clone()
