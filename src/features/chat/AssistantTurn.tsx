@@ -1,10 +1,5 @@
 import { useState } from "react";
-import {
-  AlertCircle,
-  ChevronDown,
-  Loader2,
-  Sparkles,
-} from "lucide-react";
+import { AlertCircle, ChevronDown, Loader2 } from "lucide-react";
 import type { MessageWithParts, Part } from "@/lib/types";
 import { parsePayload, partText } from "@/app/store";
 import { Markdown } from "@/components/Markdown";
@@ -102,7 +97,6 @@ export function AssistantTurn({
         className="focus-ring my-1.5 flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-[12.5px] transition hover:bg-[var(--panel-2)]"
         style={{ borderColor: "var(--border)", background: "var(--panel)" }}
       >
-        <Sparkles size={13} style={{ color: "var(--accent)" }} />
         <span className="font-medium">{summary}</span>
         {running ? (
           <Loader2
