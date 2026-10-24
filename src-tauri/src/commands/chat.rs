@@ -141,6 +141,7 @@ pub async fn delete_conversation(
     conversation_id: String,
 ) -> CmdResult<()> {
     state.engine.stop(&conversation_id);
+    state.engine.set_auto_approve(&conversation_id, false);
     let history = messages::list_for_conversation(&state.db.pool, &conversation_id)
         .await
         .map_err(cmd_err)?;
@@ -282,6 +283,27 @@ pub async fn revert_message(
         .revert_message(&conversation_id, &message_id)
         .await
         .map_err(cmd_err)
+}
+
+#[tauri::command]
+pub async fn set_auto_approve(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    enabled: bool,
+) -> CmdResult<bool> {
+    conversations::get(&state.db.pool, &conversation_id)
+        .await
+        .map_err(cmd_err)?;
+    state.engine.set_auto_approve(&conversation_id, enabled);
+    Ok(state.engine.auto_approve(&conversation_id))
+}
+
+#[tauri::command]
+pub async fn get_auto_approve(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> CmdResult<bool> {
+    Ok(state.engine.auto_approve(&conversation_id))
 }
 
 #[tauri::command]

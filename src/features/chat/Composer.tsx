@@ -7,6 +7,7 @@ import { formatTokens } from "@/lib/format";
 import type { Conversation } from "@/lib/types";
 import { ModelPicker } from "./ModelPicker";
 import { WorkspacePicker } from "./WorkspacePicker";
+import { AutoApproveButton } from "./AutoApproveButton";
 
 const ACTIVE: string[] = ["thinking", "streaming", "waiting_approval", "running_tool"];
 
@@ -118,6 +119,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
           <div className="mt-1 flex items-center gap-1.5 px-1">
             <ModelPicker conversation={conversation} disabled={active} />
             <WorkspacePicker conversation={conversation} disabled={active} />
+            <AutoApproveButton />
             <div className="ml-auto flex items-center gap-2">
               {active ? (
                 <button

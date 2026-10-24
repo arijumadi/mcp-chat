@@ -76,6 +76,8 @@ pub fn run() {
             commands::chat::regenerate,
             commands::chat::continue_turn,
             commands::chat::revert_message,
+            commands::chat::set_auto_approve,
+            commands::chat::get_auto_approve,
             commands::chat::stop_generation,
             commands::chat::is_generating,
             commands::chat::respond_approval,

@@ -6,7 +6,7 @@ pub mod runner;
 pub mod tools;
 pub mod types;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -34,6 +34,7 @@ pub struct ChatEngine {
     pub executor: Arc<ToolExecutor>,
     pub output_dir: PathBuf,
     turns: Mutex<HashMap<String, CancellationToken>>,
+    auto_approve: Mutex<HashSet<String>>,
 }
 
 impl ChatEngine {
@@ -65,11 +66,28 @@ impl ChatEngine {
             executor,
             output_dir,
             turns: Mutex::new(HashMap::new()),
+            auto_approve: Mutex::new(HashSet::new()),
         })
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<CoreEvent> {
         self.events.subscribe()
+    }
+
+    pub fn set_auto_approve(&self, conversation_id: &str, enabled: bool) {
+        let mut states = self.auto_approve.lock().expect("auto approve lock");
+        if enabled {
+            states.insert(conversation_id.to_owned());
+        } else {
+            states.remove(conversation_id);
+        }
+    }
+
+    pub fn auto_approve(&self, conversation_id: &str) -> bool {
+        self.auto_approve
+            .lock()
+            .expect("auto approve lock")
+            .contains(conversation_id)
     }
 
     pub fn in_flight(&self, conversation_id: &str) -> bool {

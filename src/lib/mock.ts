@@ -34,6 +34,7 @@ export function installMock(): void {
   const messages = new Map<string, MessageWithParts[]>();
   const subscribers = new Set<(event: CoreEvent) => void>();
   const generating = new Set<string>();
+  const autoApprove = new Set<string>();
   const settingsStore: Record<string, string> = {
     theme: localStorage.getItem("theme") ?? "system",
     "compaction.keep_tokens": "15000",
@@ -279,6 +280,7 @@ export function installMock(): void {
         const index = conversations.findIndex((item) => item.id === args.conversationId);
         if (index >= 0) conversations.splice(index, 1);
         messages.delete(String(args.conversationId));
+        autoApprove.delete(String(args.conversationId));
         return null;
       }
       case "get_messages":
@@ -325,6 +327,14 @@ export function installMock(): void {
         return null;
       case "is_generating":
         return generating.has(String(args.conversationId));
+      case "get_auto_approve":
+        return autoApprove.has(String(args.conversationId));
+      case "set_auto_approve": {
+        const conversationId = String(args.conversationId);
+        if (args.enabled) autoApprove.add(conversationId);
+        else autoApprove.delete(conversationId);
+        return autoApprove.has(conversationId);
+      }
       case "stop_generation": {
         generating.delete(String(args.conversationId));
         emit({

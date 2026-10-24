@@ -14,6 +14,7 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - The model picker sits in the composer footer; the trigger shows only the model name after the final `/`, and provider choices show only the provider name. Export conversation lives in Settings → Export conversation.
 - Live prompt/completion usage in the composer, step counter, automatic token-based compaction with ~15k recent-token retention and a 15%/16k buffer. After the 25-step limit the composer offers **Continue**, which resumes with a fresh step budget.
 - A per-turn loop guard stops three identical tool calls with identical results, injects a strategy-change prompt, and forces one text-only step.
+- **Auto** in the composer enables approval-free tool calls for the current chat after a warning. The state lasts until Jarvis closes. Destructive shell commands (`rm -rf`, `del`, `Remove-Item -Recurse`, `git reset --hard`, etc.) still ask for approval; explicit deny policies still win.
 - Built-in local tools available in every chat: `bash`, `edit`, `write`, `read`, `grep`, `glob`, `skill` and `question`. `bash` supports explicit `cmd`, `powershell`, `pwsh`, `sh` and `bash` shells, a per-call `cwd`, labelled stdout/stderr and echo detection; PowerShell uses `-EncodedCommand` to avoid nested-quote failures. File tools are confined to the workspace; `bash`, `edit` and `write` ask for approval by default. `question` renders a multi-question picker (options plus custom answers) and blocks the turn until answered.
 - Provider models are fetched once in the provider form and saved with the provider; the chat model picker uses that saved list. Model is optional on the provider.
 - Approval policies per server (`auto` / `ask` / `deny`), “allow once”, “always allow” rules, rejection with feedback delivered back to the model.
@@ -101,10 +102,10 @@ Everything below **was run in this repository** on Linux without a GUI/WebKit de
 ```bash
 pnpm lint          # ESLint
 pnpm typecheck     # TypeScript
-pnpm test          # Vitest: 17 tests
+pnpm test          # Vitest: 18 tests
 pnpm build         # Vite production build
 pnpm fmt:check     # cargo fmt --check
-pnpm core:test     # 45 unit + 31 agent + 6 MCP integration + 1 auth + 1 provider test = 84 Rust tests
+pnpm core:test     # 47 unit + 32 agent + 6 MCP integration + 1 auth + 1 provider test = 87 Rust tests
 pnpm core:clippy   # cargo clippy -p mcp-chat-core --all-targets -- -D warnings
 pnpm mock:clippy   # same for the mock server
 pnpm test:e2e      # Playwright: 5 smoke tests against vite preview with a stubbed IPC bridge
@@ -112,7 +113,7 @@ pnpm test:e2e      # Playwright: 5 smoke tests against vite preview with a stubb
 
 `pnpm check` runs all of the above except Playwright.
 
-The Rust tests cover the acceptance matrix: split tool arguments, two parallel calls, invalid arguments, unknown tools, `finish_reason: length`, a cut stream, context overflow + compaction, manual compaction/context status, per-chat server selection, lazy MCP catalog/schema/call, batch execute, read_tool_output paging, built-in file/shell/search/skill tools, shell output labels/echo handling, shell-not-found errors, CLIXML cleanup, prompt composition, AGENTS/skill catalog, built-in question round trip, loop guard, continue-turn resume, default/custom system prompt, cache-stable timestamps in user turns, revert-to-composer, unknown finish reason, policy denial, user rejection with feedback, crash sweep, progress notifications, MRTR elicitation, output spill/paging, max steps, cancellation during a tool, and retryable provider errors.
+The Rust tests cover the acceptance matrix: split tool arguments, two parallel calls, invalid arguments, unknown tools, `finish_reason: length`, a cut stream, context overflow + compaction, manual compaction/context status, per-chat server selection, lazy MCP catalog/schema/call, batch execute, read_tool_output paging, built-in file/shell/search/skill tools, shell output labels/echo handling, shell-not-found errors, CLIXML cleanup, prompt composition, AGENTS/skill catalog, auto-approve/dangerous-command guard, built-in question round trip, loop guard, continue-turn resume, default/custom system prompt, cache-stable timestamps in user turns, revert-to-composer, unknown finish reason, policy denial, user rejection with feedback, crash sweep, progress notifications, MRTR elicitation, output spill/paging, max steps, cancellation during a tool, and retryable provider errors.
 
 **What is not verified on this machine:** the Tauri shell itself could not be compiled or launched here because the machine has no WebKit/GTK development headers and no display. `pnpm tauri dev` is the intended path on a desktop with the prerequisites above. The frontend was verified in a browser through Playwright using a stubbed IPC bridge; screenshots are from that harness, not the native window. No real provider API key was used for automated tests; the keychain path is exercised with an in-memory store in tests.
 

@@ -43,6 +43,7 @@ export interface AppStore {
   usage: UsageEvent | null;
   step: { current: number; max: number } | null;
   limitReached: boolean;
+  autoApprove: boolean;
   toasts: Toast[];
   searchHits: SearchHit[];
   searching: boolean;
@@ -58,6 +59,7 @@ export interface AppStore {
   stop: () => Promise<void>;
   regenerate: () => Promise<void>;
   continueTurn: () => Promise<void>;
+  setAutoApprove: (enabled: boolean) => Promise<void>;
   revertMessage: (messageId: string) => Promise<void>;
   setModel: (providerId: string, model: string) => Promise<void>;
   setConversationWorkspace: (conversationId: string, workspaceRoot: string) => Promise<void>;
@@ -101,6 +103,7 @@ export const useApp = create<AppStore>()((set, get) => ({
   usage: null,
   step: null,
   limitReached: false,
+  autoApprove: false,
   toasts: [],
   searchHits: [],
   searching: false,
@@ -184,9 +187,14 @@ export const useApp = create<AppStore>()((set, get) => ({
       usage: null,
       step: null,
       limitReached: false,
+      autoApprove: false,
       draft: "",
     });
     await get().reloadActive();
+    const autoApprove = await call<boolean>("get_auto_approve", {
+      conversationId: id,
+    }).catch(() => false);
+    if (get().activeId === id) set({ autoApprove });
     const conversation = get().conversations.find((item) => item.id === id);
     if (conversation) {
       document.title = `${conversation.title} · Jarvis`;
@@ -213,6 +221,7 @@ export const useApp = create<AppStore>()((set, get) => ({
         usage: null,
         step: null,
         limitReached: false,
+        autoApprove: false,
       }));
     } catch (error) {
       get().toast(String(error), "error");
@@ -363,6 +372,26 @@ export const useApp = create<AppStore>()((set, get) => ({
     }
   },
 
+  async setAutoApprove(enabled) {
+    const conversationId = get().activeId;
+    if (!conversationId) return;
+    try {
+      const next = await call<boolean>("set_auto_approve", {
+        conversationId,
+        enabled,
+      });
+      set({ autoApprove: next });
+      get().toast(
+        next
+          ? "Auto-approve enabled for this chat. Dangerous shell commands still require approval."
+          : "Auto-approve disabled.",
+        "info",
+      );
+    } catch (error) {
+      get().toast(String(error), "error");
+    }
+  },
+
   async setConversationWorkspace(conversationId, workspaceRoot) {
     const resolved = await call<string>("set_conversation_workspace", {
       conversationId,
@@ -411,6 +440,7 @@ export const useApp = create<AppStore>()((set, get) => ({
           usage: null,
           step: null,
           limitReached: false,
+          autoApprove: false,
         });
       }
       await get().refreshConversations();

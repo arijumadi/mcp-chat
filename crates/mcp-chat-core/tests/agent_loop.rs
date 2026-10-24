@@ -1167,3 +1167,18 @@ async fn continue_turn_adds_a_hidden_resume_prompt() {
             .contains("Hello from the mock provider.")
     );
 }
+
+#[tokio::test]
+async fn auto_approve_bypasses_an_ask_policy() {
+    let h = Harness::new("mock-tool", Some("ask"), 0).await;
+    h.engine.set_auto_approve(&h.conversation_id, true);
+    let events = h
+        .send_and_wait("use echo", ApprovalDecision::Once, None, "ari")
+        .await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, CoreEvent::Approval { .. }))
+    );
+    assert!(h.assistant_text().await.contains("Tool turn complete."));
+}
