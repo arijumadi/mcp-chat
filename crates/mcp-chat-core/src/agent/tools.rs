@@ -301,6 +301,92 @@ fn glob_matcher(pattern: &str) -> Result<globset::GlobMatcher> {
         .map_err(|error| CoreError::invalid(format!("Invalid glob: {error}")))
 }
 
+fn shell_launch_error(shell: &str, error: std::io::Error) -> CoreError {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        CoreError::Message(format!(
+            "Shell '{shell}' was not found on this system. Install it or choose another shell (cmd, powershell, pwsh, sh or bash)."
+        ))
+    } else {
+        CoreError::Message(format!("Shell '{shell}' could not be started: {error}"))
+    }
+}
+
+fn decode_clixml_escapes(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut output = String::with_capacity(value.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'_'
+            && index + 7 <= bytes.len()
+            && bytes[index + 1] == b'x'
+            && bytes[index + 6] == b'_'
+        {
+            let hex = &value[index + 2..index + 6];
+            if hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                if let Ok(code) = u32::from_str_radix(hex, 16) {
+                    if let Some(ch) = char::from_u32(code) {
+                        output.push(ch);
+                        index += 7;
+                        continue;
+                    }
+                }
+            }
+        }
+        let ch = value[index..].chars().next().expect("valid utf-8");
+        output.push(ch);
+        index += ch.len_utf8();
+    }
+    output
+}
+
+fn extract_clixml_errors(block: &str) -> String {
+    let mut output = String::new();
+    let mut rest = block;
+    while let Some(start) = rest.find("<S S=\"Error\">") {
+        let after = &rest[start + "<S S=\"Error\">".len()..];
+        let Some(end) = after.find("</S>") else {
+            break;
+        };
+        let text = decode_clixml_escapes(&after[..end]);
+        output.push_str(text.trim_end());
+        output.push('\n');
+        rest = &after[end + "</S>".len()..];
+    }
+    output
+}
+
+/// PowerShell writes progress records to stderr as CLIXML when stderr is
+/// redirected. Strip those blocks, but keep serialized error text if present.
+fn clean_powershell_stderr(value: &str) -> String {
+    let mut output = String::new();
+    let mut rest = value;
+    loop {
+        let marker = rest.find("#< CLIXML");
+        let block = rest.find("<Objs");
+        let start = match (marker, block) {
+            (Some(marker), Some(block)) => marker.min(block),
+            (Some(marker), None) => marker,
+            (None, Some(block)) => block,
+            (None, None) => {
+                output.push_str(rest);
+                break;
+            }
+        };
+        output.push_str(&rest[..start]);
+        let tail = &rest[start..];
+        let Some(objects) = tail.find("<Objs") else {
+            break;
+        };
+        let Some(end) = tail[objects..].find("</Objs>") else {
+            break;
+        };
+        let block_end = objects + end + "</Objs>".len();
+        output.push_str(&extract_clixml_errors(&tail[objects..block_end]));
+        rest = &tail[block_end..];
+    }
+    decode_clixml_escapes(output.trim_end())
+}
+
 fn normalize_shell_text(value: &str) -> String {
     value
         .trim()
@@ -1427,7 +1513,7 @@ impl ToolExecutor {
                 // -EncodedCommand takes UTF-16LE/base64, so neither Rust nor
                 // PowerShell has to guess how nested quotes should be escaped.
                 let prepared = format!(
-                    "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;\n{command}"
+                    "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;\n{command}"
                 );
                 let encoded = base64::engine::general_purpose::STANDARD.encode(
                     prepared
@@ -1468,7 +1554,13 @@ impl ToolExecutor {
 
         let output =
             match tokio::time::timeout(Duration::from_millis(timeout_ms), child.output()).await {
-                Ok(result) => result,
+                Ok(Ok(output)) => output,
+                Ok(Err(error)) => {
+                    if let Some(path) = cleanup {
+                        let _ = tokio::fs::remove_file(path).await;
+                    }
+                    return Err(shell_launch_error(shell, error));
+                }
                 Err(_) => {
                     if let Some(path) = cleanup {
                         let _ = tokio::fs::remove_file(path).await;
@@ -1481,9 +1573,13 @@ impl ToolExecutor {
         if let Some(path) = cleanup {
             let _ = tokio::fs::remove_file(path).await;
         }
-        let output = output?;
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr_raw = String::from_utf8_lossy(&output.stderr);
+        let stderr = if matches!(shell, "powershell" | "pwsh") {
+            clean_powershell_stderr(&stderr_raw)
+        } else {
+            stderr_raw.into_owned()
+        };
         let echoed = shell_echoed(command, &stdout);
         let exit = output
             .status
@@ -2324,6 +2420,25 @@ mod tests {
         assert_eq!(builtin_default_effect("write"), Effect::Ask);
         assert_eq!(builtin_default_effect("read"), Effect::Allow);
         assert_eq!(builtin_default_effect("question"), Effect::Allow);
+    }
+
+    #[test]
+    fn powershell_progress_clixml_is_removed() {
+        let raw = "#< CLIXML\n<Objs Version=\"1.1.0.1\"><Obj S=\"progress\"><MS><AV>Preparing modules for first use.</AV></MS></Obj></Objs>\n";
+        assert_eq!(clean_powershell_stderr(raw), "");
+    }
+
+    #[test]
+    fn powershell_error_clixml_is_preserved_and_decoded() {
+        let raw = "#< CLIXML\n<Objs Version=\"1.1.0.1\"><Obj S=\"error\"><S S=\"Error\">boom_x000D__x000A_after</S></Obj></Objs>";
+        let cleaned = clean_powershell_stderr(raw);
+        assert!(cleaned.contains("boom\r\nafter"));
+    }
+
+    #[test]
+    fn missing_shell_has_a_clear_error() {
+        let error = shell_launch_error("bash", std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert!(error.user_message().contains("Shell 'bash' was not found"));
     }
 
     #[test]
