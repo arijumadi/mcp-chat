@@ -73,7 +73,9 @@ test("captures README screenshots", async ({ page }) => {
   await expect(page.getByText("What can you do with MCP tools?")).toBeVisible();
   await page.getByRole("button", { name: /Tools/ }).click();
   await expect(page.getByText("MCP servers for this chat")).toBeVisible();
-  await expect(page.getByText("Context estimate")).toBeVisible();
+  await expect(page.getByText("Tool delivery")).toHaveCount(0);
+  await expect(page.getByText("Context estimate")).toHaveCount(0);
+  await expect(page.getByText("Compact now")).toHaveCount(0);
   await page.getByRole("button", { name: /Tools/ }).click();
   await page.getByText("What can you do with MCP tools?").click();
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());

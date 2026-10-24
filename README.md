@@ -10,8 +10,8 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - Local SQLite transcripts with full-text search, inline rename, delete, regenerate and stop.
 - Remote MCP over **Streamable HTTP 2026-07-28** (stateless headers, `server/discover`, request-scoped SSE progress, MRTR input), with legacy **2025-11-25** `initialize` fallback and deprecated **HTTP+SSE** fallback.
 - The model can call discovered MCP tools inside a normal turn. Tool calls and reasoning are grouped into a collapsible “Used N tools · N thoughts” summary with the final answer below; detail cards stream live (`queued → running → ok / error`) and run in parallel (max 4). Any text the model emits before a tool call stays in the stored message for context but is not rendered as an interim note — detail cards show only thoughts and tools.
-- Per-chat MCP server selection and **direct vs lazy** tool delivery. New chats default to lazy mode: a compact server/tool/argument catalog goes in the system prompt, and the model calls `mcp_call_tool` directly (`mcp_get_tool_schema` only when it needs full JSON Schema; `mcp_search_tools` only when the catalog is truncated). `mcp_execute` runs up to 8 independent MCP calls in one step (4 in flight), so a multi-tool answer does not need many model round trips. Approval and policy checks still apply to each real target.
-- Context meter per chat, live prompt/completion usage in the composer, manual compaction, token-based retention (~15k recent by default) and a 15%/16k compaction buffer.
+- Per-chat MCP server selection with **lazy catalog + call** delivery. The Tools popover only selects which servers are active; there is no direct-schema mode. A compact server/tool/argument catalog goes in the system prompt, and the model calls `mcp_call_tool` directly (`mcp_get_tool_schema` only when it needs full JSON Schema; `mcp_search_tools` only when the catalog is truncated). `mcp_execute` runs up to 8 independent MCP calls in one step (4 in flight), so a multi-tool answer does not need many model round trips. Approval and policy checks still apply to each real target.
+- Live prompt/completion usage in the composer, plus automatic token-based compaction with ~15k recent-token retention and a 15%/16k buffer.
 - Provider models are fetched once in the provider form and saved with the provider; the chat model picker uses that saved list. Model is optional on the provider.
 - Approval policies per server (`auto` / `ask` / `deny`), “allow once”, “always allow” rules, rejection with feedback delivered back to the model.
 - Tool output is capped at 8k characters for the model, the full payload spills to disk, and a built-in `read_tool_output` tool pages it back in 50k-character chunks without re-truncating the page.
@@ -26,12 +26,9 @@ Not in this batch: OAuth 2.1/DCR (M6) and packaging (M7). Static bearer tokens a
 
 ## Tool loading and context
 
-Use the **Tools** button in the chat header to choose which MCP servers this conversation may use and how their tools are delivered. New conversations default to **lazy**; existing conversations are migrated to lazy once and can be switched back:
+Use the **Tools** button in the chat header only to choose which MCP servers this conversation may use. Tool delivery is always **lazy catalog + call**: the model gets a compact catalog of servers, tool names, short descriptions and argument summaries, plus `mcp_call_tool`, `mcp_get_tool_schema` and `mcp_execute`. It calls one target directly, or batches up to 8 independent targets in a single `mcp_execute` call; it only falls back to `mcp_search_tools` if the catalog was truncated. This avoids the old search→schema→call loop. Approvals and server policy still apply to every real target.
 
-- **Direct schemas** — every tool from the selected servers is sent to the model on every step. Best for small catalogs.
-- **Lazy catalog + call** — the model gets a compact catalog of servers, tool names, short descriptions and argument summaries, plus `mcp_call_tool`, `mcp_get_tool_schema` and `mcp_execute`. It calls one target directly, or batches up to 8 independent targets in a single `mcp_execute` call; it only falls back to `mcp_search_tools` if the catalog was truncated. This avoids the old search→schema→call loop. Approvals and server policy still apply to every real target.
-
-The same panel shows an approximate context meter, the automatic compaction threshold, and a **Compact now** action. The composer also shows live prompt/completion usage while a turn runs. Context defaults mirror OpenCode V2: keep the most recent ~15k tokens, compact with a 15%-of-window buffer (minimum 16k). Both values are configurable in **Settings → Context management**.
+The composer shows live prompt/completion usage. Compaction is automatic using the thresholds in **Settings → Context management** (keep the most recent ~15k tokens, 15%-of-window buffer with a 16k floor); there is no manual compact button.
 
 ## Quickstart
 
