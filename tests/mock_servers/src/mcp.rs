@@ -31,6 +31,7 @@ pub struct McpState {
     pub mode: McpMode,
     pub requests: Arc<Mutex<Vec<CapturedRequest>>>,
     pub sse: Arc<Mutex<Option<broadcast::Sender<String>>>>,
+    pub required_api_key: Option<String>,
 }
 
 pub struct MockMcp {
@@ -49,11 +50,20 @@ pub async fn start(mode: McpMode) -> MockMcp {
     start_at(mode, 0).await
 }
 
+pub async fn start_with_api_key(mode: McpMode, api_key: &str) -> MockMcp {
+    start_at_with_key(mode, 0, Some(api_key.to_owned())).await
+}
+
 pub async fn start_at(mode: McpMode, port: u16) -> MockMcp {
+    start_at_with_key(mode, port, None).await
+}
+
+async fn start_at_with_key(mode: McpMode, port: u16, required_api_key: Option<String>) -> MockMcp {
     let state = McpState {
         mode,
         requests: Arc::new(Mutex::new(Vec::new())),
         sse: Arc::new(Mutex::new(None)),
+        required_api_key,
     };
     let app = Router::new()
         .route("/mcp", post(mcp_post))

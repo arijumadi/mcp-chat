@@ -16,7 +16,7 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - Markdown with code blocks (language label, copy, horizontal scroll), tables, reasoning sections and a strict no-raw-HTML renderer.
 - Providers, keys and MCP servers are managed from the UI. API keys live in the OS keychain; the webview never receives them back.
 
-Not in this batch: OAuth 2.1/DCR (M6) and packaging (M7). Static bearer tokens for MCP work.
+Not in this batch: OAuth 2.1/DCR (M6) and packaging (M7). Static bearer tokens and an `X-API-Key` header (stored in the OS keychain) for MCP work.
 
 ## Quickstart
 
@@ -87,7 +87,7 @@ pnpm typecheck     # TypeScript
 pnpm test          # Vitest: 9 tests
 pnpm build         # Vite production build
 pnpm fmt:check     # cargo fmt --check
-pnpm core:test     # 23 unit + 19 agent + 6 MCP integration + 1 provider test = 49 Rust tests
+pnpm core:test     # 24 unit + 19 agent + 6 MCP integration + 1 auth + 1 provider test = 51 Rust tests
 pnpm core:clippy   # cargo clippy -p mcp-chat-core --all-targets -- -D warnings
 pnpm mock:clippy   # same for the mock server
 pnpm test:e2e      # Playwright: 4 smoke tests against vite preview with a stubbed IPC bridge

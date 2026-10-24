@@ -91,6 +91,10 @@ pub fn server_bearer_account(server_id: &str) -> String {
     format!("server:{server_id}:bearer")
 }
 
+pub fn server_api_key_account(server_id: &str) -> String {
+    format!("server:{server_id}:api_key")
+}
+
 pub fn oauth_account(server_id: &str, issuer: &str, suffix: &str) -> String {
     format!("oauth:{issuer}:{server_id}:{suffix}")
 }

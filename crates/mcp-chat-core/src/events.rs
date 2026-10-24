@@ -3,7 +3,11 @@ use serde_json::Value;
 
 /// Events emitted by the core and forwarded to the webview by the Tauri shell.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum CoreEvent {
     Status {
         conversation_id: String,
@@ -71,4 +75,38 @@ pub enum TurnStatus {
     RunningTool,
     Idle,
     Error,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn event_fields_are_camel_case_for_the_webview() {
+        let delta = CoreEvent::Delta {
+            conversation_id: "c1".into(),
+            message_id: "m1".into(),
+            part_id: "p1".into(),
+            delta_type: "text".into(),
+            text: "hello".into(),
+        };
+        let value = serde_json::to_value(delta).unwrap();
+        assert_eq!(value["type"], "delta");
+        assert_eq!(value["conversationId"], "c1");
+        assert_eq!(value["messageId"], "m1");
+        assert_eq!(value["partId"], "p1");
+        assert_eq!(value["deltaType"], "text");
+
+        let approval = CoreEvent::Approval {
+            conversation_id: "c1".into(),
+            call_id: "call1".into(),
+            server: "Mock".into(),
+            tool: "echo".into(),
+            args: json!({"text": "hi"}),
+        };
+        let value = serde_json::to_value(approval).unwrap();
+        assert_eq!(value["callId"], "call1");
+        assert_eq!(value["conversationId"], "c1");
+    }
 }

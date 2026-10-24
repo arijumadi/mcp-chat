@@ -59,7 +59,7 @@ export interface ProviderView extends Provider {
 }
 
 export type ServerPolicy = "auto" | "ask" | "deny";
-export type AuthKind = "none" | "bearer" | "oauth";
+export type AuthKind = "none" | "bearer" | "api_key" | "oauth";
 export type TransportKind = "streamable_http" | "legacy_http" | "sse";
 
 export interface Server {
@@ -88,6 +88,7 @@ export interface Server {
 
 export interface ServerView extends Server {
   hasBearer: boolean;
+  hasApiKey: boolean;
   toolCount: number;
 }
 
@@ -312,6 +313,7 @@ export interface ServerInput {
   headersJson: string;
   policy: string;
   bearer?: string;
+  apiKey?: string;
   transport?: string;
 }
 
@@ -322,5 +324,6 @@ export interface TestServerInput {
   authKind: string;
   headersJson: string;
   bearer?: string;
+  apiKey?: string;
   transport?: string;
 }

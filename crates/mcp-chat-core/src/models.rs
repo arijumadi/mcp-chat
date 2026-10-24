@@ -132,6 +132,7 @@ impl ServerPolicy {
 pub enum AuthKind {
     None,
     Bearer,
+    ApiKey,
     Oauth,
 }
 
@@ -140,6 +141,7 @@ impl AuthKind {
         match self {
             Self::None => "none",
             Self::Bearer => "bearer",
+            Self::ApiKey => "api_key",
             Self::Oauth => "oauth",
         }
     }
@@ -148,6 +150,7 @@ impl AuthKind {
         match value {
             "none" => Some(Self::None),
             "bearer" => Some(Self::Bearer),
+            "api_key" => Some(Self::ApiKey),
             "oauth" => Some(Self::Oauth),
             _ => None,
         }
@@ -186,6 +189,7 @@ pub struct ServerView {
     #[serde(flatten)]
     pub server: Server,
     pub has_bearer: bool,
+    pub has_api_key: bool,
     pub tool_count: usize,
 }
 

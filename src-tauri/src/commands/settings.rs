@@ -6,7 +6,9 @@ use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
 use mcp_chat_core::db::repo::{conversations, permissions, providers, servers, settings};
-use mcp_chat_core::secrets::{oauth_account, provider_account, server_bearer_account};
+use mcp_chat_core::secrets::{
+    oauth_account, provider_account, server_api_key_account, server_bearer_account,
+};
 
 use crate::error::{CmdResult, cmd_err};
 use crate::state::AppState;
@@ -70,6 +72,10 @@ pub async fn delete_all_data(state: State<'_, AppState>) -> CmdResult<()> {
         let _ = state
             .secrets
             .delete(&server_bearer_account(&server.id))
+            .await;
+        let _ = state
+            .secrets
+            .delete(&server_api_key_account(&server.id))
             .await;
         if let Some(issuer) = &server.oauth_issuer {
             for suffix in ["access_token", "refresh_token", "client_secret"] {

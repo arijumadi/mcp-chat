@@ -10,7 +10,7 @@ use mcp_chat_core::mcp::client::{headers_from_json, validate_server_url};
 use mcp_chat_core::mcp::manager::ConnectionReport;
 use mcp_chat_core::mcp::types::{CallToolResult, TransportKind};
 use mcp_chat_core::models::{AuthKind, Server, ServerPolicy, ServerView};
-use mcp_chat_core::secrets::server_bearer_account;
+use mcp_chat_core::secrets::{server_api_key_account, server_bearer_account};
 use mcp_chat_core::util::slugify;
 
 use crate::error::{CmdResult, cmd_err};
@@ -25,6 +25,7 @@ pub struct ServerInput {
     pub headers_json: Option<String>,
     pub policy: String,
     pub bearer: Option<String>,
+    pub api_key: Option<String>,
     pub transport: Option<String>,
 }
 
@@ -37,6 +38,7 @@ pub struct TestServerInput {
     pub auth_kind: String,
     pub headers_json: Option<String>,
     pub bearer: Option<String>,
+    pub api_key: Option<String>,
     pub transport: Option<String>,
 }
 
@@ -92,6 +94,17 @@ async fn view(state: &AppState, server: Server) -> ServerView {
     } else {
         false
     };
+    let has_api_key = if server.auth_kind == "api_key" {
+        state
+            .secrets
+            .get(&server_api_key_account(&server.id))
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+    } else {
+        false
+    };
     let tool_count = server
         .tools_json
         .as_deref()
@@ -101,6 +114,7 @@ async fn view(state: &AppState, server: Server) -> ServerView {
     ServerView {
         server,
         has_bearer,
+        has_api_key,
         tool_count,
     }
 }
@@ -149,6 +163,19 @@ pub async fn create_server(
             state
                 .secrets
                 .set(&server_bearer_account(&server.id), token.trim())
+                .await
+                .map_err(cmd_err)?;
+        }
+    }
+    if input.auth_kind == "api_key" {
+        if let Some(token) = input
+            .api_key
+            .as_deref()
+            .filter(|token| !token.trim().is_empty())
+        {
+            state
+                .secrets
+                .set(&server_api_key_account(&server.id), token.trim())
                 .await
                 .map_err(cmd_err)?;
         }
@@ -203,6 +230,31 @@ pub async fn update_server(
                 .map_err(cmd_err)?;
         }
     }
+    if input.auth_kind == "api_key" {
+        if let Some(token) = input
+            .api_key
+            .as_deref()
+            .filter(|token| !token.trim().is_empty())
+        {
+            state
+                .secrets
+                .set(&server_api_key_account(&server_id), token.trim())
+                .await
+                .map_err(cmd_err)?;
+        }
+    }
+    if input.auth_kind != "bearer" {
+        let _ = state
+            .secrets
+            .delete(&server_bearer_account(&server_id))
+            .await;
+    }
+    if input.auth_kind != "api_key" {
+        let _ = state
+            .secrets
+            .delete(&server_api_key_account(&server_id))
+            .await;
+    }
     state.mcp.invalidate(&server_id).await;
     let _ = state.mcp.refresh_tools(&server_id).await;
     let update = servers::get(&state.db.pool, &server_id)
@@ -252,6 +304,11 @@ pub async fn delete_server(state: State<'_, AppState>, server_id: String) -> Cmd
     state
         .secrets
         .delete(&server_bearer_account(&server_id))
+        .await
+        .ok();
+    state
+        .secrets
+        .delete(&server_api_key_account(&server_id))
         .await
         .ok();
     state.mcp.invalidate(&server_id).await;

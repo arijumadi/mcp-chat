@@ -25,6 +25,7 @@ export function ServerForm({
     headersJson: "{}",
     policy: "ask",
     bearer: "",
+    apiKey: "",
     transport: "streamable_http",
   });
   const [report, setReport] = useState<ConnectionReport | null>(null);
@@ -44,6 +45,7 @@ export function ServerForm({
         headersJson: server.headersJson,
         policy: server.policy,
         bearer: "",
+        apiKey: "",
         transport: server.transport === "sse" ? "sse" : "streamable_http",
       });
     } else {
@@ -54,6 +56,7 @@ export function ServerForm({
         headersJson: "{}",
         policy: "ask",
         bearer: "",
+        apiKey: "",
         transport: "streamable_http",
       });
     }
@@ -74,6 +77,7 @@ export function ServerForm({
         authKind: form.authKind,
         headersJson: form.headersJson,
         bearer: form.bearer,
+        apiKey: form.apiKey,
         transport: form.transport,
       };
       const result = await call<ConnectionReport>("test_server", { input });
@@ -97,6 +101,7 @@ export function ServerForm({
         ...form,
         headersJson: form.headersJson.trim() || "{}",
         bearer: form.bearer?.trim() || undefined,
+        apiKey: form.apiKey?.trim() || undefined,
       };
       if (server) {
         await call("update_server", { serverId: server.id, input });
@@ -210,6 +215,7 @@ export function ServerForm({
               style={{ borderColor: "var(--border)", background: "var(--panel)" }}
             >
               <option value="none">None</option>
+              <option value="api_key">API key header (X-API-Key)</option>
               <option value="bearer">Static bearer token</option>
               <option value="oauth" disabled>
                 OAuth (next milestone)
@@ -232,22 +238,35 @@ export function ServerForm({
           </label>
         </div>
 
-        {form.authKind === "bearer" ? (
+        {form.authKind === "bearer" || form.authKind === "api_key" ? (
           <label className="block">
             <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
-              Bearer token
+              {form.authKind === "api_key" ? "X-API-Key value" : "Bearer token"}
             </span>
             <input
               type="password"
-              value={form.bearer ?? ""}
-              onChange={(event) => set("bearer", event.target.value)}
-              placeholder={server?.hasBearer ? "Saved — leave blank to keep" : "token"}
+              value={form.authKind === "api_key" ? (form.apiKey ?? "") : (form.bearer ?? "")}
+              onChange={(event) =>
+                set(form.authKind === "api_key" ? "apiKey" : "bearer", event.target.value)
+              }
+              placeholder={
+                form.authKind === "api_key"
+                  ? server?.hasApiKey
+                    ? "Saved — leave blank to keep"
+                    : "key from stock.arjum.com"
+                  : server?.hasBearer
+                    ? "Saved — leave blank to keep"
+                    : "token"
+              }
               className={inputClass}
               style={{ borderColor: "var(--border)" }}
               autoComplete="off"
             />
             <span className={hintClass} style={{ color: "var(--faint)" }}>
               Stored in the OS keychain, never in SQLite.
+              {form.authKind === "api_key"
+                ? " Sent as the X-API-Key header on every MCP request."
+                : ""}
             </span>
           </label>
         ) : null}

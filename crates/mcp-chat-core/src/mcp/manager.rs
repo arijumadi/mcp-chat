@@ -10,7 +10,7 @@ use crate::db::repo::servers;
 use crate::mcp::client::{ClientConfig, McpClient, McpConnection, ProgressFn, headers_from_json};
 use crate::mcp::types::{ServerCapabilities, ServerInfo, ToolInfo, TransportKind};
 use crate::models::Server;
-use crate::secrets::{SecretStore, server_bearer_account};
+use crate::secrets::{SecretStore, server_api_key_account, server_bearer_account};
 use crate::{CoreError, MCP_LEGACY_VERSION, Result, now_ms};
 
 pub struct McpManager {
@@ -133,7 +133,7 @@ impl McpManager {
     }
 
     async fn client_config(&self, server: &Server) -> Result<ClientConfig> {
-        let headers = headers_from_json(&server.headers_json)?;
+        let mut headers = headers_from_json(&server.headers_json)?;
         let bearer = match server.auth_kind.as_str() {
             "none" => None,
             "bearer" => {
@@ -147,6 +147,16 @@ impl McpManager {
                         )
                     })?
                     .into()
+            }
+            "api_key" => {
+                let account = server_api_key_account(&server.id);
+                let token = self.secrets.get(&account).await?.ok_or_else(|| {
+                    CoreError::Message(
+                        "This server needs an X-API-Key. Add it on the server card.".into(),
+                    )
+                })?;
+                headers.insert("X-API-Key".into(), token);
+                None
             }
             "oauth" => {
                 let issuer = server.oauth_issuer.as_deref().ok_or_else(|| {

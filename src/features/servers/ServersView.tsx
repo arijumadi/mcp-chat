@@ -238,6 +238,9 @@ export function ServersView() {
                             {server.authKind === "bearer" && !server.hasBearer
                               ? " (missing token)"
                               : ""}
+                            {server.authKind === "api_key" && !server.hasApiKey
+                              ? " (missing X-API-Key)"
+                              : ""}
                           </span>
                           {server.lastError ? (
                             <>

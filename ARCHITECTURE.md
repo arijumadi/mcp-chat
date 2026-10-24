@@ -125,7 +125,7 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 ## Known gaps
 
 - **Tauri shell is not compiled/launched in this environment.** The host lacks `libwebkit2gtk-4.1-dev`, GTK development headers, a display and sudo. The core and renderer are verified; the shell is intended for a desktop with the README prerequisites.
-- **M6 OAuth is not implemented.** Static bearer tokens work; the OAuth option is disabled. `oauth_issuer`/`oauth_client_id` columns are reserved, and `McpManager` already looks up tokens by issuer, but there is no DCR/PKCE/loopback/refresh flow yet.
+- **M6 OAuth is not implemented.** Static bearer tokens and per-server `X-API-Key` headers (value in the OS keychain) work; the OAuth option is disabled. `oauth_issuer`/`oauth_client_id` columns are reserved, and `McpManager` already looks up tokens by issuer, but there is no DCR/PKCE/loopback/refresh flow yet.
 - **M7 packaging is not implemented.** No AppImage/deb/dmg build was produced; `tauri.conf.json` is configured but packaging needs a desktop toolchain.
 - **Legacy Streamable HTTP does not open the optional GET notification stream.** Responses to POST requests are handled; server-initiated messages on a legacy GET stream are not consumed.
 - **`subscriptions/listen` is not implemented.** The `MCP_SUBSCRIPTIONS=1` path and `toolsListChanged` invalidation are deferred.

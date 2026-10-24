@@ -74,6 +74,7 @@ export function installMock(): void {
       oauthClientId: null,
       negotiatedAt: now(),
       hasBearer: false,
+      hasApiKey: false,
       toolCount: 1,
     },
   ];
@@ -375,6 +376,7 @@ export function installMock(): void {
           toolsJson: JSON.stringify([TOOL]),
           toolCount: 1,
           hasBearer: Boolean(input.bearer),
+          hasApiKey: Boolean(input.apiKey),
         };
         servers.push(server);
         return server;
