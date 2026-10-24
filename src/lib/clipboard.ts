@@ -18,3 +18,20 @@ export async function copyText(text: string): Promise<void> {
   area.remove();
   if (!copied) throw new Error("Copy failed");
 }
+
+export async function copyRich(text: string, html: string): Promise<void> {
+  if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/plain": new Blob([text], { type: "text/plain" }),
+          "text/html": new Blob([html], { type: "text/html" }),
+        }),
+      ]);
+      return;
+    } catch {
+      // Fall back to plain text if the platform rejects rich clipboard data.
+    }
+  }
+  await copyText(text);
+}

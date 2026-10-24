@@ -19,7 +19,7 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - Markdown with code blocks (language label, copy, horizontal scroll), tables, reasoning sections and a strict no-raw-HTML renderer.
 - Default system prompt is **Jarvis**, still editable and resettable in Settings.
 - The model receives the local day, date, hour and minute (minute precision) stamped on each user message. Time is injected into the user turn, not the system prompt, so the system + tool catalog prefix stays byte-identical. The timestamp is rendered once at send time and stored as a hidden `time` part, so historical user messages stay byte-identical across later requests; the UI never shows that raw marker.
-- Hovering a user message shows its local date and time below the bubble. Hovering any user or assistant message reveals **Copy**; user messages also show **Revert**, which removes that message and everything after it, then puts the original text back in the composer for editing and resending.
+- Hovering a user message shows its local date and time below the bubble. Hovering any user or assistant message reveals **Copy**; assistant Markdown is copied as rendered rich HTML plus rendered plain text, so pasting into Word/Docs keeps headings, bold, lists, tables and code blocks. User messages also show **Revert**, which removes that message and everything after it, then puts the original text back in the composer for editing and resending.
 - Providers, keys and MCP servers are managed from the UI. API keys live in the OS keychain; the webview never receives them back.
 
 Not in this batch: OAuth 2.1/DCR (M6) and packaging (M7). Static bearer tokens and an `X-API-Key` header (stored in the OS keychain) for MCP work.
@@ -99,7 +99,7 @@ Everything below **was run in this repository** on Linux without a GUI/WebKit de
 ```bash
 pnpm lint          # ESLint
 pnpm typecheck     # TypeScript
-pnpm test          # Vitest: 13 tests
+pnpm test          # Vitest: 14 tests
 pnpm build         # Vite production build
 pnpm fmt:check     # cargo fmt --check
 pnpm core:test     # 26 unit + 28 agent + 6 MCP integration + 1 auth + 1 provider test = 62 Rust tests

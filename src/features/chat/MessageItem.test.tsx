@@ -28,17 +28,20 @@ function message(role: "user" | "assistant", parts: Part[]): MessageWithParts {
 }
 
 const writeText = vi.fn().mockResolvedValue(undefined);
+const write = vi.fn().mockResolvedValue(undefined);
 
 beforeEach(() => {
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
-    value: { writeText },
+    value: { writeText, write },
   });
   writeText.mockClear();
+  write.mockClear();
 });
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -84,5 +87,37 @@ describe("MessageItem", () => {
     expect(
       screen.queryByRole("button", { name: "Revert message" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("copies assistant markdown as rendered rich text", async () => {
+    class TestClipboardItem {
+      items: Record<string, Blob>;
+      constructor(items: Record<string, Blob>) {
+        this.items = items;
+      }
+    }
+    vi.stubGlobal("ClipboardItem", TestClipboardItem);
+    useApp.setState({ status: "idle" });
+    const item = message("assistant", [
+      part("text", "text", {
+        text: "**Bold** answer\n\n- one\n- two\n\n```js\nconst x = 1\n```",
+      }),
+    ]);
+    render(<MessageItem message={item} canRetry={false} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+
+    const items = write.mock.calls[0]?.[0] as TestClipboardItem[];
+    const clipboardItem = items[0];
+    expect(clipboardItem).toBeDefined();
+    const html = await clipboardItem?.items["text/html"]?.text();
+    const plain = await clipboardItem?.items["text/plain"]?.text();
+    expect(html).toContain("<strong>Bold</strong>");
+    expect(html).toContain("<li>one</li>");
+    expect(html).toContain("<pre");
+    expect(html).not.toContain(">Copy<");
+    expect(plain).toContain("Bold answer");
+    expect(plain).not.toContain("**Bold**");
   });
 });

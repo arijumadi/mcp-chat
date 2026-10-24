@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { AlertTriangle, RotateCcw, Undo2 } from "lucide-react";
 import type { MessageWithParts, Part } from "@/lib/types";
 import { parsePayload, partText, useApp } from "@/app/store";
@@ -25,6 +26,7 @@ export function MessageItem({
   const busy = ["thinking", "streaming", "waiting_approval", "running_tool"].includes(
     status,
   );
+  const copyRoot = useRef<HTMLDivElement>(null);
   if (message.role === "tool") return null;
 
   if (message.role === "user") {
@@ -52,7 +54,7 @@ export function MessageItem({
             >
               {formatMessageDateTime(message.createdAt)}
             </span>
-            <CopyButton text={text} />
+            <CopyButton payload={() => ({ text })} />
             {!busy ? (
               <button
                 type="button"
@@ -78,20 +80,51 @@ export function MessageItem({
     .map(partText)
     .join("\n\n")
     .trim();
+  const copyPayload = () => {
+    const nodes = copyRoot.current?.querySelectorAll<HTMLElement>(
+      "[data-markdown-copy]",
+    );
+    if (!nodes || nodes.length === 0) return { text: copyText };
+    const holder = document.createElement("div");
+    holder.style.position = "fixed";
+    holder.style.left = "-10000px";
+    holder.style.top = "0";
+    holder.style.width = "720px";
+    holder.style.pointerEvents = "none";
+    document.body.appendChild(holder);
+    const htmlParts: string[] = [];
+    try {
+      for (const node of nodes) {
+        const clone = node.cloneNode(true) as HTMLElement;
+        clone
+          .querySelectorAll("button, .stream-cursor")
+          .forEach((element) => element.remove());
+        htmlParts.push(clone.innerHTML);
+        holder.appendChild(clone);
+      }
+      const plain = (holder.innerText || holder.textContent || "").trim();
+      return {
+        text: plain || copyText,
+        html: htmlParts.join("\n"),
+      };
+    } finally {
+      holder.remove();
+    }
+  };
   const lastTextId = textParts.at(-1)?.id ?? null;
   const hasVisible = parts.some((part) =>
     ["text", "reasoning", "tool_call", "error", "summary"].includes(part.kind),
   );
 
   return (
-    <div className="group animate-in py-2">
+    <div ref={copyRoot} className="group animate-in py-2">
       {!hasVisible && streaming && !hideThinking ? <Thinking /> : null}
       {parts.map((part) => {
         if (part.kind === "text") {
           const text = partText(part);
           if (!text) return null;
           return (
-            <div key={part.id} className="relative">
+            <div key={part.id} className="relative" data-markdown-copy>
               <Markdown text={text} />
               {streaming && part.id === lastTextId ? (
                 <span className="stream-cursor" aria-hidden />
@@ -178,7 +211,7 @@ export function MessageItem({
       ) : null}
       {copyText ? (
         <div className="mt-1 flex h-6 items-center opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
-          <CopyButton text={copyText} />
+          <CopyButton payload={copyPayload} />
         </div>
       ) : null}
     </div>

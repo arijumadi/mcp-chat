@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { useApp } from "@/app/store";
-import { copyText } from "@/lib/clipboard";
+import { copyRich, copyText } from "@/lib/clipboard";
 
-export function CopyButton({ text }: { text: string }) {
+export interface CopyPayload {
+  text: string;
+  html?: string;
+}
+
+export function CopyButton({ payload }: { payload: () => CopyPayload }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
 
@@ -14,8 +19,11 @@ export function CopyButton({ text }: { text: string }) {
   }, []);
 
   const copy = async () => {
+    const value = payload();
+    if (!value.text && !value.html) return;
     try {
-      await copyText(text);
+      if (value.html) await copyRich(value.text, value.html);
+      else await copyText(value.text);
       setCopied(true);
       if (timer.current !== null) window.clearTimeout(timer.current);
       timer.current = window.setTimeout(() => setCopied(false), 1400);
