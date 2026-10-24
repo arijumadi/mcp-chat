@@ -212,7 +212,6 @@ async fn drive(
     let mut recover_used = false;
     let mut length_count = 0_usize;
     let mut compacted_once = false;
-    let time_note = crate::util::current_time_context();
 
     loop {
         if cancel.is_cancelled() {
@@ -245,11 +244,6 @@ async fn drive(
                 if base.is_empty() { "" } else { "\n\n" }
             ));
         }
-        let base = system.unwrap_or_default();
-        system = Some(format!(
-            "{base}{}{time_note}",
-            if base.is_empty() { "" } else { "\n\n" }
-        ));
         let mut estimate = estimate_tokens(&chat_messages, &tool_defs, system.as_deref());
         let context_window = resolved.context_window as usize;
         let configured_buffer = settings::get_i64(&engine.db.pool, "compaction.buffer", 0)
@@ -1213,6 +1207,15 @@ async fn append_synthetic(engine: &ChatEngine, conversation_id: &str, text: &str
         },
     )
     .await?;
+    messages::append_part(
+        &engine.db.pool,
+        &message.id,
+        "time",
+        &PartPayload::Text {
+            text: crate::util::message_time_note(message.created_at),
+        },
+    )
+    .await?;
     conversations::touch(&engine.db.pool, conversation_id).await?;
     let _ = engine.events.send(CoreEvent::ConversationUpdated {
         conversation_id: conversation_id.to_owned(),
@@ -1430,12 +1433,6 @@ pub async fn context_status(
             ));
         }
     }
-    let base = system.unwrap_or_default();
-    system = Some(format!(
-        "{base}{}{}",
-        if base.is_empty() { "" } else { "\n\n" },
-        crate::util::current_time_context()
-    ));
     let tokens = estimate_tokens(&chat_messages, &tool_defs, system.as_deref()) as i64;
     let window = context_window;
     let keep_tokens = settings::get_i64(&engine.db.pool, "compaction.keep_tokens", 15_000)

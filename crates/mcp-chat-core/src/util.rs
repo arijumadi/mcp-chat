@@ -63,15 +63,19 @@ pub fn redact_secret(value: &str) -> String {
     format!("{prefix}••••{suffix}")
 }
 
-/// A compact, minute-precision local-time note. It is appended at the END of
-/// the system prompt so the static system prompt, tools and history remain a
-/// stable prefix for provider prompt caching.
-pub fn current_time_context() -> String {
-    let now = chrono::Local::now();
+/// A compact, minute-precision local-time note derived from a persisted
+/// message timestamp. It is injected into the user message (not the system
+/// prompt) so the static system/tools prefix stays byte-identical. Deriving
+/// the note from `created_at` also keeps historical messages byte-identical
+/// across turns, which is required for prefix-cache hits.
+pub fn message_time_note(created_at_ms: i64) -> String {
+    let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(created_at_ms)
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+    let local = timestamp.with_timezone(&chrono::Local);
     format!(
-        "Current local date and time: {}. UTC offset: {}. Use this as the current moment when the user asks about the day, date, or time; do not assume an outdated date.",
-        now.format("%A, %d %B %Y, %H:%M"),
-        now.offset()
+        "[Message sent at: {} (UTC{})]",
+        local.format("%A, %d %B %Y, %H:%M"),
+        local.offset()
     )
 }
 
@@ -80,9 +84,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn time_context_contains_local_date_and_time() {
-        let note = current_time_context();
-        assert!(note.contains("Current local date and time:"));
-        assert!(note.contains("UTC offset:"));
+    fn time_note_is_stable_for_a_message_timestamp() {
+        let note = message_time_note(1_700_000_000_000);
+        assert!(note.starts_with("[Message sent at: "));
+        assert!(note.contains("UTC"));
+        assert_eq!(note, message_time_note(1_700_000_000_000));
     }
 }

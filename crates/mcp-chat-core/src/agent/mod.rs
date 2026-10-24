@@ -106,6 +106,15 @@ impl ChatEngine {
             },
         )
         .await?;
+        messages::append_part(
+            &self.db.pool,
+            &message.id,
+            "time",
+            &PartPayload::Text {
+                text: crate::util::message_time_note(message.created_at),
+            },
+        )
+        .await?;
         if conversation.title == "New chat" || conversation.title.trim().is_empty() {
             conversations::update_title(
                 &self.db.pool,

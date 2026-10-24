@@ -314,9 +314,9 @@ export function SettingsView() {
               style={{ borderColor: "var(--border)", minHeight: 96 }}
             />
             <span className={hintClass} style={{ color: "var(--faint)" }}>
-              Current local date and time are appended automatically at the end of
-              this prompt on every turn, in minute precision, so the static prefix
-              stays cache-friendly.
+              Each user message is stamped with its local send time in minute
+              precision. Time lives in the user message, not this prompt, so the
+              system/tool prefix stays byte-identical for prompt caching.
             </span>
             <div className="mt-2 flex justify-end gap-2">
               <Button

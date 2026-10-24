@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::llm::{ChatMessage, ChatRole, ContentBlock, ToolDef};
 use crate::models::{Conversation, MessageWithParts, Part, Provider};
-use crate::util::truncate_chars;
+use crate::util::{message_time_note, truncate_chars};
 
 pub struct TurnContext {
     pub conversation: Conversation,
@@ -96,6 +96,22 @@ pub fn build_messages(history: &[MessageWithParts]) -> (Vec<ChatMessage>, Option
             "user" => {
                 let text = text_parts(&message.parts);
                 if !text.trim().is_empty() {
+                    // Timestamp lives in the user message, not the system
+                    // prompt. The stored time part (or created_at for older
+                    // messages) reproduces the exact same bytes on later
+                    // requests, so provider prefix caching can hit.
+                    let note = message
+                        .parts
+                        .iter()
+                        .find(|part| part.kind == "time")
+                        .and_then(|part| {
+                            part.payload()
+                                .get("text")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_owned)
+                        })
+                        .unwrap_or_else(|| message_time_note(message.message.created_at));
+                    let text = format!("{note}\n\n{text}");
                     messages.push(ChatMessage::text(ChatRole::User, text));
                 }
             }

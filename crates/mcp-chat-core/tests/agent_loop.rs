@@ -213,6 +213,64 @@ async fn streams_text_and_persists_it() {
             .iter()
             .any(|tool| { tool["function"]["name"] == "read_tool_output" })
     );
+    let messages = requests[0]["messages"].as_array().unwrap();
+    let system = messages
+        .iter()
+        .find(|message| message["role"] == "system")
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or("");
+    assert!(system.contains("You are Jarvis"));
+    assert!(!system.contains("Message sent at"));
+    let user = messages
+        .iter()
+        .find(|message| message["role"] == "user")
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or("");
+    assert!(user.starts_with("[Message sent at: "));
+    assert!(user.contains("UTC"));
+    assert!(user.ends_with("hello"));
+}
+
+#[tokio::test]
+async fn time_note_stays_in_user_messages_and_system_is_stable_across_turns() {
+    let h = Harness::new("mock-text", None, 0).await;
+    h.send_and_wait("first turn", ApprovalDecision::Once, None, "ari")
+        .await;
+    h.send_and_wait("second turn", ApprovalDecision::Once, None, "ari")
+        .await;
+    let requests = h.provider.requests();
+    assert_eq!(requests.len(), 2);
+
+    let system = |index: usize| {
+        requests[index]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["role"] == "system")
+            .and_then(|message| message["content"].as_str())
+            .unwrap_or("")
+            .to_owned()
+    };
+    assert_eq!(system(0), system(1), "system prompt changed between turns");
+    assert!(!system(0).contains("Message sent at"));
+
+    let users = |index: usize| {
+        requests[index]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "user")
+            .filter_map(|message| message["content"].as_str())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let first = users(0);
+    let second = users(1);
+    assert_eq!(first[0], second[0], "historical user message changed");
+    assert!(first[0].starts_with("[Message sent at: "));
+    assert!(first[0].contains("first turn"));
+    assert!(second[1].starts_with("[Message sent at: "));
+    assert!(second[1].contains("second turn"));
 }
 
 #[tokio::test]
@@ -774,6 +832,25 @@ async fn lazy_tool_mode_reads_schema_then_calls_the_target() {
             .iter()
             .any(|name| name.ends_with("__echo"))
     );
+    let systems = h
+        .provider
+        .requests()
+        .iter()
+        .map(|request| {
+            request["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|message| message["role"] == "system")
+                .and_then(|message| message["content"].as_str())
+                .unwrap_or("")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert!(systems.len() >= 2);
+    assert!(systems.iter().all(|system| system == &systems[0]));
+    assert!(!systems[0].contains("Message sent at"));
+    assert!(systems[0].contains("mock :: echo"));
 }
 
 #[tokio::test]
