@@ -85,14 +85,18 @@ export function AssistantTurn({
       );
     });
 
-  const summaryParts: string[] = [];
-  if (toolCount > 0) {
-    summaryParts.push(`Used ${toolCount} tool${toolCount === 1 ? "" : "s"}`);
-  }
-  if (thoughtCount > 0) {
-    summaryParts.push(`${thoughtCount} thought${thoughtCount === 1 ? "" : "s"}`);
-  }
-  const summary = summaryParts.join(" · ") || "Activity";
+  const summary =
+    toolCount > 0
+      ? `Used ${toolCount} tool${toolCount === 1 ? "" : "s"}`
+      : thoughtCount > 0
+        ? `${thoughtCount} thought${thoughtCount === 1 ? "" : "s"}`
+        : "Activity";
+  const streamingMessage = [...messages]
+    .reverse()
+    .find((message) => message.status === "streaming");
+  const activeKind = streamingMessage?.parts.at(-1)?.kind;
+  const thinking =
+    Boolean(streamingMessage) && (!activeKind || activeKind === "reasoning");
 
   return (
     <div className="animate-in py-1">
@@ -104,7 +108,19 @@ export function AssistantTurn({
         style={{ borderColor: "var(--border)", background: "var(--panel)" }}
       >
         <span className="font-medium">{summary}</span>
-        {running ? (
+        {thinking ? (
+          <span
+            className="flex items-center gap-1 text-[10.5px]"
+            style={{ color: "var(--muted)" }}
+          >
+            <Loader2
+              size={12}
+              className="animate-spin"
+              style={{ color: "var(--warn)" }}
+            />
+            Thinking…
+          </span>
+        ) : running ? (
           <Loader2
             size={12}
             className="animate-spin"

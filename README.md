@@ -14,6 +14,7 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - The model picker sits in the composer footer; the trigger shows only the model name after the final `/`, and provider choices show only the provider name. Export conversation lives in Settings → Export conversation.
 - Live prompt/completion usage in the composer, step counter, automatic token-based compaction with ~15k recent-token retention and a 15%/16k buffer. After the 25-step limit the composer offers **Continue**, which resumes with a fresh step budget.
 - A per-turn loop guard stops three identical tool calls with identical results, injects a strategy-change prompt, and forces one text-only step.
+- Tool activity collapses to **Used N tools**; thought counts appear only on thought-only turns. While reasoning is streaming, the summary shows **Thinking…**.
 - **Auto** in the composer enables approval-free tool calls for the current chat after a warning. The state lasts until Jarvis closes. Destructive shell commands (`rm -rf`, `del`, `Remove-Item -Recurse`, `git reset --hard`, etc.) still ask for approval; explicit deny policies still win.
 - Built-in local tools available in every chat: `bash`, `edit`, `write`, `read`, `grep`, `glob`, `skill` and `question`. `bash` supports explicit `cmd`, `powershell`, `pwsh`, `sh` and `bash` shells, a per-call `cwd`, labelled stdout/stderr and echo detection; PowerShell uses `-EncodedCommand` to avoid nested-quote failures. File tools are confined to the workspace; `bash`, `edit` and `write` ask for approval by default. `question` renders a multi-question picker (options plus custom answers) and blocks the turn until answered.
 - Provider models are fetched once in the provider form and saved with the provider; the chat model picker uses that saved list. Model is optional on the provider.
@@ -102,7 +103,7 @@ Everything below **was run in this repository** on Linux without a GUI/WebKit de
 ```bash
 pnpm lint          # ESLint
 pnpm typecheck     # TypeScript
-pnpm test          # Vitest: 18 tests
+pnpm test          # Vitest: 20 tests
 pnpm build         # Vite production build
 pnpm fmt:check     # cargo fmt --check
 pnpm core:test     # 47 unit + 32 agent + 6 MCP integration + 1 auth + 1 provider test = 87 Rust tests

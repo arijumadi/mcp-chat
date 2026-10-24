@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { AssistantTurn } from "./AssistantTurn";
 import type { MessageWithParts, Part } from "@/lib/types";
 
@@ -28,6 +28,10 @@ function assistant(
     parts,
   };
 }
+
+afterEach(() => {
+  cleanup();
+});
 
 describe("AssistantTurn", () => {
   it("collapses tools and thoughts behind a summary, then shows the final answer", () => {
@@ -59,13 +63,13 @@ describe("AssistantTurn", () => {
     render(<AssistantTurn messages={messages} canRetry={false} />);
 
     expect(
-      screen.getByRole("button", { name: /Used 2 tools · 2 thoughts/ }),
+      screen.getByRole("button", { name: /Used 2 tools/ }),
     ).toBeInTheDocument();
     expect(screen.getByText("Final answer is here.")).toBeInTheDocument();
     expect(screen.queryByText("echo")).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: /Used 2 tools · 2 thoughts/ }),
+      screen.getByRole("button", { name: /Used 2 tools/ }),
     );
 
     expect(screen.getAllByText("echo").length).toBeGreaterThan(0);
@@ -77,5 +81,39 @@ describe("AssistantTurn", () => {
       screen.queryByText("A pre-tool narration."),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Interim note")).not.toBeInTheDocument();
+  });
+
+  it("shows thoughts when there are no tool calls", () => {
+    render(
+      <AssistantTurn
+        messages={[
+          assistant("m1", [
+            part("p1", "reasoning", { text: "think one" }),
+            part("p2", "reasoning", { text: "think two" }),
+          ]),
+        ]}
+        canRetry={false}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /2 thoughts/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Used .* tools/)).not.toBeInTheDocument();
+  });
+
+  it("shows Thinking while reasoning is streaming", () => {
+    render(
+      <AssistantTurn
+        messages={[
+          assistant(
+            "m1",
+            [part("p1", "reasoning", { text: "working..." })],
+            "streaming",
+          ),
+        ]}
+        canRetry={false}
+      />,
+    );
+    expect(screen.getByText("Thinking…")).toBeInTheDocument();
   });
 });
