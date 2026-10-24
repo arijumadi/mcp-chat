@@ -33,6 +33,8 @@ const PS_PROLOG: &str = "$ProgressPreference='SilentlyContinue';[Console]::Outpu
 const PAGER_OUTPUT_LIMIT: usize = 100_000;
 const READ_PAGE_CHARS: usize = 50_000;
 const PREVIEW_LIMIT: usize = 4_000;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Clone)]
 pub struct ToolExecutor {
@@ -1769,6 +1771,11 @@ impl ToolExecutor {
                 process
             }
         };
+        // Release builds use the Windows GUI subsystem, so there is no console
+        // to inherit. Without this flag Windows opens a new terminal for every
+        // shell tool call.
+        #[cfg(windows)]
+        child.creation_flags(CREATE_NO_WINDOW);
         child
             .current_dir(&cwd)
             .kill_on_drop(true)

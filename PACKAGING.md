@@ -60,8 +60,8 @@ pnpm tauri build
 Typical output locations:
 
 ```
-target\release\bundle\nsis\Jarvis_0.1.0_x64-setup.exe
-target\release\bundle\msi\Jarvis_0.1.0_x64_en-US.msi
+target\release\bundle\nsis\Jarvis_<version>_x64-setup.exe
+target\release\bundle\msi\Jarvis_<version>_x64_en-US.msi
 ```
 
 If Tauri uses the nested target directory in your checkout, look under `src-tauri\target\release\bundle`. The packaging script searches both.
@@ -98,7 +98,7 @@ Option B — sign after packaging:
 signtool sign /fd SHA256 /td SHA256 `
   /tr http://timestamp.digicert.com `
   /f C:\path\to\certificate.pfx /p $env:CERT_PASSWORD `
-  artifacts\Jarvis_0.1.0_x64-setup.exe
+  artifacts\Jarvis_<version>_x64-setup.exe
 ```
 
 Sign both the application executable and the installer for the best result. Tauri's Windows signing configuration is documented at <https://v2.tauri.app/distribute/sign/windows/>.
