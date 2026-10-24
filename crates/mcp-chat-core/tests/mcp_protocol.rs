@@ -273,3 +273,19 @@ async fn json_rpc_error_is_humanized() {
         .unwrap_err();
     assert!(error.user_message().contains("mock failure"));
 }
+
+#[tokio::test]
+async fn sse_hint_on_an_mcp_url_still_negotiates_http() {
+    let mock = mcp::start(McpMode::Modern).await;
+    let connection = McpClient::connect(
+        config(&mock.url, Some(TransportKind::Sse)),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(connection.negotiated.protocol_version, "2026-07-28");
+    assert_eq!(
+        connection.negotiated.transport,
+        TransportKind::StreamableHttp
+    );
+}

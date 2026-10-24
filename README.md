@@ -84,10 +84,10 @@ Everything below **was run in this repository** on Linux without a GUI/WebKit de
 ```bash
 pnpm lint          # ESLint
 pnpm typecheck     # TypeScript
-pnpm test          # Vitest: 8 tests
+pnpm test          # Vitest: 9 tests
 pnpm build         # Vite production build
 pnpm fmt:check     # cargo fmt --check
-pnpm core:test     # 23 unit + 19 agent + 5 MCP integration + 1 provider test = 48 Rust tests
+pnpm core:test     # 23 unit + 19 agent + 6 MCP integration + 1 provider test = 49 Rust tests
 pnpm core:clippy   # cargo clippy -p mcp-chat-core --all-targets -- -D warnings
 pnpm mock:clippy   # same for the mock server
 pnpm test:e2e      # Playwright: 4 smoke tests against vite preview with a stubbed IPC bridge

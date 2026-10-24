@@ -526,9 +526,11 @@ export function applyCoreEvent(
         streamingMessageId:
           state.streamingMessageId === event.messageId ? null : state.streamingMessageId,
       }));
-      if (get().activeId === event.conversationId) {
-        void get().reloadActive();
-      }
+      // Do not reload the transcript here. A tool turn emits MessageEnd for
+      // the tool step before the final answer streams; a delayed SQLite reload
+      // would replace newer state with the older snapshot. The explicit
+      // reloads (open conversation / regenerate) and the DB on restart are
+      // enough.
       break;
     }
     case "conversation_updated": {

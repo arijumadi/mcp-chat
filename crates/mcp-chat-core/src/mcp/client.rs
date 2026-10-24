@@ -152,9 +152,10 @@ impl McpClient {
         let http = crate::llm::provider::http_client()?;
         let headers = static_headers(&config)?;
 
-        if config.transport == Some(TransportKind::Sse)
-            || url.path().trim_end_matches('/').ends_with("/sse")
-        {
+        // An SSE hint alone is not enough: users often pick "HTTP+SSE" while
+        // pointing at a /mcp endpoint that actually speaks Streamable HTTP.
+        // Only a /sse URL is treated as the deprecated transport up front.
+        if url.path().trim_end_matches('/').ends_with("/sse") {
             return connect_sse(config, url, http, headers, cancel).await;
         }
 

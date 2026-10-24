@@ -111,6 +111,40 @@ describe("transcript event reducer", () => {
     expect(get().messages).toHaveLength(0);
   });
 
+  it("keeps streamed text when the message ends", () => {
+    useApp.setState({
+      activeId: "c1",
+      messages: [
+        {
+          id: "m1",
+          conversationId: "c1",
+          role: "assistant",
+          createdAt: Date.now(),
+          status: "streaming",
+          error: null,
+          parts: [
+            {
+              id: "p1",
+              messageId: "m1",
+              idx: 0,
+              kind: "text",
+              payloadJson: JSON.stringify({ text: "the answer" }),
+            },
+          ],
+        },
+      ],
+    });
+    apply({
+      type: "message_end",
+      conversationId: "c1",
+      messageId: "m1",
+      status: "completed",
+      error: null,
+    });
+    expect(get().messages[0]!.parts[0]!.payloadJson).toContain("the answer");
+    expect(get().messages[0]!.status).toBe("completed");
+  });
+
   it("keeps the open conversation when a list refresh misses it", async () => {
     useApp.setState({
       activeId: "c1",
