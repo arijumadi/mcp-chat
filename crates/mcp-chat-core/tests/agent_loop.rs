@@ -57,6 +57,9 @@ impl Harness {
         let conversation = conversations::create(&db.pool, "Test", Some(&provider.id), Some(model))
             .await
             .unwrap();
+        conversations::set_tool_mode(&db.pool, &conversation.id, "direct")
+            .await
+            .unwrap();
 
         if let Some(policy) = server_policy {
             servers::create(

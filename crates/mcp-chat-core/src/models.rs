@@ -91,6 +91,7 @@ pub struct Provider {
     pub max_output_tokens: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    pub models_json: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +101,7 @@ pub struct ProviderView {
     pub provider: Provider,
     pub has_key: bool,
     pub key_hint: Option<String>,
+    pub models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

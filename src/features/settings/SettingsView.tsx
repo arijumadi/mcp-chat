@@ -66,6 +66,7 @@ export function SettingsView() {
     setTesting(provider.id);
     try {
       const result = await call<KeyTest>("test_provider", { providerId: provider.id });
+      await refreshProviders();
       toast(result.message, result.ok ? "info" : "error");
     } catch (error) {
       toast(String(error), "error");
@@ -78,6 +79,7 @@ export function SettingsView() {
     try {
       const list = await call<string[]>("fetch_models", { providerId: provider.id });
       setModels({ name: provider.name, models: list });
+      await refreshProviders();
     } catch (error) {
       toast(String(error), "error");
     }
@@ -225,8 +227,10 @@ export function SettingsView() {
                           {provider.baseUrl}
                         </div>
                         <div className="mt-1 text-[11.5px]" style={{ color: "var(--muted)" }}>
-                          {provider.model} · {(provider.contextWindow / 1000).toFixed(0)}k context ·
-                          max {provider.maxOutputTokens} out
+                          {provider.model || "no model"} ·{" "}
+                          {(provider.contextWindow / 1000).toFixed(0)}k context · max{" "}
+                          {provider.maxOutputTokens} out · {provider.models.length} saved model
+                          {provider.models.length === 1 ? "" : "s"}
                         </div>
                       </div>
                       <div className="flex items-center gap-1">

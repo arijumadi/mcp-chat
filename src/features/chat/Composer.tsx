@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Square } from "lucide-react";
 import { useApp } from "@/app/store";
 import { cn } from "@/lib/cn";
+import { formatTokens } from "@/lib/format";
 
 const ACTIVE: string[] = ["thinking", "streaming", "waiting_approval", "running_tool"];
 
@@ -12,6 +13,7 @@ export function Composer() {
   const stop = useApp((state) => state.stop);
   const status = useApp((state) => state.status);
   const providers = useApp((state) => state.providers);
+  const usage = useApp((state) => state.usage);
   const setView = useApp((state) => state.setView);
   const active = ACTIVE.includes(status);
   const disabled = providers.length === 0;
@@ -116,7 +118,17 @@ export function Composer() {
           style={{ color: "var(--faint)" }}
         >
           <span>Enter to send · Shift+Enter for a new line</span>
-          <span>{active ? "Esc to stop" : "Answers can be wrong. Check tool output."}</span>
+          <span>
+            {usage
+              ? `${active ? "Esc to stop · " : ""}ctx ~${formatTokens(usage.promptTokens)} / ${formatTokens(usage.contextWindow)}${
+                  usage.completionTokens > 0
+                    ? ` · out ${formatTokens(usage.completionTokens)}`
+                    : ""
+                }`
+              : active
+                ? "Esc to stop"
+                : "Answers can be wrong. Check tool output."}
+          </span>
         </div>
       </div>
     </div>

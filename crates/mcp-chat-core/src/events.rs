@@ -52,6 +52,12 @@ pub enum CoreEvent {
         tool: String,
         args: Value,
     },
+    Usage {
+        conversation_id: String,
+        prompt_tokens: i64,
+        completion_tokens: i64,
+        context_window: i64,
+    },
     InputRequest {
         conversation_id: String,
         call_id: String,
@@ -108,5 +114,15 @@ mod tests {
         let value = serde_json::to_value(approval).unwrap();
         assert_eq!(value["callId"], "call1");
         assert_eq!(value["conversationId"], "c1");
+
+        let usage = CoreEvent::Usage {
+            conversation_id: "c1".into(),
+            prompt_tokens: 1200,
+            completion_tokens: 34,
+            context_window: 128_000,
+        };
+        let value = serde_json::to_value(usage).unwrap();
+        assert_eq!(value["promptTokens"], 1200);
+        assert_eq!(value["contextWindow"], 128_000);
     }
 }

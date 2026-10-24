@@ -111,6 +111,18 @@ describe("transcript event reducer", () => {
     expect(get().messages).toHaveLength(0);
   });
 
+  it("stores live token usage for the active conversation", () => {
+    apply({
+      type: "usage",
+      conversationId: "c1",
+      promptTokens: 1200,
+      completionTokens: 34,
+      contextWindow: 128000,
+    });
+    expect(get().usage?.promptTokens).toBe(1200);
+    expect(get().usage?.completionTokens).toBe(34);
+  });
+
   it("keeps streamed text when the message ends", () => {
     useApp.setState({
       activeId: "c1",

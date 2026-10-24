@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, RefreshCw } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { useApp } from "@/app/store";
-import { call } from "@/lib/ipc";
 import { Button } from "@/components/Button";
 import { inputClass } from "@/components/ui";
 import type { Conversation } from "@/lib/types";
@@ -10,12 +9,9 @@ export function ModelPicker({ conversation }: { conversation: Conversation }) {
   const providers = useApp((state) => state.providers);
   const applyModel = useApp((state) => state.setModel);
   const setView = useApp((state) => state.setView);
-  const toast = useApp((state) => state.toast);
   const [open, setOpen] = useState(false);
   const [providerId, setProviderId] = useState(conversation.providerId ?? "");
   const [selectedModel, setSelectedModel] = useState(conversation.model ?? "");
-  const [models, setModels] = useState<string[]>([]);
-  const [fetching, setFetching] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -33,21 +29,8 @@ export function ModelPicker({ conversation }: { conversation: Conversation }) {
   }, [open]);
 
   const provider = providers.find((item) => item.id === providerId);
-
-  const fetchModels = async () => {
-    if (!providerId) return;
-    setFetching(true);
-    try {
-      const list = await call<string[]>("fetch_models", { providerId });
-      setModels(list);
-      if (!list.includes(selectedModel) && list.length > 0) setSelectedModel(list[0] ?? "");
-      toast(`Fetched ${list.length} models.`, "info");
-    } catch (error) {
-      toast(String(error), "error");
-    } finally {
-      setFetching(false);
-    }
-  };
+  const models = provider?.models ?? [];
+  const usesCustom = models.length === 0 || !models.includes(selectedModel);
 
   const save = async () => {
     if (!providerId || !selectedModel.trim()) return;
@@ -100,7 +83,11 @@ export function ModelPicker({ conversation }: { conversation: Conversation }) {
                 onChange={(event) => {
                   setProviderId(event.target.value);
                   const next = providers.find((item) => item.id === event.target.value);
-                  if (next) setSelectedModel(next.model);
+                  if (next) {
+                    setSelectedModel(
+                      next.model || next.models[0] || "",
+                    );
+                  }
                 }}
                 className={inputClass}
                 style={{ borderColor: "var(--border)", background: "var(--panel)" }}
@@ -112,32 +99,49 @@ export function ModelPicker({ conversation }: { conversation: Conversation }) {
                 ))}
               </select>
 
-              <div className="mt-2.5 mb-1 flex items-center justify-between">
-                <label className="text-[11px]" style={{ color: "var(--muted)" }}>
-                  Model
-                </label>
-                <button
-                  onClick={() => void fetchModels()}
-                  className="focus-ring flex items-center gap-1 rounded px-1 text-[10.5px] transition hover:bg-[var(--panel-2)]"
-                  style={{ color: "var(--muted)" }}
+              <label className="mt-2.5 mb-1 block text-[11px]" style={{ color: "var(--muted)" }}>
+                Model
+              </label>
+              {models.length > 0 ? (
+                <select
+                  value={usesCustom ? "__custom__" : selectedModel}
+                  onChange={(event) => {
+                    if (event.target.value === "__custom__") {
+                      setSelectedModel("");
+                    } else {
+                      setSelectedModel(event.target.value);
+                    }
+                  }}
+                  className={inputClass}
+                  style={{ borderColor: "var(--border)", background: "var(--panel)" }}
                 >
-                  <RefreshCw size={10} className={fetching ? "animate-spin" : ""} />
-                  Fetch models
-                </button>
+                  {usesCustom ? <option value="__custom__">Custom model…</option> : null}
+                  {models.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                  {!usesCustom ? <option value="__custom__">Custom model…</option> : null}
+                </select>
+              ) : null}
+              {usesCustom ? (
+                <input
+                  value={selectedModel}
+                  onChange={(event) => setSelectedModel(event.target.value)}
+                  className={inputClass}
+                  style={{
+                    borderColor: "var(--border)",
+                    background: "var(--panel)",
+                    marginTop: models.length > 0 ? 6 : 0,
+                  }}
+                  placeholder={provider?.model ?? "model id"}
+                />
+              ) : null}
+              <div className="mt-1 text-[9.5px]" style={{ color: "var(--faint)" }}>
+                {models.length > 0
+                  ? "Model list saved with this provider."
+                  : "No saved models. Add or fetch models in Settings."}
               </div>
-              <input
-                value={selectedModel}
-                onChange={(event) => setSelectedModel(event.target.value)}
-                list="model-options"
-                className={inputClass}
-                style={{ borderColor: "var(--border)", background: "var(--panel)" }}
-                placeholder={provider?.model ?? "model id"}
-              />
-              <datalist id="model-options">
-                {models.map((item) => (
-                  <option key={item} value={item} />
-                ))}
-              </datalist>
 
               <div className="mt-3 flex justify-end gap-2">
                 <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>

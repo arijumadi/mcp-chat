@@ -62,3 +62,10 @@ export function parseJson(value: string | null | undefined): unknown {
     return null;
   }
 }
+
+
+export function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
+  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+  return String(value);
+}

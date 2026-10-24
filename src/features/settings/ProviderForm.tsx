@@ -35,7 +35,7 @@ export function ProviderForm({
   useEffect(() => {
     if (!open) return;
     setError(null);
-    setModels([]);
+    setModels(provider?.models ?? []);
     if (provider) {
       setForm({
         name: provider.name,
@@ -63,12 +63,21 @@ export function ProviderForm({
     setForm((current) => ({ ...current, [key]: value }));
 
   const fetchModels = async () => {
-    if (!provider) return;
+    if (!form.baseUrl.trim()) {
+      toast("Fill in the base URL first.", "error");
+      return;
+    }
     setFetching(true);
     try {
-      const list = await call<string[]>("fetch_models", { providerId: provider.id });
+      const list = await call<string[]>("fetch_models_for_config", {
+        kind: form.kind,
+        baseUrl: form.baseUrl.trim(),
+        apiKey: form.apiKey?.trim() || undefined,
+        providerId: provider?.id,
+      });
       setModels(list);
-      toast(`Fetched ${list.length} models.`, "info");
+      if (!form.model.trim() && list.length > 0) set("model", list[0] ?? "");
+      toast(`Fetched ${list.length} model(s).`, "info");
     } catch (error) {
       toast(String(error), "error");
     } finally {
@@ -80,7 +89,11 @@ export function ProviderForm({
     setSaving(true);
     setError(null);
     try {
-      const input = { ...form, apiKey: form.apiKey?.trim() || undefined };
+      const input = {
+        ...form,
+        apiKey: form.apiKey?.trim() || undefined,
+        models,
+      };
       if (provider) {
         await call("update_provider", { providerId: provider.id, input });
       } else {
@@ -112,7 +125,7 @@ export function ProviderForm({
             variant="primary"
             loading={saving}
             onClick={() => void save()}
-            disabled={!form.name.trim() || !form.model.trim() || !form.baseUrl.trim()}
+            disabled={!form.name.trim() || !form.baseUrl.trim()}
           >
             {provider ? "Save changes" : "Add provider"}
           </Button>
@@ -150,14 +163,22 @@ export function ProviderForm({
             </select>
           </label>
           <label className="block">
-            <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
-              Model
+            <span className="mb-1 flex items-center justify-between text-[11.5px]" style={{ color: "var(--muted)" }}>
+              <span>Model (optional)</span>
+              <button
+                type="button"
+                onClick={() => void fetchModels()}
+                className="focus-ring flex items-center gap-1 rounded px-1 text-[10.5px] hover:bg-[var(--panel-2)]"
+                style={{ color: "var(--muted)" }}
+              >
+                <RefreshCw size={10} className={fetching ? "animate-spin" : ""} /> Fetch models
+              </button>
             </span>
             <input
               value={form.model}
               onChange={(event) => set("model", event.target.value)}
               list="provider-models"
-              placeholder={form.kind === "anthropic" ? "claude-sonnet-4-5" : "gpt-4.1"}
+              placeholder={form.kind === "anthropic" ? "claude-sonnet-4-5 (optional)" : "gpt-4.1 (optional)"}
               className={inputClass}
               style={{ borderColor: "var(--border)" }}
             />
@@ -166,6 +187,9 @@ export function ProviderForm({
                 <option key={model} value={model} />
               ))}
             </datalist>
+            <span className={hintClass} style={{ color: "var(--faint)" }}>
+              Optional. Fetch once and the list is saved with this provider; choose the model per chat.
+            </span>
           </label>
         </div>
 
@@ -191,17 +215,8 @@ export function ProviderForm({
         </label>
 
         <label className="block">
-          <span className="mb-1 flex items-center justify-between text-[11.5px]" style={{ color: "var(--muted)" }}>
-            <span>API key</span>
-            {provider ? (
-              <button
-                onClick={() => void fetchModels()}
-                className="focus-ring flex items-center gap-1 rounded px-1 text-[10.5px] hover:bg-[var(--panel-2)]"
-                style={{ color: "var(--muted)" }}
-              >
-                <RefreshCw size={10} className={fetching ? "animate-spin" : ""} /> Fetch models
-              </button>
-            ) : null}
+          <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
+            API key
           </span>
           <input
             type="password"

@@ -89,6 +89,7 @@ pub fn run() {
             commands::providers::clear_provider_key,
             commands::providers::delete_provider,
             commands::providers::fetch_models,
+            commands::providers::fetch_models_for_config,
             commands::providers::test_provider,
             commands::servers::list_servers,
             commands::servers::create_server,

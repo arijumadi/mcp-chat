@@ -14,6 +14,7 @@ import type {
 } from "@/lib/types";
 import { Button } from "@/components/Button";
 import { cn } from "@/lib/cn";
+import { formatTokens } from "@/lib/format";
 
 export function ConversationTools({
   conversation,
@@ -310,10 +311,4 @@ export function ConversationTools({
       ) : null}
     </div>
   );
-}
-
-function formatTokens(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
-  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
-  return String(value);
 }

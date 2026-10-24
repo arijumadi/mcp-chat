@@ -25,8 +25,8 @@ pub async fn create(
     let now = now_ms();
     let row = sqlx::query_as::<_, Conversation>(
         r#"INSERT INTO conversations
-           (id, title, created_at, updated_at, provider_id, model, archived, max_steps)
-           VALUES (?1, ?2, ?3, ?3, ?4, ?5, 0, ?6)
+           (id, title, created_at, updated_at, provider_id, model, archived, max_steps, tool_mode)
+           VALUES (?1, ?2, ?3, ?3, ?4, ?5, 0, ?6, 'lazy')
            RETURNING *"#,
     )
     .bind(&id)
@@ -247,6 +247,7 @@ mod tests {
         let db = Db::open_memory().await.unwrap();
         let a = create(&db.pool, "Alpha", None, None).await.unwrap();
         let b = create(&db.pool, "Beta", None, None).await.unwrap();
+        assert_eq!(a.tool_mode, "lazy");
         let threads = list(&db.pool, 20, 0).await.unwrap();
         assert_eq!(threads.len(), 2);
         assert!(threads.iter().any(|c| c.id == a.id));

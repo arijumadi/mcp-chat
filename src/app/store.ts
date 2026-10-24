@@ -12,6 +12,7 @@ import type {
   SearchHit,
   ServerView,
   TurnStatus,
+  UsageEvent,
 } from "@/lib/types";
 
 export type View = "chat" | "settings" | "servers";
@@ -38,6 +39,7 @@ export interface AppStore {
   streamingMessageId: string | null;
   approvals: ApprovalEvent[];
   inputRequests: InputRequestEvent[];
+  usage: UsageEvent | null;
   toasts: Toast[];
   searchHits: SearchHit[];
   searching: boolean;
@@ -88,6 +90,7 @@ export const useApp = create<AppStore>()((set, get) => ({
   streamingMessageId: null,
   approvals: [],
   inputRequests: [],
+  usage: null,
   toasts: [],
   searchHits: [],
   searching: false,
@@ -162,7 +165,14 @@ export const useApp = create<AppStore>()((set, get) => ({
   },
 
   async openConversation(id) {
-    set({ activeId: id, view: "chat", status: "idle", approvals: [], inputRequests: [] });
+    set({
+      activeId: id,
+      view: "chat",
+      status: "idle",
+      approvals: [],
+      inputRequests: [],
+      usage: null,
+    });
     await get().reloadActive();
     const conversation = get().conversations.find((item) => item.id === id);
     if (conversation) {
@@ -181,6 +191,7 @@ export const useApp = create<AppStore>()((set, get) => ({
         status: "idle",
         approvals: [],
         inputRequests: [],
+        usage: null,
       }));
     } catch (error) {
       get().toast(String(error), "error");
@@ -218,6 +229,7 @@ export const useApp = create<AppStore>()((set, get) => ({
       status: "thinking",
       approvals: [],
       inputRequests: [],
+      usage: null,
     }));
     try {
       const message = await call<MessageWithParts>("send_message", {
@@ -292,7 +304,7 @@ export const useApp = create<AppStore>()((set, get) => ({
     try {
       await call("delete_conversation", { conversationId: id });
       if (get().activeId === id) {
-        set({ activeId: null, messages: [], status: "idle" });
+        set({ activeId: null, messages: [], status: "idle", usage: null });
       }
       await get().refreshConversations();
     } catch (error) {
@@ -505,6 +517,10 @@ export function applyCoreEvent(
           : [...state.approvals, event],
         status: "waiting_approval",
       }));
+      break;
+    }
+    case "usage": {
+      set({ usage: event });
       break;
     }
     case "input_request": {

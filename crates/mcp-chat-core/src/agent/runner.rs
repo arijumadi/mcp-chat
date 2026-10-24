@@ -274,6 +274,12 @@ async fn drive(
         if estimate > resolved.context_window as usize {
             return Err(CoreError::ContextOverflow);
         }
+        let _ = engine.events.send(CoreEvent::Usage {
+            conversation_id: conversation_id.to_owned(),
+            prompt_tokens: estimate as i64,
+            completion_tokens: 0,
+            context_window: resolved.context_window,
+        });
 
         let request = ChatRequest {
             kind: resolved.kind,
@@ -296,6 +302,8 @@ async fn drive(
             &defaults,
             &active_server_slugs,
             tools_disabled,
+            estimate as i64,
+            resolved.context_window,
             cancel.clone(),
         )
         .await;
@@ -489,6 +497,8 @@ async fn run_stream(
     defaults: &HashMap<String, Effect>,
     active_server_slugs: &[String],
     tools_disabled: bool,
+    prompt_tokens: i64,
+    context_window: i64,
     cancel: CancellationToken,
 ) -> StreamRun {
     let mut result = StreamRun {
@@ -514,6 +524,7 @@ async fn run_stream(
     let mut calls: BTreeMap<usize, CallState> = BTreeMap::new();
     let mut handles: Vec<(usize, JoinHandle<crate::agent::tools::ToolExecResult>)> = Vec::new();
     let mut tool_order: Vec<usize> = Vec::new();
+    let mut usage_emitted = false;
 
     loop {
         let item = tokio::select! {
@@ -672,7 +683,19 @@ async fn run_stream(
                     }
                 }
             }
-            Ok(Delta::Usage(_)) => {}
+            Ok(Delta::Usage(usage)) => {
+                let _ = engine.events.send(CoreEvent::Usage {
+                    conversation_id: conversation_id.to_owned(),
+                    prompt_tokens: if usage.prompt_tokens > 0 {
+                        usage.prompt_tokens
+                    } else {
+                        prompt_tokens
+                    },
+                    completion_tokens: usage.completion_tokens,
+                    context_window,
+                });
+                usage_emitted = true;
+            }
             Ok(Delta::Done(reason)) => {
                 result.finish = Some(reason);
                 break;
@@ -799,6 +822,18 @@ async fn run_stream(
                 let _ = persist_result(engine.executor.as_ref(), conversation_id, message, outcome)
                     .await;
             }
+        }
+    }
+
+    if !usage_emitted {
+        let completion = ((text.text.chars().count() + reasoning.text.chars().count()) / 3) as i64;
+        if completion > 0 {
+            let _ = engine.events.send(CoreEvent::Usage {
+                conversation_id: conversation_id.to_owned(),
+                prompt_tokens,
+                completion_tokens: completion,
+                context_window,
+            });
         }
     }
 

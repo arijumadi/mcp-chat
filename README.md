@@ -9,7 +9,10 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - Streaming chat from any OpenAI-compatible `/chat/completions` endpoint and from Anthropic `/v1/messages`.
 - Local SQLite transcripts with full-text search, inline rename, delete, regenerate and stop.
 - Remote MCP over **Streamable HTTP 2026-07-28** (stateless headers, `server/discover`, request-scoped SSE progress, MRTR input), with legacy **2025-11-25** `initialize` fallback and deprecated **HTTP+SSE** fallback.
-- The model can call discovered MCP tools inside a normal turn. Tool calls stream into cards (`queued → running → ok / error`), run in parallel (max 4), and are persisted before the next step.
+- The model can call discovered MCP tools inside a normal turn. Tool calls and reasoning are grouped into a collapsible “Used N tools · N thoughts” summary with the final answer below; detail cards stream live (`queued → running → ok / error`) and run in parallel (max 4).
+- Per-chat MCP server selection and **direct vs lazy** tool delivery. New chats default to lazy mode, which exposes `mcp_search_tools`, `mcp_get_tool_schema` and `mcp_call_tool` instead of every tool schema; approval and policy checks still apply to the real target.
+- Context meter per chat, live prompt/completion usage in the composer, manual compaction, token-based retention (~15k recent by default) and a 15%/16k compaction buffer.
+- Provider models are fetched once in the provider form and saved with the provider; the chat model picker uses that saved list. Model is optional on the provider.
 - Approval policies per server (`auto` / `ask` / `deny`), “allow once”, “always allow” rules, rejection with feedback delivered back to the model.
 - Tool output is capped at 8k characters for the model, the full payload spills to disk, and a built-in `read_tool_output` tool pages it back in 32k-character chunks.
 - Token-based compaction on context overflow, `finish_reason: length` continuations, retries with backoff, interrupted-stream continuation.
@@ -20,12 +23,12 @@ Not in this batch: OAuth 2.1/DCR (M6) and packaging (M7). Static bearer tokens a
 
 ## Tool loading and context
 
-Use the **Tools** button in the chat header to choose which MCP servers this conversation may use and how their tools are delivered:
+Use the **Tools** button in the chat header to choose which MCP servers this conversation may use and how their tools are delivered. New conversations default to **lazy**; existing conversations are migrated to lazy once and can be switched back:
 
 - **Direct schemas** — every tool from the selected servers is sent to the model on every step. Best for small catalogs.
 - **Lazy search + call** — the model gets only `mcp_search_tools`, `mcp_get_tool_schema` and `mcp_call_tool`. It discovers a target, reads its schema, then calls it. Approvals and server policy still apply to the real tool.
 
-The same panel shows an approximate context meter, the automatic compaction threshold, and a **Compact now** action. Context defaults mirror OpenCode V2: keep the most recent ~15k tokens, compact with a 15%-of-window buffer (minimum 16k). Both values are configurable in **Settings → Context management**.
+The same panel shows an approximate context meter, the automatic compaction threshold, and a **Compact now** action. The composer also shows live prompt/completion usage while a turn runs. Context defaults mirror OpenCode V2: keep the most recent ~15k tokens, compact with a 15%-of-window buffer (minimum 16k). Both values are configurable in **Settings → Context management**.
 
 ## Quickstart
 
@@ -93,7 +96,7 @@ Everything below **was run in this repository** on Linux without a GUI/WebKit de
 ```bash
 pnpm lint          # ESLint
 pnpm typecheck     # TypeScript
-pnpm test          # Vitest: 10 tests
+pnpm test          # Vitest: 11 tests
 pnpm build         # Vite production build
 pnpm fmt:check     # cargo fmt --check
 pnpm core:test     # 25 unit + 22 agent + 6 MCP integration + 1 auth + 1 provider test = 55 Rust tests

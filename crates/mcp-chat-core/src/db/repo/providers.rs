@@ -114,6 +114,17 @@ pub async fn clear_conversation_refs(pool: &SqlitePool, provider_id: &str) -> Re
     Ok(())
 }
 
+pub async fn set_models(pool: &SqlitePool, id: &str, models: &[String]) -> Result<()> {
+    let json = serde_json::to_string(models)?;
+    sqlx::query("UPDATE providers SET models_json = ?2, updated_at = ?3 WHERE id = ?1")
+        .bind(id)
+        .bind(json)
+        .bind(now_ms())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +160,11 @@ mod tests {
         .unwrap();
         assert_eq!(updated.name, "Local 2");
         assert_eq!(updated.kind, "anthropic");
+        set_models(&db.pool, &p.id, &["alpha".into(), "beta".into()])
+            .await
+            .unwrap();
+        let saved = get(&db.pool, &p.id).await.unwrap();
+        assert!(saved.models_json.contains("alpha"));
         delete(&db.pool, &p.id).await.unwrap();
         assert!(list(&db.pool).await.unwrap().is_empty());
     }

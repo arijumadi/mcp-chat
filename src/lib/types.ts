@@ -73,6 +73,7 @@ export interface Provider {
 export interface ProviderView extends Provider {
   hasKey: boolean;
   keyHint: string | null;
+  models: string[];
 }
 
 export type ServerPolicy = "auto" | "ask" | "deny";
@@ -194,6 +195,14 @@ export interface SummaryPayload {
   coversUntil?: string;
 }
 
+export interface UsageEvent {
+  type: "usage";
+  conversationId: string;
+  promptTokens: number;
+  completionTokens: number;
+  contextWindow: number;
+}
+
 export interface ApprovalEvent {
   type: "approval";
   conversationId: string;
@@ -281,6 +290,7 @@ export type CoreEvent =
       message?: string | null;
     }
   | ApprovalEvent
+  | UsageEvent
   | InputRequestEvent
   | { type: "conversation_updated"; conversationId: string }
   | { type: "error"; conversationId?: string | null; message: string };
@@ -321,6 +331,7 @@ export interface ProviderInput {
   contextWindow: number;
   maxOutputTokens: number;
   apiKey?: string;
+  models?: string[];
 }
 
 export interface ServerInput {

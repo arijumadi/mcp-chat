@@ -53,6 +53,7 @@ export function installMock(): void {
       updatedAt: now(),
       hasKey: true,
       keyHint: "tes••••key",
+      models: ["mock-text", "mock-tool", "mock-parallel"],
     },
   ];
   const servers: ServerView[] = [
@@ -115,7 +116,7 @@ export function installMock(): void {
       systemPrompt: null,
       archived: false,
       maxSteps: 25,
-      toolMode: "direct",
+      toolMode: "lazy",
       serversConfigured: false,
     };
     conversations.push(seeded);
@@ -241,7 +242,7 @@ export function installMock(): void {
           systemPrompt: null,
           archived: false,
           maxSteps: 25,
-          toolMode: "direct",
+          toolMode: "lazy",
           serversConfigured: false,
         };
         conversations.unshift(conversation);
@@ -293,7 +294,7 @@ export function installMock(): void {
           threshold: 108800,
           keepTokens: 15000,
           toolCount: 17,
-          toolMode: "direct",
+          toolMode: "lazy",
         };
       case "compact_conversation":
         return null;
@@ -393,6 +394,7 @@ export function installMock(): void {
           updatedAt: now(),
           hasKey: Boolean(input.apiKey),
           keyHint: input.apiKey ? "••••" : null,
+          models: (input.models as string[] | undefined) ?? [],
         };
         providers = [...providers, provider];
         return provider;
@@ -423,6 +425,7 @@ export function installMock(): void {
           message: "Connected. 3 model(s) available.",
         };
       case "fetch_models":
+      case "fetch_models_for_config":
         return ["mock-text", "mock-tool", "mock-parallel"];
       case "list_servers":
         return servers;
@@ -503,6 +506,13 @@ export function installMock(): void {
     addMessage(conversationId, assistant);
     emit({ type: "message_start", conversationId, messageId: assistantId });
     emit({ type: "status", conversationId, status: "streaming", message: null });
+    emit({
+      type: "usage",
+      conversationId,
+      promptTokens: 1840,
+      completionTokens: 0,
+      contextWindow: 128000,
+    });
     const partId = uid();
     const interim = "Let me check that with the echo tool.";
     let buffer = "";
@@ -645,6 +655,13 @@ export function installMock(): void {
       messageId: finalId,
       status: "completed",
       error: null,
+    });
+    emit({
+      type: "usage",
+      conversationId,
+      promptTokens: 1840,
+      completionTokens: 96,
+      contextWindow: 128000,
     });
     emit({ type: "status", conversationId, status: "idle", message: null });
     const conversation = conversations.find((item) => item.id === conversationId);
