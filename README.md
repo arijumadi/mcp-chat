@@ -12,6 +12,7 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - The model can call discovered MCP tools inside a normal turn. Tool calls and reasoning are grouped into a collapsible “Used N tools · N thoughts” summary with the final answer below; detail cards stream live (`queued → running → ok / error`) and run in parallel (max 4). Any text the model emits before a tool call stays in the stored message for context but is not rendered as an interim note — detail cards show only thoughts and tools.
 - Per-chat MCP server selection with **lazy catalog + call** delivery. The Tools popover only selects which servers are active; there is no direct-schema mode. A compact server/tool/argument catalog goes in the system prompt, and the model calls `mcp_call_tool` directly (`mcp_get_tool_schema` only when it needs full JSON Schema; `mcp_search_tools` only when the catalog is truncated). `mcp_execute` runs up to 8 independent MCP calls in one step (4 in flight), so a multi-tool answer does not need many model round trips. Approval and policy checks still apply to each real target.
 - Live prompt/completion usage in the composer, plus automatic token-based compaction with ~15k recent-token retention and a 15%/16k buffer.
+- Built-in local tools available in every chat: `bash`, `edit`, `write`, `read`, `grep`, `glob`, `skill` and `question`. File tools are confined to the workspace; `bash`, `edit` and `write` ask for approval by default. `question` renders a multi-question picker (options plus custom answers) and blocks the turn until answered.
 - Provider models are fetched once in the provider form and saved with the provider; the chat model picker uses that saved list. Model is optional on the provider.
 - Approval policies per server (`auto` / `ask` / `deny`), “allow once”, “always allow” rules, rejection with feedback delivered back to the model.
 - Tool output is capped at 8k characters for the model, the full payload spills to disk, and a built-in `read_tool_output` tool pages it back in 50k-character chunks without re-truncating the page.
@@ -20,6 +21,7 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - Default system prompt is **Jarvis**, still editable and resettable in Settings.
 - The model receives the local day, date, hour and minute (minute precision) stamped on each user message. Time is injected into the user turn, not the system prompt, so the system + tool catalog prefix stays byte-identical. The timestamp is rendered once at send time and stored as a hidden `time` part, so historical user messages stay byte-identical across later requests; the UI never shows that raw marker.
 - Hovering a user message shows its local date and time below the bubble. Hovering any user or assistant message reveals **Copy**; assistant Markdown is copied as rendered rich HTML plus rendered plain text, so pasting into Word/Docs keeps headings, bold, lists, tables and code blocks. User messages also show **Revert**, which removes that message and everything after it, then puts the original text back in the composer for editing and resending.
+- The workspace folder is configurable in **Settings → Workspace**. It defaults to the app's current working directory and applies to the built-in file tools; `bash` starts there. A `skill` is a `SKILL.md` under `.mcp-chat/skills/<name>`, `.opencode/skills/<name>`, or the app-data `skills` directory.
 - Providers, keys and MCP servers are managed from the UI. API keys live in the OS keychain; the webview never receives them back.
 
 Not in this batch: OAuth 2.1/DCR (M6) and packaging (M7). Static bearer tokens and an `X-API-Key` header (stored in the OS keychain) for MCP work.
@@ -96,10 +98,10 @@ Everything below **was run in this repository** on Linux without a GUI/WebKit de
 ```bash
 pnpm lint          # ESLint
 pnpm typecheck     # TypeScript
-pnpm test          # Vitest: 14 tests
+pnpm test          # Vitest: 15 tests
 pnpm build         # Vite production build
 pnpm fmt:check     # cargo fmt --check
-pnpm core:test     # 26 unit + 28 agent + 6 MCP integration + 1 auth + 1 provider test = 62 Rust tests
+pnpm core:test     # 34 unit + 29 agent + 6 MCP integration + 1 auth + 1 provider test = 71 Rust tests
 pnpm core:clippy   # cargo clippy -p mcp-chat-core --all-targets -- -D warnings
 pnpm mock:clippy   # same for the mock server
 pnpm test:e2e      # Playwright: 5 smoke tests against vite preview with a stubbed IPC bridge
@@ -107,7 +109,7 @@ pnpm test:e2e      # Playwright: 5 smoke tests against vite preview with a stubb
 
 `pnpm check` runs all of the above except Playwright.
 
-The Rust tests cover the acceptance matrix: split tool arguments, two parallel calls, invalid arguments, unknown tools, `finish_reason: length`, a cut stream, context overflow + compaction, manual compaction/context status, per-chat server selection, lazy MCP catalog/schema/call, batch execute, read_tool_output paging, default/custom system prompt, cache-stable timestamps in user turns, revert-to-composer, unknown finish reason, policy denial, user rejection with feedback, crash sweep, progress notifications, MRTR elicitation, output spill/paging, max steps, cancellation during a tool, and retryable provider errors.
+The Rust tests cover the acceptance matrix: split tool arguments, two parallel calls, invalid arguments, unknown tools, `finish_reason: length`, a cut stream, context overflow + compaction, manual compaction/context status, per-chat server selection, lazy MCP catalog/schema/call, batch execute, read_tool_output paging, built-in file/shell/search/skill tools, built-in question round trip, default/custom system prompt, cache-stable timestamps in user turns, revert-to-composer, unknown finish reason, policy denial, user rejection with feedback, crash sweep, progress notifications, MRTR elicitation, output spill/paging, max steps, cancellation during a tool, and retryable provider errors.
 
 **What is not verified on this machine:** the Tauri shell itself could not be compiled or launched here because the machine has no WebKit/GTK development headers and no display. `pnpm tauri dev` is the intended path on a desktop with the prerequisites above. The frontend was verified in a browser through Playwright using a stubbed IPC bridge; screenshots are from that harness, not the native window. No real provider API key was used for automated tests; the keychain path is exercised with an in-memory store in tests.
 

@@ -212,6 +212,18 @@ export interface ApprovalEvent {
   args: Record<string, unknown>;
 }
 
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface QuestionPrompt {
+  header: string;
+  question: string;
+  multiple?: boolean;
+  options: QuestionOption[];
+}
+
 export interface InputRequestEvent {
   type: "input_request";
   conversationId: string;
@@ -219,6 +231,7 @@ export interface InputRequestEvent {
   request: {
     inputRequests?: Record<string, InputRequest>;
     requestState?: unknown;
+    questions?: QuestionPrompt[];
   };
 }
 
@@ -299,6 +312,7 @@ export interface AppInfo {
   name: string;
   version: string;
   dataDir: string;
+  workspaceDir: string;
   platform: string;
 }
 

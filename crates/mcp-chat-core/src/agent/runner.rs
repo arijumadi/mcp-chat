@@ -11,8 +11,9 @@ use crate::agent::ChatEngine;
 use crate::agent::context::{build_messages, estimate_tokens, transcript_for_summary};
 use crate::agent::permissions::Effect;
 use crate::agent::tools::{
-    MCP_SEARCH_TOOLS, ToolExecRequest, builtin_tool_def, builtin_tool_info, is_meta_tool,
-    meta_tool_defs, meta_tool_info, persist_result,
+    MCP_SEARCH_TOOLS, ToolExecRequest, builtin_default_effect, builtin_tool_defs,
+    builtin_tool_info, is_builtin_tool, is_meta_tool, meta_tool_defs, meta_tool_info,
+    persist_result,
 };
 use crate::agent::types::{
     CONTINUE_PROMPT, MAX_STEPS_PROMPT, OUTPUT_LIMIT_PROMPT, StepError, is_length, retry_delay,
@@ -582,7 +583,7 @@ async fn load_tools(
             })
             .collect()
     };
-    defs.push(builtin_tool_def());
+    defs.extend(builtin_tool_defs());
     (registry, defaults, defs, active_slugs, tool_mode)
 }
 
@@ -1028,13 +1029,13 @@ async fn dispatch_call(
         return Ok(());
     };
     call.dispatched = true;
-    let (server_id, slug, server_name, default, tool) = if call.name == "read_tool_output" {
+    let (server_id, slug, server_name, default, tool) = if is_builtin_tool(&call.name) {
         (
             String::new(),
             "builtin".to_owned(),
             "mcp-chat".to_owned(),
-            Effect::Allow,
-            Some(builtin_tool_info()),
+            builtin_default_effect(&call.name),
+            builtin_tool_info(&call.name),
         )
     } else if is_meta_tool(&call.name) {
         (
@@ -1126,13 +1127,13 @@ async fn settle_call_error(
     call: &mut CallState,
     message: &str,
 ) -> crate::agent::tools::ToolExecResult {
-    let (server_id, slug, server_name, default, tool) = if call.name == "read_tool_output" {
+    let (server_id, slug, server_name, default, tool) = if is_builtin_tool(&call.name) {
         (
             String::new(),
             "builtin".to_owned(),
             "mcp-chat".to_owned(),
-            Effect::Allow,
-            Some(builtin_tool_info()),
+            builtin_default_effect(&call.name),
+            builtin_tool_info(&call.name),
         )
     } else if is_meta_tool(&call.name) {
         (

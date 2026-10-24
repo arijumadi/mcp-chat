@@ -221,6 +221,7 @@ export function installMock(): void {
           name: "MCP Chat",
           version: "0.1.0-mock",
           dataDir: "/home/you/.local/share/com.mcpchat.app",
+          workspaceDir: "/home/you/project",
           platform: "linux",
         };
       case "list_settings":

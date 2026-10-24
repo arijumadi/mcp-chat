@@ -2637,6 +2637,7 @@ dependencies = [
  "jsonschema",
  "keyring",
  "mcp-mock",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -2649,6 +2650,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "walkdir",
 ]
 
 [[package]]

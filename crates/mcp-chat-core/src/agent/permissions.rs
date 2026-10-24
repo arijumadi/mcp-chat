@@ -64,6 +64,10 @@ pub fn permission_resource(args: &serde_json::Value) -> String {
         "owner",
         "database",
         "table",
+        "command",
+        "filePath",
+        "file_path",
+        "pattern",
     ];
     for key in KEYS {
         if let Some(value) = args.get(*key) {

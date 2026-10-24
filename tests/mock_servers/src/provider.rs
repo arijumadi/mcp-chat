@@ -76,6 +76,7 @@ async fn models(State(_state): State<ProviderState>) -> Json<Value> {
             {"id": "mock-sleep"},
             {"id": "mock-lazy"},
             {"id": "mock-batch"},
+            {"id": "mock-question"},
             {"id": "mock-big-read"}
         ]
     }))
@@ -286,6 +287,25 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
                 )])),
                 _ => text_response("Paged output complete."),
             }
+        }
+        "question" => {
+            if tools_done {
+                return text_response("Question answered.");
+            }
+            let questions = json!({"questions": [{
+                "header": "Color",
+                "question": "Which color should I use?",
+                "options": [
+                    {"label": "Blue", "description": "Cool and calm"},
+                    {"label": "Green", "description": "Natural"}
+                ]
+            }]});
+            sse(tool_call_frames(&[(
+                0,
+                "call_question",
+                "question",
+                &questions.to_string(),
+            )]))
         }
         "batch" => {
             if tools_done {

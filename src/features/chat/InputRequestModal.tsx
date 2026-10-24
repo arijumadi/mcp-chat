@@ -5,6 +5,7 @@ import { Button } from "@/components/Button";
 import { Modal } from "@/components/Modal";
 import { inputClass } from "@/components/ui";
 import { call } from "@/lib/ipc";
+import type { InputRequestEvent, QuestionPrompt } from "@/lib/types";
 
 export function InputRequestModal() {
   const requests = useApp((state) => state.inputRequests);
@@ -15,6 +16,13 @@ export function InputRequestModal() {
   const [error, setError] = useState<string | null>(null);
 
   const entries = useMemo(() => Object.entries(request?.request.inputRequests ?? {}), [request]);
+  const questions = useMemo<QuestionPrompt[]>(
+    () =>
+      Array.isArray(request?.request.questions)
+        ? (request.request.questions as QuestionPrompt[])
+        : [],
+    [request],
+  );
 
   useEffect(() => {
     setValues({});
@@ -22,6 +30,10 @@ export function InputRequestModal() {
   }, [request?.callId]);
 
   if (!request) return null;
+
+  if (questions.length > 0) {
+    return <QuestionRequest request={request} questions={questions} />;
+  }
 
   const unsupported = entries.filter(
     ([, item]) => item.method !== "elicitation/create",
@@ -217,6 +229,153 @@ export function InputRequestModal() {
         </div>
       ) : null}
 
+      {error ? (
+        <p className="mt-3 text-[12px]" style={{ color: "var(--danger)" }}>
+          {error}
+        </p>
+      ) : null}
+    </Modal>
+  );
+}
+
+
+function QuestionRequest({
+  request,
+  questions,
+}: {
+  request: InputRequestEvent;
+  questions: QuestionPrompt[];
+}) {
+  const respond = useApp((state) => state.respondInput);
+  const [values, setValues] = useState<
+    Record<number, { selected: string[]; custom: string }>
+  >({});
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setValues({});
+    setError(null);
+  }, [request.callId]);
+
+  const update = (index: number, patch: Partial<{ selected: string[]; custom: string }>) => {
+    setValues((current) => {
+      const previous = current[index] ?? { selected: [], custom: "" };
+      return { ...current, [index]: { ...previous, ...patch } };
+    });
+  };
+
+  const submit = () => {
+    const answers = questions.map((question, index) => {
+      const value = values[index];
+      const selected = value?.selected ?? [];
+      const custom = value?.custom.trim() ?? "";
+      return {
+        header: question.header,
+        question: question.question,
+        answer: custom || selected.join(", "),
+      };
+    });
+    const missing = answers.find((answer) => !answer.answer);
+    if (missing) {
+      setError(`Answer "${missing.header}" to continue.`);
+      return;
+    }
+    void respond(request.callId, { answers }, false);
+  };
+
+  return (
+    <Modal
+      open
+      onClose={() => undefined}
+      width="md"
+      title={
+        <span className="flex items-center gap-2">
+          <MessageSquareQuote size={16} style={{ color: "var(--accent)" }} />
+          The model needs input
+        </span>
+      }
+      subtitle="Answer the question to continue the tool call."
+      footer={
+        <>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void respond(request.callId, {}, true)}
+          >
+            Decline
+          </Button>
+          <Button size="sm" variant="primary" onClick={submit}>
+            Send answer
+          </Button>
+        </>
+      }
+    >
+      <div className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
+        {questions.map((question, index) => {
+          const value = values[index] ?? { selected: [], custom: "" };
+          return (
+            <div
+              key={`${question.header}-${index}`}
+              className="rounded-xl border p-3.5"
+              style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+            >
+              <div
+                className="text-[10px] tracking-[0.06em] uppercase"
+                style={{ color: "var(--faint)" }}
+              >
+                {question.header}
+              </div>
+              <div className="mt-1 text-[13.5px] font-medium">{question.question}</div>
+              <div className="mt-2.5 grid gap-1.5">
+                {(question.options ?? []).map((option) => {
+                  const checked = value.selected.includes(option.label);
+                  return (
+                    <label
+                      key={option.label}
+                      className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-[12.5px] transition hover:bg-[var(--panel-2)]"
+                    >
+                      <input
+                        type={question.multiple ? "checkbox" : "radio"}
+                        name={`question-${index}`}
+                        checked={checked}
+                        onChange={() => {
+                          update(index, {
+                            selected: question.multiple
+                              ? checked
+                                ? value.selected.filter((item) => item !== option.label)
+                                : [...value.selected, option.label]
+                              : [option.label],
+                          });
+                        }}
+                        className="mt-0.5"
+                      />
+                      <span className="min-w-0">
+                        <span className="block">{option.label}</span>
+                        {option.description ? (
+                          <span
+                            className="mt-0.5 block text-[10.5px] leading-snug"
+                            style={{ color: "var(--faint)" }}
+                          >
+                            {option.description}
+                          </span>
+                        ) : null}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <input
+                value={value.custom}
+                onChange={(event) => update(index, { custom: event.target.value })}
+                placeholder="Or type a custom answer…"
+                className={`${inputClass} mt-2`}
+                style={{ borderColor: "var(--border)" }}
+                aria-label={`Custom answer for ${question.header}`}
+              />
+            </div>
+          );
+        })}
+      </div>
       {error ? (
         <p className="mt-3 text-[12px]" style={{ color: "var(--danger)" }}>
           {error}

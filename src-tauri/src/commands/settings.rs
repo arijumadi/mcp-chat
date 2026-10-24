@@ -19,6 +19,7 @@ pub struct AppInfo {
     pub name: String,
     pub version: String,
     pub data_dir: String,
+    pub workspace_dir: String,
     pub platform: String,
 }
 
@@ -28,6 +29,10 @@ pub async fn app_info(state: State<'_, AppState>) -> CmdResult<AppInfo> {
         name: "MCP Chat".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         data_dir: state.data_dir.display().to_string(),
+        workspace_dir: mcp_chat_core::agent::tools::workspace_root(&state.db.pool)
+            .await
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         platform: std::env::consts::OS.into(),
     })
 }

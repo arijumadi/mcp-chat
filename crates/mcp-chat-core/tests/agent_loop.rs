@@ -206,13 +206,21 @@ async fn streams_text_and_persists_it() {
     );
     let requests = h.provider.requests();
     assert_eq!(requests.len(), 1);
-    assert!(
-        requests[0]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tool| { tool["function"]["name"] == "read_tool_output" })
-    );
+    let tool_names = requests[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(tool_names.contains(&"read_tool_output"));
+    assert!(tool_names.contains(&"bash"));
+    assert!(tool_names.contains(&"read"));
+    assert!(tool_names.contains(&"edit"));
+    assert!(tool_names.contains(&"write"));
+    assert!(tool_names.contains(&"grep"));
+    assert!(tool_names.contains(&"glob"));
+    assert!(tool_names.contains(&"skill"));
+    assert!(tool_names.contains(&"question"));
     let messages = requests[0]["messages"].as_array().unwrap();
     let system = messages
         .iter()
@@ -826,6 +834,8 @@ async fn lazy_tool_mode_reads_schema_then_calls_the_target() {
         .collect::<Vec<_>>();
     assert!(first_request_tools.contains(&"mcp_get_tool_schema".to_string()));
     assert!(first_request_tools.contains(&"mcp_call_tool".to_string()));
+    assert!(first_request_tools.contains(&"bash".to_string()));
+    assert!(first_request_tools.contains(&"question".to_string()));
     assert!(!first_request_tools.contains(&"mcp_search_tools".to_string()));
     assert!(
         !first_request_tools
@@ -1004,4 +1014,70 @@ async fn revert_message_keeps_earlier_turns() {
     assert_eq!(remaining.len(), 2);
     assert_eq!(remaining[0].message.role, "user");
     assert_eq!(remaining[1].message.role, "assistant");
+}
+
+#[tokio::test]
+async fn question_builtin_round_trip() {
+    let h = Harness::new("mock-question", None, 0).await;
+    let mut receiver = h.engine.subscribe();
+    h.engine
+        .send_message(&h.conversation_id, "ask me")
+        .await
+        .unwrap();
+    let call_id = loop {
+        let event = tokio::time::timeout(Duration::from_secs(31), receiver.recv())
+            .await
+            .expect("question timed out")
+            .expect("event channel");
+        if let CoreEvent::InputRequest {
+            call_id, request, ..
+        } = event
+        {
+            assert!(
+                request["questions"]
+                    .as_array()
+                    .is_some_and(|items| !items.is_empty())
+            );
+            break call_id;
+        }
+    };
+    assert!(h.engine.respond_input(
+        &call_id,
+        InputAnswer {
+            responses: json!({"answers": [{
+                "header": "Color",
+                "question": "Which color should I use?",
+                "answer": "Blue"
+            }]}),
+            cancelled: false,
+        }
+    ));
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(31), receiver.recv())
+            .await
+            .expect("turn timed out")
+            .expect("event channel");
+        if let CoreEvent::Status {
+            status: TurnStatus::Idle | TurnStatus::Error,
+            ..
+        } = event
+        {
+            break;
+        }
+    }
+    assert!(h.assistant_text().await.contains("Question answered."));
+    let result = h
+        .history()
+        .await
+        .iter()
+        .filter(|message| message.message.role == "tool")
+        .flat_map(|message| message.parts.iter())
+        .map(|part| part.payload())
+        .find(|payload| {
+            payload["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("Blue"))
+        })
+        .expect("question result");
+    assert_eq!(result["ok"], true);
 }

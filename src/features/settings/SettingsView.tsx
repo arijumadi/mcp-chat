@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Database,
   ExternalLink,
+  FolderOpen,
   KeyRound,
   Monitor,
   Moon,
@@ -51,12 +52,19 @@ export function SettingsView() {
     Number(settings["compaction.buffer"] ?? 0),
   );
   const [savingContext, setSavingContext] = useState(false);
+  const [workspaceRoot, setWorkspaceRoot] = useState(settings["workspace.root"] ?? "");
+  const [savingWorkspace, setSavingWorkspace] = useState(false);
+  const workspaceSetting = settings["workspace.root"];
   const compactionKeepSetting = settings["compaction.keep_tokens"];
   const compactionBufferSetting = settings["compaction.buffer"];
 
   useEffect(() => {
     setSystemPrompt(settings.default_system_prompt ?? DEFAULT_SYSTEM_PROMPT);
   }, [settings.default_system_prompt]);
+
+  useEffect(() => {
+    setWorkspaceRoot(workspaceSetting ?? "");
+  }, [workspaceSetting]);
 
   useEffect(() => {
     setKeepTokens(Number(compactionKeepSetting ?? 15000));
@@ -130,6 +138,22 @@ export function SettingsView() {
       toast(String(error), "error");
     } finally {
       setSavingContext(false);
+    }
+  };
+
+  const saveWorkspace = async () => {
+    setSavingWorkspace(true);
+    try {
+      await call("set_setting", {
+        key: "workspace.root",
+        value: workspaceRoot.trim(),
+      });
+      await refreshSettings();
+      toast("Workspace folder saved.", "info");
+    } catch (error) {
+      toast(String(error), "error");
+    } finally {
+      setSavingWorkspace(false);
     }
   };
 
@@ -328,6 +352,36 @@ export function SettingsView() {
               </Button>
               <Button size="sm" loading={savingPrompt} onClick={() => void savePrompt()}>
                 Save prompt
+              </Button>
+            </div>
+          </Section>
+
+          <Section
+            title="Workspace"
+            description="Built-in file and shell tools operate in this folder. Empty means the app's current working directory."
+          >
+            <label className="block">
+              <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
+                Workspace folder
+              </span>
+              <div className="flex items-center gap-2">
+                <FolderOpen size={14} style={{ color: "var(--muted)" }} />
+                <input
+                  value={workspaceRoot}
+                  onChange={(event) => setWorkspaceRoot(event.target.value)}
+                  placeholder={appInfo?.workspaceDir ?? "Current working directory"}
+                  className={inputClass}
+                  style={{ borderColor: "var(--border)" }}
+                />
+              </div>
+            </label>
+            <span className={hintClass} style={{ color: "var(--faint)" }}>
+              read, grep, glob, edit and write cannot escape this folder. bash starts
+              its command here. Bash, edit and write ask for approval by default.
+            </span>
+            <div className="mt-2 flex justify-end">
+              <Button size="sm" loading={savingWorkspace} onClick={() => void saveWorkspace()}>
+                Save workspace
               </Button>
             </div>
           </Section>
