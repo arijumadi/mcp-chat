@@ -31,7 +31,9 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - The transcript renders the newest 80 messages first with **Show earlier messages**; conversation lists and the export selector can load older pages, and conversations can be pinned to the top. Settings has a sticky section navigator. The first-run empty state includes a setup checklist for provider, key and optional MCP server. Error toasts stay longer, can be copied, and expose Retry where the action is useful; modals trap and restore focus. Provider/MCP chips show warning dots when a key or connection is missing.
 - Providers, keys and MCP servers are managed from the UI. API keys live in the OS keychain; the webview never receives them back.
 
-Not in this batch: OAuth 2.1/DCR (M6) and packaging (M7). Static bearer tokens and an `X-API-Key` header (stored in the OS keychain) for MCP work.
+Packaging is configured for Windows (NSIS + MSI), macOS (app + dmg) and Linux (deb + rpm + AppImage). See `PACKAGING.md`. Installers must be built on the target OS; this headless repository does not produce native bundles.
+
+Not in this batch: OAuth 2.1/DCR (M6). Static bearer tokens and an `X-API-Key` header (stored in the OS keychain) for MCP work.
 
 ## Tool loading and context
 
@@ -107,6 +109,8 @@ pnpm lint          # ESLint
 pnpm typecheck     # TypeScript
 pnpm test          # Vitest: 28 tests
 pnpm build         # Vite production build
+pnpm version:check # package.json, Cargo workspace and Tauri version agree
+pnpm package       # native installer for the current OS
 pnpm fmt:check     # cargo fmt --check
 pnpm core:test     # 55 unit + 32 agent + 6 MCP integration + 1 auth + 1 provider test = 95 Rust tests
 pnpm core:clippy   # cargo clippy -p mcp-chat-core --all-targets -- -D warnings
@@ -155,8 +159,9 @@ src/                    React 19 + TypeScript + Tailwind 4 renderer
 tests/mock_servers/     axum MCP + OpenAI/Anthropic mock server
 e2e/                    Playwright smoke tests
 docs/screenshots/       UI captures from the mock bridge
+PACKAGING.md             Windows/macOS/Linux installer and signing guide
 ```
 
 ## Scope and next steps
 
-M6 (OAuth 2.1 + PKCE + DCR + loopback + refresh/Reconnect) and M7 (packaging, export dialog, final polish) are not implemented. See `ARCHITECTURE.md` for the known gaps and the protocol decisions.
+M6 (OAuth 2.1 + PKCE + DCR + loopback + refresh/Reconnect) is still not implemented. M7 packaging is configured; build the native installers on the target OS with `PACKAGING.md`. Automatic updates and MSIX are future work. See `ARCHITECTURE.md` for the remaining protocol gaps.

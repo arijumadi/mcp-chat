@@ -13,4 +13,5 @@ test-results/
 *.db-shm
 *.db-wal
 coverage/
+artifacts/
 .mcp-chat-dev/

@@ -15,7 +15,10 @@
     "core:test": "cargo test -p mcp-chat-core",
     "core:clippy": "cargo clippy -p mcp-chat-core --all-targets -- -D warnings",
     "mock": "cargo run -p mcp-mock --",
-    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm fmt:check && pnpm core:test && pnpm core:clippy && pnpm mock:clippy && cargo test -p mcp-mock",
+    "version:check": "node scripts/check-versions.mjs",
+    "package": "tauri build",
+    "package:debug": "tauri build --debug",
+    "check": "pnpm version:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm fmt:check && pnpm core:test && pnpm core:clippy && pnpm mock:clippy && cargo test -p mcp-mock",
     "mock:clippy": "cargo clippy -p mcp-mock --all-targets -- -D warnings",
     "fmt:check": "cargo fmt --all -- --check"
   },
