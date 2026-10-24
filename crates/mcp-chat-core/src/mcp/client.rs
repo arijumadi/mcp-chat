@@ -59,8 +59,11 @@ impl RpcError {
         match self {
             Self::Status { status, rpc, .. } => match rpc {
                 Some(error) => {
-                    matches!(*status, 400 | 404 | 405)
-                        && (error.code == -32601 || error.code == -32022)
+                    // A modern server uses these codes for header/capability
+                    // problems. Anything else on 400/404/405 (including the
+                    // common legacy "Missing session ID" -32600) means the
+                    // endpoint is not speaking the modern stateless protocol.
+                    matches!(*status, 400 | 404 | 405) && !matches!(error.code, -32020 | -32021)
                 }
                 None => matches!(*status, 400 | 404 | 405),
             },

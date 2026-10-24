@@ -110,4 +110,24 @@ describe("transcript event reducer", () => {
     });
     expect(get().messages).toHaveLength(0);
   });
+
+  it("keeps the open conversation when a list refresh misses it", async () => {
+    useApp.setState({
+      activeId: "c1",
+      messages: [
+        {
+          id: "m1",
+          conversationId: "c1",
+          role: "assistant",
+          createdAt: Date.now(),
+          status: "completed",
+          error: null,
+          parts: [],
+        },
+      ],
+    });
+    await get().refreshConversations();
+    expect(get().activeId).toBe("c1");
+    expect(get().messages).toHaveLength(1);
+  });
 });

@@ -108,7 +108,16 @@ async fn mcp_post(
         McpMode::Modern => modern_post(&state, &headers, body).await,
         McpMode::Legacy => {
             if method == "server/discover" {
-                return (StatusCode::NOT_FOUND, "Not Found").into_response();
+                let id = body.get("id").cloned().unwrap_or(Value::Null);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json_rpc_error(
+                        &id,
+                        -32600,
+                        "Bad Request: Missing session ID",
+                    )),
+                )
+                    .into_response();
             }
             legacy_post(&state, &headers, body, false).await
         }

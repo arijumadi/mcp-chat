@@ -129,13 +129,9 @@ export const useApp = create<AppStore>()((set, get) => ({
         limit: 200,
         offset: 0,
       });
-      const active = get().activeId;
-      const patch: Partial<AppStore> = { conversations };
-      if (active && !conversations.some((conversation) => conversation.id === active)) {
-        patch.activeId = null;
-        patch.messages = [];
-      }
-      set(patch);
+      // Do not touch activeId/messages here. A slow list response from before a
+      // new chat was created must not make the open conversation disappear.
+      set({ conversations });
     } catch (error) {
       get().toast(String(error), "error");
     }
