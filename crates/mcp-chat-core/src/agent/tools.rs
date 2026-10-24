@@ -384,7 +384,18 @@ fn clean_powershell_stderr(value: &str) -> String {
         output.push_str(&extract_clixml_errors(&tail[objects..block_end]));
         rest = &tail[block_end..];
     }
-    decode_clixml_escapes(output.trim_end())
+    // The encoding/progress prolog is part of the PowerShell error context on
+    // some versions. It is not part of the command's stderr.
+    output
+        .split_inclusive('\n')
+        .filter(|line| {
+            !line
+                .trim_start()
+                .starts_with("$ProgressPreference='SilentlyContinue';")
+        })
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
 }
 
 fn normalize_shell_text(value: &str) -> String {
@@ -398,6 +409,13 @@ fn normalize_shell_text(value: &str) -> String {
 
 fn shell_echoed(command: &str, stdout: &str) -> bool {
     !stdout.trim().is_empty() && normalize_shell_text(stdout) == normalize_shell_text(command)
+}
+
+/// Only cmd.exe is allowed to trigger the echo heuristic. PowerShell's
+/// -EncodedCommand does not echo the script, and a command such as `$ "1+1"`
+/// legitimately produces output identical to its command text.
+fn echo_suspect(shell: &str, command: &str, stdout: &str) -> bool {
+    shell == "cmd" && shell_echoed(command, stdout)
 }
 
 fn line_prefix(content: &str, start_line: usize) -> String {
@@ -1580,7 +1598,7 @@ impl ToolExecutor {
         } else {
             stderr_raw.into_owned()
         };
-        let echoed = shell_echoed(command, &stdout);
+        let echoed = echo_suspect(shell, command, &stdout);
         let exit = output
             .status
             .code()
@@ -2439,6 +2457,27 @@ mod tests {
     fn missing_shell_has_a_clear_error() {
         let error = shell_launch_error("bash", std::io::Error::from(std::io::ErrorKind::NotFound));
         assert!(error.user_message().contains("Shell 'bash' was not found"));
+    }
+
+    #[test]
+    fn echo_detection_is_limited_to_cmd() {
+        assert!(echo_suspect("cmd", "cmd /C dir", "cmd /C dir"));
+        assert!(!echo_suspect("powershell", "1+1", "1+1"));
+        assert!(!echo_suspect("pwsh", "ok", "ok"));
+    }
+
+    #[test]
+    fn powershell_plain_stderr_keeps_literal_escape_text() {
+        assert_eq!(
+            clean_powershell_stderr("literal _x000D_ marker"),
+            "literal _x000D_ marker"
+        );
+    }
+
+    #[test]
+    fn powershell_prolog_is_filtered_from_stderr() {
+        let raw = "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=x;\nreal error";
+        assert_eq!(clean_powershell_stderr(raw), "real error");
     }
 
     #[test]
