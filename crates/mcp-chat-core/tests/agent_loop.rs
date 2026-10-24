@@ -95,7 +95,13 @@ impl Harness {
 
         let manager = Arc::new(McpManager::new(db.clone(), secrets.clone()));
         let tmp = tempfile::tempdir().unwrap();
-        let engine = ChatEngine::new(db.clone(), secrets, manager, tmp.path().join("tool-output"));
+        let engine = ChatEngine::new(
+            db.clone(),
+            secrets,
+            manager,
+            tmp.path().join("tool-output"),
+            tmp.path().join("attachments"),
+        );
 
         Harness {
             engine,
@@ -999,7 +1005,7 @@ async fn revert_message_removes_it_and_every_later_message() {
         .revert_message(&h.conversation_id, &first_user)
         .await
         .unwrap();
-    assert_eq!(text, "first turn");
+    assert_eq!(text.text, "first turn");
     assert!(h.history().await.is_empty());
     let conversation = conversations::get(&h.db.pool, &h.conversation_id)
         .await
@@ -1029,7 +1035,7 @@ async fn revert_message_keeps_earlier_turns() {
         .revert_message(&h.conversation_id, &second_user)
         .await
         .unwrap();
-    assert_eq!(text, "second turn");
+    assert_eq!(text.text, "second turn");
     let remaining = h.history().await;
     assert_eq!(remaining.len(), 2);
     assert_eq!(remaining[0].message.role, "user");

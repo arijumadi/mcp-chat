@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
-import { ArrowUp, Square } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowUp, Loader2, Paperclip, Square } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useApp } from "@/app/store";
 import { Button } from "@/components/Button";
 import { cn } from "@/lib/cn";
@@ -8,6 +9,7 @@ import type { Conversation } from "@/lib/types";
 import { ModelPicker } from "./ModelPicker";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { AutoApproveButton } from "./AutoApproveButton";
+import { AttachmentGrid } from "./Attachments";
 
 const ACTIVE: string[] = ["thinking", "streaming", "waiting_approval", "running_tool"];
 
@@ -24,8 +26,16 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const limitReached = useApp((state) => state.limitReached);
   const continueTurn = useApp((state) => state.continueTurn);
   const setView = useApp((state) => state.setView);
+  const pendingAttachments = useApp((state) => state.pendingAttachments);
+  const stageAttachments = useApp((state) => state.stageAttachments);
+  const removeAttachment = useApp((state) => state.removeAttachment);
+  const [attaching, setAttaching] = useState(false);
   const active = ACTIVE.includes(status);
   const disabled = providers.length === 0;
+  const canSend =
+    (value.trim().length > 0 || pendingAttachments.length > 0) &&
+    !active &&
+    !disabled;
 
   useEffect(() => {
     const textarea = ref.current;
@@ -47,9 +57,38 @@ export function Composer({ conversation }: { conversation: Conversation }) {
 
   const submit = () => {
     const text = value.trim();
-    if (!text || active || disabled) return;
+    if ((!text && pendingAttachments.length === 0) || active || disabled) return;
     setValue("");
     void send(text);
+  };
+
+  const chooseFiles = async () => {
+    if (active || disabled || attaching) return;
+    if (window.__MCP_CHAT_MOCK__) {
+      useApp
+        .getState()
+        .toast("The native file picker is unavailable in the browser demo.", "info");
+      return;
+    }
+    setAttaching(true);
+    try {
+      const selected = await open({
+        multiple: true,
+        directory: false,
+        title: "Attach files",
+      });
+      const paths =
+        typeof selected === "string"
+          ? [selected]
+          : Array.isArray(selected)
+            ? selected
+            : [];
+      if (paths.length > 0) await stageAttachments(paths);
+    } catch (error) {
+      useApp.getState().toast(String(error), "error");
+    } finally {
+      setAttaching(false);
+    }
   };
 
   return (
@@ -100,6 +139,15 @@ export function Composer({ conversation }: { conversation: Conversation }) {
             boxShadow: "0 8px 28px rgb(0 0 0 / 0.06)",
           }}
         >
+          {pendingAttachments.length > 0 ? (
+            <div className="px-1 pt-1.5">
+              <AttachmentGrid
+                attachments={pendingAttachments}
+                compact
+                onRemove={(id) => void removeAttachment(id)}
+              />
+            </div>
+          ) : null}
           <textarea
             ref={ref}
             value={value}
@@ -117,6 +165,21 @@ export function Composer({ conversation }: { conversation: Conversation }) {
             aria-label="Message"
           />
           <div className="mt-1 flex items-center gap-1.5 px-1">
+            <button
+              type="button"
+              onClick={() => void chooseFiles()}
+              disabled={active || disabled || attaching}
+              className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ color: "var(--muted)" }}
+              title="Attach files or images"
+              aria-label="Attach files or images"
+            >
+              {attaching ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Paperclip size={14} />
+              )}
+            </button>
             <ModelPicker conversation={conversation} disabled={active} />
             <WorkspacePicker conversation={conversation} disabled={active} />
             <AutoApproveButton />
@@ -134,7 +197,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
               ) : (
                 <button
                   onClick={submit}
-                  disabled={!value.trim() || disabled}
+                  disabled={!canSend}
                   className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-30"
                   style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
                   title="Send (Enter)"
@@ -150,7 +213,9 @@ export function Composer({ conversation }: { conversation: Conversation }) {
           className="mt-1.5 flex items-center justify-between px-1 text-[10.5px]"
           style={{ color: "var(--faint)" }}
         >
-          <span>Enter to send · Shift+Enter for a new line</span>
+          <span>
+            Enter to send · Shift+Enter for a new line · up to 6 files · 5 MB/image · 25 MB total
+          </span>
           <span>
             {active && step ? `step ${step.current}/${step.max} · ` : ""}
             {usage

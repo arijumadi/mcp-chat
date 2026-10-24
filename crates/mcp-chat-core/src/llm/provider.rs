@@ -87,6 +87,10 @@ pub struct ChatMessage {
 #[derive(Debug, Clone)]
 pub enum ContentBlock {
     Text(String),
+    Image {
+        media_type: String,
+        data: String,
+    },
     ToolCall {
         id: String,
         name: String,

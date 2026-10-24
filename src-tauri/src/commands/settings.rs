@@ -115,6 +115,8 @@ pub async fn delete_all_data(state: State<'_, AppState>) -> CmdResult<()> {
 
     let _ = tokio::fs::remove_dir_all(&state.output_dir).await;
     let _ = tokio::fs::create_dir_all(&state.output_dir).await;
+    let _ = tokio::fs::remove_dir_all(&state.engine.attachments_dir).await;
+    let _ = tokio::fs::create_dir_all(&state.engine.attachments_dir).await;
     let _ = tokio::fs::remove_dir_all(state.data_dir.join("logs")).await;
     Ok(())
 }

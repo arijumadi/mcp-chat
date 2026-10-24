@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
+use base64::Engine;
+use tokio::fs;
+
 use crate::llm::{ChatMessage, ChatRole, ContentBlock, ToolDef};
 use crate::models::{Conversation, MessageWithParts, Part, Provider};
 use crate::util::{message_time_note, truncate_chars};
@@ -51,7 +54,7 @@ pub fn latest_summary(history: &[MessageWithParts]) -> Option<(String, String)> 
 
 /// Convert persisted parts into the canonical provider history. Every tool call
 /// gets a matching tool result, even if the app crashed before it settled.
-pub fn build_messages(history: &[MessageWithParts]) -> (Vec<ChatMessage>, Option<String>) {
+pub async fn build_messages(history: &[MessageWithParts]) -> (Vec<ChatMessage>, Option<String>) {
     let summary = latest_summary(history);
     let mut start = 0;
     let mut summary_text = None;
@@ -95,25 +98,89 @@ pub fn build_messages(history: &[MessageWithParts]) -> (Vec<ChatMessage>, Option
         match message.message.role.as_str() {
             "user" => {
                 let text = text_parts(&message.parts);
-                if !text.trim().is_empty() {
-                    // Timestamp lives in the user message, not the system
-                    // prompt. The stored time part (or created_at for older
-                    // messages) reproduces the exact same bytes on later
-                    // requests, so provider prefix caching can hit.
-                    let note = message
-                        .parts
-                        .iter()
-                        .find(|part| part.kind == "time")
-                        .and_then(|part| {
-                            part.payload()
-                                .get("text")
-                                .and_then(|value| value.as_str())
-                                .map(str::to_owned)
-                        })
-                        .unwrap_or_else(|| message_time_note(message.message.created_at));
-                    let text = format!("{note}\n\n{text}");
-                    messages.push(ChatMessage::text(ChatRole::User, text));
+                let attachments: Vec<&Part> = message
+                    .parts
+                    .iter()
+                    .filter(|part| part.kind == "attachment")
+                    .collect();
+                if text.trim().is_empty() && attachments.is_empty() {
+                    continue;
                 }
+                // Timestamp lives in the user message, not the system
+                // prompt. The stored time part (or created_at for older
+                // messages) reproduces the exact same bytes on later
+                // requests, so provider prefix caching can hit.
+                let note = message
+                    .parts
+                    .iter()
+                    .find(|part| part.kind == "time")
+                    .and_then(|part| {
+                        part.payload()
+                            .get("text")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| message_time_note(message.message.created_at));
+                let mut blocks = vec![ContentBlock::Text(if text.trim().is_empty() {
+                    note
+                } else {
+                    format!("{note}\n\n{text}")
+                })];
+                for part in attachments {
+                    let payload = part.payload();
+                    let name = payload
+                        .get("name")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("attachment");
+                    let mime = payload
+                        .get("mime")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("application/octet-stream");
+                    let kind = payload
+                        .get("fileKind")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("file");
+                    if kind == "image" {
+                        let Some(path) = payload.get("path").and_then(|value| value.as_str())
+                        else {
+                            continue;
+                        };
+                        match fs::read(path).await {
+                            Ok(bytes) => blocks.push(ContentBlock::Image {
+                                media_type: mime.to_owned(),
+                                data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                            }),
+                            Err(_) => blocks.push(ContentBlock::Text(format!(
+                                "[Attached image could not be read: {name}]"
+                            ))),
+                        }
+                    } else if kind == "text" {
+                        let content = payload
+                            .get("text")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("");
+                        let truncated = payload
+                            .get("truncated")
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false);
+                        blocks.push(ContentBlock::Text(format!(
+                            "[Attached file: {name} ({mime}){}]\n{content}\n[/Attached file]",
+                            if truncated { ", truncated" } else { "" }
+                        )));
+                    } else {
+                        let size = payload
+                            .get("size")
+                            .and_then(|value| value.as_i64())
+                            .unwrap_or(0);
+                        blocks.push(ContentBlock::Text(format!(
+                            "[Attached binary file: {name} ({mime}, {size} bytes). Its binary content is not included in this message.]"
+                        )));
+                    }
+                }
+                messages.push(ChatMessage {
+                    role: ChatRole::User,
+                    content: blocks,
+                });
             }
             "system" => {
                 let text = text_parts(&message.parts);
@@ -266,6 +333,7 @@ pub fn estimate_tokens(messages: &[ChatMessage], tools: &[ToolDef], system: Opti
                     chars += content.chars().count();
                 }
                 ContentBlock::Text(text) => chars += text.chars().count(),
+                ContentBlock::Image { data, .. } => chars += data.len().min(24_000),
             }
         }
     }
@@ -325,6 +393,25 @@ pub fn transcript_for_summary(history: &[MessageWithParts]) -> String {
                         line.push_str(&format!("\n[previous summary] {text}"));
                     }
                 }
+                "attachment" => {
+                    let name = payload
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("attachment");
+                    let kind = payload
+                        .get("fileKind")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("file");
+                    if kind == "text" {
+                        let text = payload.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                        line.push_str(&format!(
+                            "\n[attached file {name}]\n{}",
+                            truncate_chars(text, 2_000).0
+                        ));
+                    } else {
+                        line.push_str(&format!("\n[attached {kind} {name}]"));
+                    }
+                }
                 _ => {}
             }
         }
@@ -337,4 +424,89 @@ pub fn transcript_for_summary(history: &[MessageWithParts]) -> String {
         }
     }
     out.trim().to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Message, Part};
+    use serde_json::json;
+
+    fn message_with_parts(parts: Vec<Part>) -> MessageWithParts {
+        MessageWithParts {
+            message: Message {
+                id: "m1".into(),
+                conversation_id: "c1".into(),
+                role: "user".into(),
+                created_at: 0,
+                status: "completed".into(),
+                error: None,
+            },
+            parts,
+        }
+    }
+
+    #[tokio::test]
+    async fn image_attachments_become_provider_image_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("pixel.png");
+        tokio::fs::write(&image, b"image-bytes").await.unwrap();
+        let history = vec![message_with_parts(vec![
+            Part {
+                id: "text".into(),
+                message_id: "m1".into(),
+                idx: 0,
+                kind: "text".into(),
+                payload_json: json!({"text": "describe this"}).to_string(),
+            },
+            Part {
+                id: "attachment".into(),
+                message_id: "m1".into(),
+                idx: 1,
+                kind: "attachment".into(),
+                payload_json: json!({
+                    "id": "a1",
+                    "name": "pixel.png",
+                    "mime": "image/png",
+                    "size": 11,
+                    "fileKind": "image",
+                    "path": image.to_string_lossy(),
+                })
+                .to_string(),
+            },
+        ])];
+        let (messages, _) = build_messages(&history).await;
+        assert_eq!(messages.len(), 1);
+        assert!(
+            matches!(&messages[0].content[0], ContentBlock::Text(text) if text.contains("describe this"))
+        );
+        assert!(matches!(
+            &messages[0].content[1],
+            ContentBlock::Image { media_type, data } if media_type == "image/png" && data == "aW1hZ2UtYnl0ZXM="
+        ));
+    }
+
+    #[tokio::test]
+    async fn text_attachments_are_inlined_for_the_model() {
+        let history = vec![message_with_parts(vec![Part {
+            id: "attachment".into(),
+            message_id: "m1".into(),
+            idx: 0,
+            kind: "attachment".into(),
+            payload_json: json!({
+                "id": "a1",
+                "name": "notes.txt",
+                "mime": "text/plain",
+                "size": 5,
+                "fileKind": "text",
+                "path": "/tmp/notes.txt",
+                "text": "hello",
+            })
+            .to_string(),
+        }])];
+        let (messages, _) = build_messages(&history).await;
+        let text = messages[0].text_content();
+        assert!(text.contains("notes.txt"));
+        assert!(text.contains("hello"));
+    }
 }

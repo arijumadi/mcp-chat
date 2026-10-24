@@ -3,7 +3,6 @@ import type {
   Conversation,
   CoreEvent,
   ExportResult,
-  Message,
   MessageWithParts,
   Part,
   ProviderView,
@@ -378,14 +377,7 @@ export function installMock(): void {
         emit({ type: "conversation_updated", conversationId });
         generating.add(conversationId);
         void simulateTurn(conversationId, text);
-        return {
-          id: user.id,
-          conversationId,
-          role: "user",
-          createdAt: user.createdAt,
-          status: "completed",
-          error: null,
-        } satisfies Message;
+        return user;
       }
       case "regenerate":
       case "continue_turn":
@@ -413,7 +405,7 @@ export function installMock(): void {
           }
         }
         emit({ type: "conversation_updated", conversationId });
-        return text;
+        return { text, attachments: [] };
       }
       case "respond_approval": {
         emit({

@@ -63,7 +63,7 @@ export function ModelPicker({
       <button
         onClick={() => setOpen((value) => !value)}
         disabled={disabled}
-        className="focus-ring flex max-w-[260px] items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
+        className="focus-ring flex max-w-[220px] items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
         style={{ borderColor: "var(--border)", color: "var(--muted)" }}
         title="Change model"
       >

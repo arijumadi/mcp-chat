@@ -273,7 +273,7 @@ async fn drive(
         });
 
         let history = messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
-        let (mut chat_messages, summary) = build_messages(&history);
+        let (mut chat_messages, summary) = build_messages(&history).await;
         let mut system = crate::agent::prompt::compose_system(
             resolved.system.clone(),
             &runtime_note,
@@ -301,7 +301,7 @@ async fn drive(
                     compacted_once = true;
                     let history =
                         messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
-                    let (messages, summary) = build_messages(&history);
+                    let (messages, summary) = build_messages(&history).await;
                     chat_messages = messages;
                     system = crate::agent::prompt::compose_system(
                         resolved.system.clone(),
@@ -1479,7 +1479,7 @@ pub async fn context_status(
         load_tools(&engine, &conversation).await;
     let (_, _, _, context_window, _) = engine.resolve(&conversation).await?;
     let history = messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
-    let (chat_messages, summary) = build_messages(&history);
+    let (chat_messages, summary) = build_messages(&history).await;
     let runtime_note =
         crate::agent::prompt::runtime_context(&engine.db.pool, &engine.output_dir, conversation_id)
             .await

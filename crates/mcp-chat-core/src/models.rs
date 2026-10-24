@@ -261,6 +261,18 @@ pub enum PartPayload {
     Text {
         text: String,
     },
+    Attachment {
+        id: String,
+        name: String,
+        mime: String,
+        size: i64,
+        file_kind: String,
+        path: String,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        truncated: bool,
+    },
     Reasoning {
         text: String,
     },

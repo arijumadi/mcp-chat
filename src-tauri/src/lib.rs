@@ -27,11 +27,16 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
             let output_dir = data_dir.join("tool-output");
             std::fs::create_dir_all(&output_dir)?;
+            let attachments_dir = data_dir.join("attachments");
+            std::fs::create_dir_all(&attachments_dir)?;
             init_logging(&data_dir);
 
             let db_path = data_dir.join("mcp-chat.db");
             let db = tauri::async_runtime::block_on(Db::open(&db_path))?;
             tauri::async_runtime::block_on(messages::sweep_interrupted(&db.pool))?;
+            tauri::async_runtime::block_on(mcp_chat_core::attachments::sweep_pending(
+                &attachments_dir,
+            ));
 
             let secrets: Arc<dyn SecretStore> = Arc::new(KeyringStore);
             let manager = Arc::new(McpManager::new(db.clone(), secrets.clone()));
@@ -40,6 +45,7 @@ pub fn run() {
                 secrets.clone(),
                 manager.clone(),
                 output_dir.clone(),
+                attachments_dir,
             );
 
             let state = AppState {
@@ -63,6 +69,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::chat::list_conversations,
+            commands::attachments::stage_attachments,
+            commands::attachments::discard_staged_attachments,
             commands::chat::search_conversations,
             commands::chat::get_conversation,
             commands::chat::create_conversation,

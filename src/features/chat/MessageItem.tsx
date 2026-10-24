@@ -9,6 +9,7 @@ import { ToolCard } from "./ToolCard";
 import { cn } from "@/lib/cn";
 import { formatMessageDateTime } from "@/lib/format";
 import { CopyButton } from "./CopyButton";
+import { AttachmentGrid, attachmentsFromParts } from "./Attachments";
 
 export function MessageItem({
   message,
@@ -32,10 +33,12 @@ export function MessageItem({
   if (message.role === "tool") return null;
 
   if (message.role === "user") {
-    const text = (partsOverride ?? message.parts)
+    const parts = partsOverride ?? message.parts;
+    const text = parts
       .filter((part) => part.kind === "text")
       .map(partText)
       .join("");
+    const attachments = attachmentsFromParts(parts);
     return (
       <>
         <div className="animate-in flex justify-end py-2">
@@ -44,12 +47,19 @@ export function MessageItem({
             data-testid="user-message"
             data-message-id={message.id}
           >
-          <div
-            className="max-w-full rounded-2xl rounded-br-md px-4 py-2.5 text-[14.5px] whitespace-pre-wrap"
-            style={{ background: "var(--user)" }}
-          >
-            {text}
-          </div>
+          {attachments.length > 0 ? (
+            <div className="mb-1.5 max-w-full">
+              <AttachmentGrid attachments={attachments} align="end" />
+            </div>
+          ) : null}
+          {text ? (
+            <div
+              className="max-w-full rounded-2xl rounded-br-md px-4 py-2.5 text-[14.5px] whitespace-pre-wrap"
+              style={{ background: "var(--user)" }}
+            >
+              {text}
+            </div>
+          ) : null}
           <div className="mt-0.5 flex h-6 items-center justify-end gap-0.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
             <span
               className="mr-1 text-[10.5px] tabular-nums"
@@ -57,7 +67,7 @@ export function MessageItem({
             >
               {formatMessageDateTime(message.createdAt)}
             </span>
-            <CopyButton payload={() => ({ text })} />
+            {text ? <CopyButton payload={() => ({ text })} /> : null}
             {!busy ? (
               <button
                 type="button"

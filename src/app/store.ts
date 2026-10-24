@@ -3,12 +3,14 @@ import { call, subscribe } from "@/lib/ipc";
 import type {
   AppInfo,
   ApprovalEvent,
+  Attachment,
   Conversation,
   CoreEvent,
   InputRequestEvent,
   MessageWithParts,
   Part,
   ProviderView,
+  RevertResult,
   SearchHit,
   ServerView,
   TurnStatus,
@@ -37,6 +39,7 @@ export interface AppStore {
   conversationHasMore: boolean;
   activeId: string | null;
   messages: MessageWithParts[];
+  pendingAttachments: Attachment[];
   draft: string;
   providers: ProviderView[];
   servers: ServerView[];
@@ -64,6 +67,8 @@ export interface AppStore {
   openConversation: (id: string) => Promise<void>;
   newChat: () => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
+  stageAttachments: (paths: string[]) => Promise<void>;
+  removeAttachment: (id: string) => Promise<void>;
   setDraft: (text: string) => void;
   stop: () => Promise<void>;
   regenerate: () => Promise<void>;
@@ -98,6 +103,13 @@ export interface AppStore {
 let unsubscribe: (() => void) | null = null;
 let initializing = false;
 
+function discardStaged(attachments: Attachment[]): void {
+  if (attachments.length === 0) return;
+  void call("discard_staged_attachments", {
+    ids: attachments.map((attachment) => attachment.id),
+  }).catch(() => undefined);
+}
+
 export const useApp = create<AppStore>()((set, get) => ({
   booted: false,
   conversations: [],
@@ -105,6 +117,7 @@ export const useApp = create<AppStore>()((set, get) => ({
   conversationHasMore: false,
   activeId: null,
   messages: [],
+  pendingAttachments: [],
   draft: "",
   providers: [],
   servers: [],
@@ -219,6 +232,7 @@ export const useApp = create<AppStore>()((set, get) => ({
   },
 
   async openConversation(id) {
+    discardStaged(get().pendingAttachments);
     set({
       activeId: id,
       view: "chat",
@@ -230,6 +244,7 @@ export const useApp = create<AppStore>()((set, get) => ({
       limitReached: false,
       autoApprove: false,
       draft: "",
+      pendingAttachments: [],
     });
     await get().reloadActive();
     const autoApprove = await call<boolean>("get_auto_approve", {
@@ -250,10 +265,12 @@ export const useApp = create<AppStore>()((set, get) => ({
           workspaceRoot: current?.workspaceRoot ?? null,
         },
       });
+      discardStaged(get().pendingAttachments);
       set((state) => ({
         conversations: [conversation, ...state.conversations],
         activeId: conversation.id,
         messages: [],
+        pendingAttachments: [],
         draft: "",
         view: "chat",
         status: "idle",
@@ -271,13 +288,42 @@ export const useApp = create<AppStore>()((set, get) => ({
 
   async sendMessage(text) {
     const conversationId = get().activeId;
-    if (!conversationId || !text.trim()) return;
+    const attachments = get().pendingAttachments;
+    if (!conversationId || (!text.trim() && attachments.length === 0)) return;
     if (get().providers.length === 0) {
       get().toast("Add a provider in Settings before sending a message.", "error");
       set({ view: "settings" });
       return;
     }
     const tempId = `temp-${Date.now()}`;
+    const parts: Part[] = [];
+    if (text.trim()) {
+      parts.push({
+        id: `${tempId}-part`,
+        messageId: tempId,
+        idx: 0,
+        kind: "text",
+        payloadJson: JSON.stringify({ text }),
+      });
+    }
+    attachments.forEach((attachment, index) => {
+      parts.push({
+        id: `${tempId}-attachment-${index}`,
+        messageId: tempId,
+        idx: parts.length,
+        kind: "attachment",
+        payloadJson: JSON.stringify({
+          id: attachment.id,
+          name: attachment.name,
+          mime: attachment.mime,
+          size: attachment.size,
+          fileKind: attachment.kind,
+          path: attachment.path,
+          text: attachment.text ?? null,
+          truncated: Boolean(attachment.truncated),
+        }),
+      });
+    });
     const optimistic: MessageWithParts = {
       id: tempId,
       conversationId,
@@ -285,15 +331,7 @@ export const useApp = create<AppStore>()((set, get) => ({
       createdAt: Date.now(),
       status: "completed",
       error: null,
-      parts: [
-        {
-          id: `${tempId}-part`,
-          messageId: tempId,
-          idx: 0,
-          kind: "text",
-          payloadJson: JSON.stringify({ text }),
-        },
-      ],
+      parts,
     };
     set((state) => ({
       messages: [...state.messages, optimistic],
@@ -309,14 +347,16 @@ export const useApp = create<AppStore>()((set, get) => ({
       const message = await call<MessageWithParts>("send_message", {
         conversationId,
         text,
+        attachmentIds: attachments.map((attachment) => attachment.id),
       });
       set((state) => ({
+        pendingAttachments: [],
         messages: state.messages.map((item) =>
           item.id === tempId
             ? {
                 ...item,
                 id: message.id,
-                parts: item.parts.map((part) => ({ ...part, messageId: message.id })),
+                parts: message.parts,
               }
             : item,
         ),
@@ -331,6 +371,42 @@ export const useApp = create<AppStore>()((set, get) => ({
       get().toast(String(error), "error", [
         { label: "Retry", onClick: () => void get().sendMessage(text) },
       ]);
+    }
+  },
+
+  async stageAttachments(paths) {
+    const existing = get().pendingAttachments;
+    const room = 6 - existing.length;
+    if (room <= 0) {
+      get().toast("You can attach up to 6 files per message.", "error");
+      return;
+    }
+    const selected = paths.slice(0, room);
+    if (paths.length > room) {
+      get().toast(`Only ${room} more attachment${room === 1 ? "" : "s"} fit.`, "error");
+    }
+    try {
+      const staged = await call<Attachment[]>("stage_attachments", {
+        paths: selected,
+      });
+      set((state) => ({
+        pendingAttachments: [...state.pendingAttachments, ...staged].slice(0, 6),
+      }));
+    } catch (error) {
+      get().toast(String(error), "error");
+    }
+  },
+
+  async removeAttachment(id) {
+    set((state) => ({
+      pendingAttachments: state.pendingAttachments.filter(
+        (attachment) => attachment.id !== id,
+      ),
+    }));
+    try {
+      await call("discard_staged_attachments", { ids: [id] });
+    } catch (error) {
+      get().toast(String(error), "error");
     }
   },
 
@@ -373,15 +449,17 @@ export const useApp = create<AppStore>()((set, get) => ({
     const conversationId = get().activeId;
     if (!conversationId) return;
     try {
-      const text = await call<string>("revert_message", {
+      const result = await call<RevertResult>("revert_message", {
         conversationId,
         messageId,
       });
       if (get().activeId !== conversationId) return;
       await get().reloadActive();
       if (get().activeId !== conversationId) return;
+      discardStaged(get().pendingAttachments);
       set({
-        draft: text,
+        draft: result.text,
+        pendingAttachments: result.attachments,
         status: "idle",
         usage: null,
         step: null,
@@ -493,9 +571,11 @@ export const useApp = create<AppStore>()((set, get) => ({
     try {
       await call("delete_conversation", { conversationId: id });
       if (get().activeId === id) {
+        discardStaged(get().pendingAttachments);
         set({
           activeId: null,
           messages: [],
+          pendingAttachments: [],
           draft: "",
           status: "idle",
           usage: null,

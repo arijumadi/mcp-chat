@@ -29,6 +29,7 @@ tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
 walkdir.workspace = true
+pdf-extract = "0.12.1"
 
 [dev-dependencies]
 axum.workspace = true

@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod attachments;
 pub mod db;
 pub mod error;
 pub mod events;

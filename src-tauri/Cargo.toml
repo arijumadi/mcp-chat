@@ -18,7 +18,7 @@ tauri-build = { version = "2.7.4", features = [] }
 mcp-chat-core = { path = "../crates/mcp-chat-core" }
 serde.workspace = true
 serde_json.workspace = true
-tauri = { version = "2.12.5", features = [] }
+tauri = { version = "2.12.5", features = ["protocol-asset"] }
 tauri-plugin-opener = "2.7.2"
 tauri-plugin-dialog = "=2.7.3"
 tokio.workspace = true

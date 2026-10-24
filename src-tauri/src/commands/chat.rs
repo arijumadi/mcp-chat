@@ -7,7 +7,7 @@ use mcp_chat_core::agent::runner;
 use mcp_chat_core::db::repo::{
     conversation_servers, conversations, messages, providers, servers, settings,
 };
-use mcp_chat_core::models::{Conversation, Message, MessageWithParts, SearchHit};
+use mcp_chat_core::models::{Conversation, MessageWithParts, SearchHit};
 
 use crate::error::{CmdResult, cmd_err};
 use crate::state::AppState;
@@ -169,7 +169,13 @@ pub async fn delete_conversation(
     }
     conversations::delete(&state.db.pool, &conversation_id)
         .await
-        .map_err(cmd_err)
+        .map_err(cmd_err)?;
+    mcp_chat_core::attachments::delete_conversation(
+        &state.engine.attachments_dir,
+        &conversation_id,
+    )
+    .await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -257,12 +263,21 @@ pub async fn send_message(
     state: State<'_, AppState>,
     conversation_id: String,
     text: String,
-) -> CmdResult<Message> {
-    state
+    attachment_ids: Option<Vec<String>>,
+) -> CmdResult<MessageWithParts> {
+    let message = state
         .engine
-        .send_message(&conversation_id, &text)
+        .send_message_with_attachments(
+            &conversation_id,
+            &text,
+            attachment_ids.as_deref().unwrap_or(&[]),
+        )
         .await
-        .map_err(cmd_err)
+        .map_err(cmd_err)?;
+    let parts = messages::parts_for_message(&state.db.pool, &message.id)
+        .await
+        .map_err(cmd_err)?;
+    Ok(MessageWithParts { message, parts })
 }
 
 #[tauri::command]
@@ -288,7 +303,7 @@ pub async fn revert_message(
     state: State<'_, AppState>,
     conversation_id: String,
     message_id: String,
-) -> CmdResult<String> {
+) -> CmdResult<mcp_chat_core::agent::RevertedMessage> {
     state
         .engine
         .revert_message(&conversation_id, &message_id)
@@ -457,6 +472,21 @@ pub async fn export_conversation(
                         out.push_str(&serde_json::to_string_pretty(args).unwrap_or_default());
                         out.push_str("\n```\n\n");
                     }
+                }
+                "attachment" => {
+                    let name = payload
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("attachment");
+                    let file_kind = payload
+                        .get("fileKind")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let mime = payload.get("mime").and_then(Value::as_str).unwrap_or("");
+                    let size = payload.get("size").and_then(Value::as_i64).unwrap_or(0);
+                    out.push_str(&format!(
+                        "_Attachment: `{name}` ({file_kind}, {mime}, {size} bytes)_\n\n"
+                    ));
                 }
                 "error" => {
                     if let Some(text) = payload.get("message").and_then(Value::as_str) {

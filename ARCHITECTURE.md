@@ -11,7 +11,7 @@
 ┌───────────────┴───────────────────────────────▼──────────────┐
 │ src-tauri (thin shell)                                       │
 │  setup: paths, logging, DB, keychain, events, startup sweep   │
-│  commands: chat, providers, servers, settings                 │
+│  commands: chat, attachments, providers, servers, settings   │
 └───────────────▲───────────────────────────────┬──────────────┘
                 │ CoreEvent (broadcast)          │ calls
 ┌───────────────┴───────────────────────────────▼──────────────┐
@@ -23,7 +23,7 @@
 │  secrets SecretStore trait → OS keyring                      │
 └───────────────┬───────────────────────────────┬──────────────┘
                 │ reqwest (no redirects)         │ files
-        LLM endpoint / MCP server          tool-output/*.json
+        LLM endpoint / MCP server          tool-output/*.json, attachments/
 ```
 
 There is no API key, MCP call, or provider request in the webview. The frontend only invokes commands and listens to three event channels.
@@ -34,7 +34,7 @@ SQLite in WAL mode, foreign keys on, migrations via `sqlx::migrate!`.
 
 - `conversations` — title, timestamps, provider/model, per-conversation `workspace_root`, system prompt, archived/pinned flags, `max_steps` (default 25).
 - `messages` — role, status (`completed`, `streaming`, `interrupted`, `error`, `synthetic`), error.
-- `parts` — ordered typed JSON payloads: `text`, `reasoning`, `tool_call`, `tool_result`, `error`, `summary`, and a hidden `time` marker used for the user-message timestamp.
+- `parts` — ordered typed JSON payloads: `text`, `attachment`, `reasoning`, `tool_call`, `tool_result`, `error`, `summary`, and a hidden `time` marker used for the user-message timestamp.
 - `providers` — kind, base URL, model, `api_key_ref` account id, context window, max output.
 - `servers` — URL, transport, auth kind, headers JSON, policy, negotiated version, capability/server info, cached tools + timestamp, OAuth issuer/client id.
 - `settings`, `permission_rules`.
@@ -101,7 +101,7 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 
 1. **Core crate split.** `crates/mcp-chat-core` holds DB/LLM/MCP/agent so the engine can be tested with `cargo test` on a machine without WebKit. `src-tauri` only wires commands, paths, keychain and events.
 2. **Thin MCP client instead of `rmcp` for this pass.** `rmcp` 3.7.0 is the official SDK and does support 2026-07-28 clients and Streamable HTTP, but this implementation needs exact mirrored header construction, `x-mcp-header`, legacy session/SSE fallback, and a UI-mediated MRTR handshake. The transport surface is isolated in `mcp/client.rs` and `mcp/legacy.rs`, so it can be replaced by `rmcp` later without touching the agent.
-3. **CSP exception for Tauri IPC.** Production CSP is `default-src 'self'; script-src 'self'; ...; connect-src ipc: http://ipc.localhost`. The prompt's `connect-src 'none'` blocks Tauri invoke on the platforms we target. Everything else stays locked down; no remote connect-src.
+3. **CSP exception for Tauri IPC and local images.** Production CSP is `default-src 'self'; script-src 'self'; ...; img-src 'self' asset: http://asset.localhost https://asset.localhost data:; connect-src ipc: http://ipc.localhost`. The prompt's `connect-src 'none'` blocks Tauri invoke on the platforms we target. The asset protocol is scoped to `$APPDATA/attachments/**` so the webview can preview only files Jarvis has staged. Everything else stays locked down; no remote connect-src.
 4. **Schema additions.** `max_steps`, per-conversation `tool_mode`/server selection, provider context/output limits and saved model lists, cached tool JSON/TTL, negotiated-at and OAuth issuer/client id were added to SQLite because context management and the server cards need them. The original parts/messages shape is unchanged.
 5. **MCP tool delivery is per chat and lazy-only.** The MCP popover selects active servers; delivery is always lazy. A compact catalog of active tools (server slug, tool name, short description, argument summary) goes in the system prompt and exposes `mcp_get_tool_schema`, `mcp_call_tool` and `mcp_execute`; `mcp_search_tools` is only kept when the catalog is truncated. The lazy meta-calls resolve the real target, validate the real input schema, and apply the target server's policy and approval rules before calling it. `mcp_execute` batches up to 8 independent calls with 4 in flight, preserving result order. This avoids both the search→schema→call loop and a model round trip per tool in multi-tool turns. Migration `0005_lazy_only` normalizes any old direct-schema conversation back to lazy.
 6. **Prompt context is layered and cache-aware.** The user-editable Jarvis prompt is followed by non-editable harness/tool rules, a workspace environment block, optional `AGENTS.md` instructions, a skill catalog, the lazy MCP catalog, and the compaction summary in that order. The date/time stays on the user message, not in this prefix. Runtime context is assembled once per turn, so writes made by tools cannot change the prompt mid-turn.
@@ -114,7 +114,9 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 13. **Tool results have two representations.** A `tool_call` part is the UI card and terminal-state record; a `tool` message is the provider protocol block. The UI deliberately hides raw tool messages.
 
 14. **Token estimates use `chars / 3`.** No tokenizer dependency; conservative enough to trigger compaction early. Exact provider usage is not required for correctness.
-15. **Frontend verification without Tauri.** The renderer is exercised in Chromium through Playwright with a stubbed IPC bridge. The native shell is intentionally thin so the untested surface is limited to command wiring and window setup (see gaps).
+15. **Attachments are copied into Rust-owned storage.** The native picker returns paths to a Tauri command; the core copies files into app data, classifies image/text/binary content from magic bytes and extension, and stores only metadata plus extracted text in message parts. Image bytes are read at provider-serialization time and sent as native image blocks; text/code files and text-based PDFs are inlined with a 100k-character cap; scanned PDFs and other binaries are metadata-only. Pending copies are swept at startup, and conversation/revert cleanup removes or restores them. This keeps the webview out of arbitrary filesystem access and keeps prompts rebuildable.
+
+16. **Frontend verification without Tauri.** The renderer is exercised in Chromium through Playwright with a stubbed IPC bridge. The native shell is intentionally thin so the untested surface is limited to command wiring and window setup (see gaps).
 
 ## Test map
 

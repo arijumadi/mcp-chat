@@ -76,6 +76,24 @@ describe("MessageItem", () => {
     expect(revertMessage).toHaveBeenCalledWith("m1");
   });
 
+  it("renders a file attachment on a user message", () => {
+    useApp.setState({ status: "idle" });
+    const item = message("user", [
+      part("attachment", "attachment", {
+        id: "a1",
+        name: "notes.txt",
+        mime: "text/plain",
+        size: 12,
+        fileKind: "text",
+        path: "/tmp/notes.txt",
+        text: "hello",
+      }),
+    ]);
+    render(<MessageItem message={item} canRetry={false} />);
+    expect(screen.getByText("notes.txt")).toBeInTheDocument();
+    expect(screen.getByTestId("user-message")).toBeInTheDocument();
+  });
+
   it("copies only text from an assistant response", async () => {
     useApp.setState({ status: "idle" });
     const item = message("assistant", [

@@ -337,13 +337,27 @@ fn build_body(req: &ChatRequest) -> Result<Value> {
                 );
             }
             ChatRole::User => {
-                let text = message.text_content();
-                if !text.is_empty() {
-                    push_message(
-                        &mut messages,
-                        "user",
-                        vec![json!({"type": "text", "text": text})],
-                    );
+                let mut blocks = Vec::new();
+                for block in &message.content {
+                    match block {
+                        ContentBlock::Text(text) if !text.is_empty() => {
+                            blocks.push(json!({"type": "text", "text": text}));
+                        }
+                        ContentBlock::Image { media_type, data } => {
+                            blocks.push(json!({
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": data,
+                                }
+                            }));
+                        }
+                        _ => {}
+                    }
+                }
+                if !blocks.is_empty() {
+                    push_message(&mut messages, "user", blocks);
                 }
             }
             ChatRole::Assistant => {
@@ -439,4 +453,42 @@ fn push_message(messages: &mut Vec<Value>, role: &str, blocks: Vec<Value>) {
         }
     }
     messages.push(json!({"role": role, "content": blocks}));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::{ChatMessage, ChatRequest, ChatRole, ContentBlock, ToolChoice};
+    use crate::models::ProviderKind;
+
+    #[test]
+    fn users_with_images_send_anthropic_image_blocks() {
+        let request = ChatRequest {
+            kind: ProviderKind::Anthropic,
+            base_url: "https://example.invalid".into(),
+            api_key: None,
+            model: "vision-model".into(),
+            system: None,
+            messages: vec![ChatMessage {
+                role: ChatRole::User,
+                content: vec![
+                    ContentBlock::Text("What is this?".into()),
+                    ContentBlock::Image {
+                        media_type: "image/jpeg".into(),
+                        data: "BBBB".into(),
+                    },
+                ],
+            }],
+            tools: Vec::new(),
+            tool_choice: ToolChoice::Auto,
+            max_tokens: 1024,
+            temperature: None,
+        };
+        let body = build_body(&request).unwrap();
+        let content = &body["messages"][0]["content"];
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["media_type"], "image/jpeg");
+        assert_eq!(content[1]["source"]["data"], "BBBB");
+    }
 }

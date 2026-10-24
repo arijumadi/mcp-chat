@@ -310,7 +310,31 @@ fn build_body(req: &ChatRequest) -> Result<Value> {
                 messages.push(json!({"role": "system", "content": message.text_content()}));
             }
             ChatRole::User => {
-                messages.push(json!({"role": "user", "content": message.text_content()}));
+                let has_image = message
+                    .content
+                    .iter()
+                    .any(|block| matches!(block, ContentBlock::Image { .. }));
+                if has_image {
+                    let content: Vec<Value> = message
+                        .content
+                        .iter()
+                        .filter_map(|block| match block {
+                            ContentBlock::Text(text) if !text.is_empty() => {
+                                Some(json!({"type": "text", "text": text}))
+                            }
+                            ContentBlock::Image { media_type, data } => Some(json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": format!("data:{media_type};base64,{data}"),
+                                }
+                            })),
+                            _ => None,
+                        })
+                        .collect();
+                    messages.push(json!({"role": "user", "content": content}));
+                } else {
+                    messages.push(json!({"role": "user", "content": message.text_content()}));
+                }
             }
             ChatRole::Assistant => {
                 let text = message.text_content();
@@ -394,4 +418,41 @@ fn build_body(req: &ChatRequest) -> Result<Value> {
         });
     }
     Ok(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::{ChatMessage, ChatRequest, ChatRole, ContentBlock, ToolChoice};
+    use crate::models::ProviderKind;
+
+    #[test]
+    fn users_with_images_send_openai_content_parts() {
+        let request = ChatRequest {
+            kind: ProviderKind::OpenaiCompat,
+            base_url: "https://example.invalid".into(),
+            api_key: None,
+            model: "vision-model".into(),
+            system: None,
+            messages: vec![ChatMessage {
+                role: ChatRole::User,
+                content: vec![
+                    ContentBlock::Text("What is this?".into()),
+                    ContentBlock::Image {
+                        media_type: "image/png".into(),
+                        data: "AAAA".into(),
+                    },
+                ],
+            }],
+            tools: Vec::new(),
+            tool_choice: ToolChoice::Auto,
+            max_tokens: 1024,
+            temperature: None,
+        };
+        let body = build_body(&request).unwrap();
+        let content = &body["messages"][0]["content"];
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(content[1]["image_url"]["url"], "data:image/png;base64,AAAA");
+    }
 }

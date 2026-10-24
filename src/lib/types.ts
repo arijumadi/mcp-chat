@@ -52,6 +52,22 @@ export interface MessageWithParts extends Message {
   parts: Part[];
 }
 
+export interface Attachment {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  kind: "image" | "text" | "file" | string;
+  path: string;
+  text?: string | null;
+  truncated?: boolean;
+}
+
+export interface RevertResult {
+  text: string;
+  attachments: Attachment[];
+}
+
 export interface SearchHit {
   conversationId: string;
   title: string;
