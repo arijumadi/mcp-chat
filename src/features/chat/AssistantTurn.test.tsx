@@ -34,6 +34,7 @@ describe("AssistantTurn", () => {
     const messages = [
       assistant("m1", [
         part("p1", "reasoning", { text: "think one" }),
+        part("p1-note", "text", { text: "A pre-tool narration." }),
         part("p2", "tool_call", {
           callId: "call1",
           name: "echo",
@@ -72,5 +73,9 @@ describe("AssistantTurn", () => {
     expect(screen.getByText("Thought 1")).toBeInTheDocument();
     expect(screen.getByText("Thought 2")).toBeInTheDocument();
     expect(screen.getByText("Final answer is here.")).toBeInTheDocument();
+    expect(
+      screen.queryByText("A pre-tool narration."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Interim note")).not.toBeInTheDocument();
   });
 });

@@ -40,7 +40,7 @@ SQLite in WAL mode, foreign keys on, migrations via `sqlx::migrate!`.
 - `settings`, `permission_rules`.
 - `messages_fts` — FTS5 over text parts, maintained by insert/update/delete triggers.
 
-A tool call is one part on the assistant message; its terminal state and result preview live in that payload. A separate `tool` message holds the result block sent back to the provider. The UI hides `tool` messages and renders the call card instead. This keeps the provider transcript valid while giving the renderer a compact card.
+A tool call is one part on the assistant message; its terminal state and result preview live in that payload. A separate `tool` message holds the result block sent back to the provider. The UI hides `tool` messages and renders the call card instead. This keeps the provider transcript valid while giving the renderer a compact card. Assistant text emitted before the last tool call is retained for provider context but omitted from the activity panel; only thoughts, tool cards and the post-tool answer are shown.
 
 Synthetic user messages (continue prompts, max-step notices) are ordinary rows with `status = 'synthetic'`; they are part of the provider context but hidden from the transcript and skipped by Regenerate.
 

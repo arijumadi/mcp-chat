@@ -2,7 +2,6 @@ import { useState } from "react";
 import { AlertCircle, ChevronDown, Loader2 } from "lucide-react";
 import type { MessageWithParts, Part } from "@/lib/types";
 import { parsePayload, partText } from "@/app/store";
-import { Markdown } from "@/components/Markdown";
 import { MessageItem } from "./MessageItem";
 import { ToolCard } from "./ToolCard";
 
@@ -43,14 +42,10 @@ export function AssistantTurn({
     })
     .map((item) => item.part);
 
-  const work = flattened.filter((item) => {
-    if (item.part.kind === "reasoning" || item.part.kind === "tool_call") {
-      return true;
-    }
-    return (
-      item.part.kind === "text" && lastTool !== -1 && item.index < lastTool
-    );
-  });
+  const work = flattened.filter(
+    (item) =>
+      item.part.kind === "reasoning" || item.part.kind === "tool_call",
+  );
 
   const toolCount = flattened.reduce((count, item) => {
     if (item.part.kind !== "tool_call") return count;
@@ -162,28 +157,6 @@ export function AssistantTurn({
                     style={{ color: "var(--muted)" }}
                   >
                     {partText(item.part)}
-                  </div>
-                </div>
-              );
-            }
-            if (item.part.kind === "text") {
-              return (
-                <div
-                  key={item.part.id}
-                  className="my-1.5 rounded-lg border px-3 py-2"
-                  style={{
-                    borderColor: "var(--border)",
-                    background: "var(--panel)",
-                  }}
-                >
-                  <div
-                    className="mb-1 text-[10px] tracking-[0.06em] uppercase"
-                    style={{ color: "var(--faint)" }}
-                  >
-                    Interim note
-                  </div>
-                  <div className="text-[13px]" style={{ color: "var(--muted)" }}>
-                    <Markdown text={partText(item.part)} />
                   </div>
                 </div>
               );
