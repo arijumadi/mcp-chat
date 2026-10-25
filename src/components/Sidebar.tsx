@@ -64,7 +64,7 @@ export function Sidebar() {
         <div className="min-w-0 flex-1">
           <div className="text-[13.5px] font-semibold tracking-[-0.01em]">Jarvis</div>
           <div className="text-[10.5px]" style={{ color: "var(--faint)" }}>
-            local-first · no telemetry
+            Virtual Intelligence System
           </div>
         </div>
         <button
