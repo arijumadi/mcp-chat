@@ -144,7 +144,7 @@ Artifacts are copied to `artifacts/`. The script currently collects `.deb`, `.rp
 
 ## Icons and installer artwork
 
-The source app icon is `app-icon.png` (1024×1024 JARVIS J monogram). Regenerate platform icons with:
+The source app icon is `app-icon.png` (1024×1024 Jarvis hexagonal mark). Regenerate platform icons with:
 
 ```bash
 pnpm tauri icon app-icon.png

@@ -60,7 +60,7 @@ export function Sidebar() {
       style={{ background: "var(--panel)", borderColor: "var(--border)" }}
     >
       <div className="flex items-center gap-2 px-3 pt-3.5 pb-2">
-        <Logo size={24} />
+        <Logo size={28} />
         <div className="min-w-0 flex-1">
           <div className="text-[13.5px] font-semibold tracking-[-0.01em]">Jarvis</div>
           <div className="text-[10.5px]" style={{ color: "var(--faint)" }}>
