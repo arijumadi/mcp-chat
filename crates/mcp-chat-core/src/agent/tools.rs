@@ -232,7 +232,7 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     output
 }
 
-fn resolve_in_workspace(workspace: &Path, raw: &str) -> Result<PathBuf> {
+pub(crate) fn resolve_in_workspace(workspace: &Path, raw: &str) -> Result<PathBuf> {
     if raw.trim().is_empty() {
         return Err(CoreError::invalid("filePath is required"));
     }
@@ -491,7 +491,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: "read_tool_output".into(),
-            description: "Read more of a tool result that was truncated. Use the call_id shown in the truncated result and an optional character offset.".into(),
+            description: "Read a truncated tool result by call_id, optionally from a character offset.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -504,7 +504,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "bash".into(),
-            description: "Execute a shell command in the workspace. Each call is a fresh process: cd and shell variables do not persist. Defaults: cmd.exe on Windows, sh on macOS/Linux. Prefer shell=powershell or pwsh on Windows for nested commands; for long or heavily nested scripts, write a .ps1/.sh file first and execute it. Examples: Windows cmd: dir; Windows PowerShell: Get-ChildItem; Unix: ls -la. Potentially destructive commands require approval.".into(),
+            description: "Run a shell command in the workspace. Each call is a fresh process: cd and variables do not persist. Defaults to cmd.exe on Windows and sh elsewhere. Use shell=powershell/pwsh for nested Windows quoting, or write a script for long commands. Destructive commands require approval.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -523,7 +523,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "edit".into(),
-            description: "Modify an existing file by replacing an exact string. Paths are relative to the workspace and cannot escape it. The user is asked before files are changed.".into(),
+            description: "Replace an exact string in an existing workspace file. oldString must match once unless replaceAll is true. Ask before writing.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -537,8 +537,20 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
             }),
         },
         ToolDef {
+            name: "apply_patch".into(),
+            description: "Apply a multi-file text patch. Format: `*** Begin Patch`, then `*** Add File: path`, `*** Update File: path`, `*** Delete File: path`, and `*** End Patch`. Update hunks start with `@@`; context/removed/added lines start with space/-/+. Add File lines start with +. Optional `*** Move to: path` inside an update. Paths are workspace-relative. Ask before writing.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "patchText": {"type": "string", "description": "Patch text using the marker format above."}
+                },
+                "required": ["patchText"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
             name: "write".into(),
-            description: "Create a new file or overwrite an existing one in the workspace. Parent directories are created automatically. The user is asked before files are changed.".into(),
+            description: "Create or overwrite a workspace file. Parent folders are created automatically. Ask before writing.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -551,7 +563,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "read".into(),
-            description: "Read a UTF-8 text file from the workspace. Returns line-numbered content; use offset and limit for large files.".into(),
+            description: "Read a UTF-8 workspace file with line numbers. Use offset and limit for large files.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -565,7 +577,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "grep".into(),
-            description: "Search file contents with a regular expression. Returns path, line number and matching text. Paths are confined to the workspace.".into(),
+            description: "Search workspace files with a regular expression; returns path:line:text.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -581,7 +593,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "glob".into(),
-            description: "Find files by glob pattern. Returns paths relative to the workspace. Common build and dependency directories are skipped.".into(),
+            description: "Find workspace files by glob pattern; build and dependency directories are skipped.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -595,7 +607,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "skill".into(),
-            description: "Load a skill (a SKILL.md file) by name and return its content. Call with an empty name to list available skills. Skills are read from .mcp-chat/skills, .opencode/skills, and the app data skills directory.".into(),
+            description: "Load a skill (SKILL.md) by name. Empty name lists skills from .mcp-chat/skills, .opencode/skills, and app data.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -670,6 +682,7 @@ pub fn is_builtin_tool(name: &str) -> bool {
         "read_tool_output"
             | "bash"
             | "edit"
+            | "apply_patch"
             | "write"
             | "read"
             | "grep"
@@ -743,13 +756,27 @@ pub fn is_dangerous_command(command: &str) -> bool {
 }
 
 fn is_dangerous_tool_call(req: &ToolExecRequest) -> bool {
-    req.remote_name == "bash"
-        && req
+    if req.remote_name == "bash" {
+        return req
             .args
             .get("command")
             .and_then(Value::as_str)
             .map(is_dangerous_command)
-            .unwrap_or(true)
+            .unwrap_or(true);
+    }
+    if req.remote_name == "apply_patch" {
+        return req
+            .args
+            .get("patchText")
+            .and_then(Value::as_str)
+            .map(|patch| {
+                patch
+                    .lines()
+                    .any(|line| line.starts_with("*** Delete File:"))
+            })
+            .unwrap_or(true);
+    }
+    false
 }
 
 fn auto_effective_effect(req: &ToolExecRequest, effect: Effect) -> Effect {
@@ -762,7 +789,7 @@ fn auto_effective_effect(req: &ToolExecRequest, effect: Effect) -> Effect {
 
 pub fn builtin_default_effect(name: &str) -> Effect {
     match name {
-        "bash" | "edit" | "write" => Effect::Ask,
+        "bash" | "edit" | "apply_patch" | "write" => Effect::Ask,
         _ => Effect::Allow,
     }
 }
@@ -1660,6 +1687,7 @@ impl ToolExecutor {
             "read" => self.run_read(req).await,
             "write" => self.run_write(req).await,
             "edit" => self.run_edit(req).await,
+            "apply_patch" => self.run_apply_patch(req).await,
             "grep" => self.run_grep(req).await,
             "glob" => self.run_glob(req).await,
             "skill" => self.run_skill(req).await,
@@ -1843,6 +1871,22 @@ impl ToolExecutor {
             content,
             structured: None,
             ok: output.status.success() && !echoed,
+        })
+    }
+
+    async fn run_apply_patch(&self, req: &ToolExecRequest) -> Result<Rendered> {
+        let patch_text = req
+            .args
+            .get("patchText")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CoreError::invalid("patchText is required"))?;
+        let workspace =
+            workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
+        let result = crate::agent::patch::apply(&workspace, patch_text).await?;
+        Ok(Rendered {
+            content: result.render(),
+            structured: None,
+            ok: true,
         })
     }
 
@@ -2643,6 +2687,25 @@ mod tests {
     }
 
     #[test]
+    fn builtin_tool_schema_stays_compact() {
+        let chars: usize = builtin_tool_defs()
+            .iter()
+            .map(|tool| {
+                tool.name.len()
+                    + tool.description.len()
+                    + serde_json::to_string(&tool.input_schema)
+                        .map(|schema| schema.len())
+                        .unwrap_or(0)
+            })
+            .sum();
+        println!("builtin tool schema chars: {chars}");
+        assert!(
+            chars < 6_000,
+            "builtin tool schema grew unexpectedly: {chars} characters"
+        );
+    }
+
+    #[test]
     fn dangerous_shell_commands_are_classified() {
         assert!(is_dangerous_command("rm -rf build"));
         assert!(is_dangerous_command("Remove-Item -Recurse -Force C:\temp"));
@@ -2664,12 +2727,25 @@ mod tests {
         let mut write = request("write", json!({"filePath": "a.txt", "content": "x"}));
         write.auto_approve = true;
         assert_eq!(auto_effective_effect(&write, Effect::Ask), Effect::Allow);
+        let mut patch = request(
+            "apply_patch",
+            json!({"patchText": "*** Begin Patch\n*** Update File: a.txt\n@@\n-a\n+b\n*** End Patch"}),
+        );
+        patch.auto_approve = true;
+        assert_eq!(auto_effective_effect(&patch, Effect::Ask), Effect::Allow);
+        let mut delete = request(
+            "apply_patch",
+            json!({"patchText": "*** Begin Patch\n*** Delete File: a.txt\n*** End Patch"}),
+        );
+        delete.auto_approve = true;
+        assert_eq!(auto_effective_effect(&delete, Effect::Ask), Effect::Ask);
     }
 
     #[test]
     fn dangerous_builtins_require_approval() {
         assert_eq!(builtin_default_effect("bash"), Effect::Ask);
         assert_eq!(builtin_default_effect("edit"), Effect::Ask);
+        assert_eq!(builtin_default_effect("apply_patch"), Effect::Ask);
         assert_eq!(builtin_default_effect("write"), Effect::Ask);
         assert_eq!(builtin_default_effect("read"), Effect::Allow);
         assert_eq!(builtin_default_effect("question"), Effect::Allow);
@@ -2819,6 +2895,33 @@ mod tests {
             cancel: CancellationToken::new(),
             active_server_slugs: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn builtin_apply_patch_updates_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("a.txt"), "one\ntwo\n").unwrap();
+        let executor = test_executor(&workspace).await;
+        let result = executor
+            .run_apply_patch(&request(
+                "apply_patch",
+                json!({
+                    "patchText": "*** Begin Patch\n*** Update File: a.txt\n@@\n one\n-two\n+three\n*** Add File: b.txt\n+new\n*** End Patch\n"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert!(result.content.contains("M a.txt"));
+        assert!(result.content.contains("A b.txt"));
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+            "one\nthree\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("b.txt")).unwrap(),
+            "new\n"
+        );
     }
 
     #[tokio::test]

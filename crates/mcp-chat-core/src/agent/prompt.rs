@@ -11,8 +11,8 @@ const MAX_AGENTS_FILE: usize = 32_000;
 const MAX_AGENTS_TOTAL: usize = 64_000;
 
 pub const HARNESS_RULES: &str = r#"# Harness rules
-- Use the dedicated file tools instead of shell commands for file work: `read`/`grep`/`glob` to inspect, `edit` for targeted changes, and `write` for new files. Use `bash` for shell/system commands and short local computations.
-- Read a file before editing it. Keep edits scoped and preserve unrelated user changes.
+- Inspect with `read`/`grep`/`glob`. Prefer `apply_patch` for multi-file or multi-hunk edits; use `edit` for one exact replacement and `write` for a whole new file. Use `bash` only for shell/system work.
+- Read a file before editing it. Keep patches small, include unique context, and preserve unrelated user changes.
 - Do not use a tool only to send a message to the user. Put explanations and conclusions in the final answer.
 - Do not narrate routine tool use or write a preamble before a tool call. Call the tool directly.
 - Do not chain shell commands with separators only to print section headers; keep output clean.
