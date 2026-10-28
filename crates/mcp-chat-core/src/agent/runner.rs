@@ -245,7 +245,7 @@ async fn drive(
     let mut tools_disabled = false;
     let mut max_notice_sent = false;
     let mut final_step = false;
-    let max_steps = conversation.max_steps.max(1);
+    let max_steps = conversation.max_steps;
 
     let mut step = 1_i64;
     let mut retries = 0_usize;
@@ -259,7 +259,7 @@ async fn drive(
         if cancel.is_cancelled() {
             return Ok(());
         }
-        if step > max_steps && !max_notice_sent {
+        if max_steps > 0 && step > max_steps && !max_notice_sent {
             append_synthetic(&engine, conversation_id, MAX_STEPS_PROMPT).await?;
             max_notice_sent = true;
             tools_disabled = true;

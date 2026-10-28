@@ -39,7 +39,7 @@ const provider: ProviderView = {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  useApp.setState({ pendingAttachments: [], draft: "" });
+  useApp.setState({ pendingAttachments: [], draft: "", status: "idle" });
 });
 
 const attachment: Attachment = {
@@ -67,6 +67,25 @@ describe("Composer", () => {
     expect(screen.getByText(/Tool step limit reached/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(continueTurn).toHaveBeenCalledOnce();
+  });
+
+  it("steers an active turn instead of blocking the send", () => {
+    const steerMessage = vi.fn().mockResolvedValue(undefined);
+    useApp.setState({
+      providers: [provider],
+      status: "streaming",
+      step: { current: 3, max: 0 },
+      limitReached: false,
+      continueTurn: vi.fn(),
+      draft: "change direction",
+      pendingAttachments: [],
+      steerMessage,
+    });
+    render(<Composer conversation={conversation} />);
+    const steerButton = screen.getByRole("button", { name: "Steer message" });
+    expect(steerButton).toBeEnabled();
+    fireEvent.click(steerButton);
+    expect(steerMessage).toHaveBeenCalledWith("change direction");
   });
 
   it("can send a message that only has attachments", () => {

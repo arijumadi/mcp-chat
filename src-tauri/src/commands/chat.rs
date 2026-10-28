@@ -281,6 +281,28 @@ pub async fn send_message(
 }
 
 #[tauri::command]
+pub async fn steer_message(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    text: String,
+    attachment_ids: Option<Vec<String>>,
+) -> CmdResult<MessageWithParts> {
+    let message = state
+        .engine
+        .steer_message_with_attachments(
+            &conversation_id,
+            &text,
+            attachment_ids.as_deref().unwrap_or(&[]),
+        )
+        .await
+        .map_err(cmd_err)?;
+    let parts = messages::parts_for_message(&state.db.pool, &message.id)
+        .await
+        .map_err(cmd_err)?;
+    Ok(MessageWithParts { message, parts })
+}
+
+#[tauri::command]
 pub async fn regenerate(state: State<'_, AppState>, conversation_id: String) -> CmdResult<()> {
     state
         .engine

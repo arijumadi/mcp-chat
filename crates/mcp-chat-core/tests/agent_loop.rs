@@ -209,7 +209,7 @@ async fn streams_text_and_persists_it() {
         event,
         CoreEvent::Step {
             step: 1,
-            max_steps: 25,
+            max_steps: 0,
             ..
         }
     )));
@@ -573,7 +573,7 @@ async fn large_output_spills_and_can_be_paged() {
     let page = h.engine.read_tool_output(call_id, 0).await.unwrap();
     let page: serde_json::Value = serde_json::from_str(&page).unwrap();
     assert_eq!(page["total"], 50000);
-    assert_eq!(page["content"].as_str().unwrap().len(), 50000);
+    assert_eq!(page["content"].as_str().unwrap().len(), 24_000);
 }
 
 #[tokio::test]

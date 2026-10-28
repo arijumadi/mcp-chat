@@ -67,6 +67,7 @@ export interface AppStore {
   openConversation: (id: string) => Promise<void>;
   newChat: () => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
+  steerMessage: (text: string) => Promise<void>;
   stageAttachments: (paths: string[]) => Promise<void>;
   removeAttachment: (id: string) => Promise<void>;
   setDraft: (text: string) => void;
@@ -370,6 +371,50 @@ export const useApp = create<AppStore>()((set, get) => ({
       }));
       get().toast(String(error), "error", [
         { label: "Retry", onClick: () => void get().sendMessage(text) },
+      ]);
+    }
+  },
+
+  async steerMessage(text) {
+    const conversationId = get().activeId;
+    const attachments = get().pendingAttachments;
+    if (!conversationId || (!text.trim() && attachments.length === 0)) return;
+    if (get().providers.length === 0) {
+      get().toast("Add a provider in Settings before sending a message.", "error");
+      set({ view: "settings" });
+      return;
+    }
+    set({ draft: "" });
+    try {
+      const message = await call<MessageWithParts>("steer_message", {
+        conversationId,
+        text,
+        attachmentIds: attachments.map((attachment) => attachment.id),
+      });
+      set((state) => {
+        const exists = state.messages.some((item) => item.id === message.id);
+        const messages = exists
+          ? state.messages
+          : [...state.messages, message].sort(
+              (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id),
+            );
+        return {
+          pendingAttachments: [],
+          messages,
+          status: "thinking",
+          streamingMessageId: null,
+          approvals: [],
+          inputRequests: [],
+          usage: null,
+          step: null,
+          limitReached: false,
+        };
+      });
+      void get().refreshConversations();
+    } catch (error) {
+      set({ draft: text });
+      get().toast(String(error), "error", [
+        { label: "Retry", onClick: () => void get().steerMessage(text) },
       ]);
     }
   },
@@ -815,7 +860,7 @@ export function applyCoreEvent(
     case "step": {
       set({
         step: { current: event.step, max: event.maxSteps },
-        limitReached: event.step > event.maxSteps,
+        limitReached: event.maxSteps > 0 && event.step > event.maxSteps,
       });
       break;
     }

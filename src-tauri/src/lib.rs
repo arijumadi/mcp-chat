@@ -82,6 +82,7 @@ pub fn run() {
             commands::chat::set_system_prompt,
             commands::chat::get_messages,
             commands::chat::send_message,
+            commands::chat::steer_message,
             commands::chat::regenerate,
             commands::chat::continue_turn,
             commands::chat::revert_message,

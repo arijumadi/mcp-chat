@@ -19,6 +19,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const setValue = useApp((state) => state.setDraft);
   const ref = useRef<HTMLTextAreaElement>(null);
   const send = useApp((state) => state.sendMessage);
+  const steer = useApp((state) => state.steerMessage);
   const stop = useApp((state) => state.stop);
   const status = useApp((state) => state.status);
   const providers = useApp((state) => state.providers);
@@ -31,14 +32,14 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const stageAttachments = useApp((state) => state.stageAttachments);
   const removeAttachment = useApp((state) => state.removeAttachment);
   const [attaching, setAttaching] = useState(false);
+  const [steering, setSteering] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [dragCount, setDragCount] = useState(0);
   const active = ACTIVE.includes(status);
   const disabled = providers.length === 0;
-  const canSend =
-    (value.trim().length > 0 || pendingAttachments.length > 0) &&
-    !active &&
-    !disabled;
+  const hasContent = value.trim().length > 0 || pendingAttachments.length > 0;
+  const canSend = hasContent && !active && !disabled;
+  const canSteer = hasContent && active && !disabled && !steering;
   const showDrop = dragging && !active && !disabled;
 
   useEffect(() => {
@@ -130,7 +131,15 @@ export function Composer({ conversation }: { conversation: Conversation }) {
 
   const submit = () => {
     const text = value.trim();
-    if ((!text && pendingAttachments.length === 0) || active || disabled) return;
+    if (disabled || steering) return;
+    if (active) {
+      if (!hasContent) return;
+      setValue("");
+      setSteering(true);
+      void steer(text).finally(() => setSteering(false));
+      return;
+    }
+    if (!hasContent) return;
     setValue("");
     void send(text);
   };
@@ -290,15 +299,33 @@ export function Composer({ conversation }: { conversation: Conversation }) {
             <AutoApproveButton />
             <div className="ml-auto flex items-center gap-2">
               {active ? (
-                <button
-                  onClick={() => void stop()}
-                  className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition hover:brightness-95"
-                  style={{ background: "var(--fg)", color: "var(--bg)" }}
-                  title="Stop generating (Esc)"
-                  aria-label="Stop generating"
-                >
-                  <Square size={12} fill="currentColor" />
-                </button>
+                <>
+                  {hasContent || steering ? (
+                    <button
+                      onClick={submit}
+                      disabled={!canSteer}
+                      className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
+                      style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
+                      title="Steer: stop the current turn and send this message"
+                      aria-label="Steer message"
+                    >
+                      {steering ? (
+                        <Loader2 size={15} className="animate-spin" />
+                      ) : (
+                        <ArrowUp size={16} strokeWidth={2.2} />
+                      )}
+                    </button>
+                  ) : null}
+                  <button
+                    onClick={() => void stop()}
+                    className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition hover:brightness-95"
+                    style={{ background: "var(--fg)", color: "var(--bg)" }}
+                    title="Stop generating (Esc)"
+                    aria-label="Stop generating"
+                  >
+                    <Square size={12} fill="currentColor" />
+                  </button>
+                </>
               ) : (
                 <button
                   onClick={submit}
@@ -319,10 +346,16 @@ export function Composer({ conversation }: { conversation: Conversation }) {
           style={{ color: "var(--faint)" }}
         >
           <span>
-            Enter to send · Shift+Enter newline · drag/drop or attach files · max 6 / 25 MB
+            {steering
+              ? "Steering… stopping the current turn"
+              : "Enter to send · Shift+Enter newline · drag/drop or attach files · max 6 / 25 MB"}
           </span>
           <span>
-            {active && step ? `step ${step.current}/${step.max} · ` : ""}
+            {active && step
+              ? step.max > 0
+                ? `step ${step.current}/${step.max} · `
+                : `step ${step.current} · `
+              : ""}
             {usage
               ? `${active ? "Esc to stop · " : ""}ctx ~${formatTokens(usage.promptTokens)} / ${formatTokens(usage.contextWindow)}${
                   usage.completionTokens > 0

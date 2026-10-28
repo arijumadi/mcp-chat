@@ -219,6 +219,34 @@ impl ChatEngine {
         Ok(message)
     }
 
+    /// Stop the current turn, wait for it to settle, then start a fresh turn
+    /// with the user's new message. This is the "steer" path used while the
+    /// agent is looping.
+    pub async fn steer_message_with_attachments(
+        self: &Arc<Self>,
+        conversation_id: &str,
+        text: &str,
+        attachment_ids: &[String],
+    ) -> Result<Message> {
+        if !self.in_flight(conversation_id) {
+            return self
+                .send_message_with_attachments(conversation_id, text, attachment_ids)
+                .await;
+        }
+        self.stop(conversation_id);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        while self.in_flight(conversation_id) {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(CoreError::Message(
+                    "The current turn is still stopping. Try steering again.".into(),
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        self.send_message_with_attachments(conversation_id, text, attachment_ids)
+            .await
+    }
+
     pub async fn regenerate(self: &Arc<Self>, conversation_id: &str) -> Result<()> {
         if self.in_flight(conversation_id) {
             return Err(CoreError::Message(

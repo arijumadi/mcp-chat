@@ -27,11 +27,12 @@ use crate::models::PartPayload;
 use crate::util::truncate_chars;
 use crate::{CoreError, Result, now_ms};
 
-const MODEL_OUTPUT_LIMIT: usize = 8_000;
-const SHELL_OUTPUT_LIMIT: usize = 12_000;
+const MODEL_OUTPUT_LIMIT: usize = 12_000;
+const SHELL_OUTPUT_LIMIT: usize = 16_000;
+const READ_OUTPUT_LIMIT: usize = 24_000;
 const PS_PROLOG: &str = "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;";
-const PAGER_OUTPUT_LIMIT: usize = 100_000;
-const READ_PAGE_CHARS: usize = 50_000;
+const PAGER_OUTPUT_LIMIT: usize = 24_000;
+const READ_PAGE_CHARS: usize = 24_000;
 const PREVIEW_LIMIT: usize = 4_000;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -1119,6 +1120,8 @@ impl ToolExecutor {
                     PAGER_OUTPUT_LIMIT
                 } else if req.remote_name == "bash" {
                     SHELL_OUTPUT_LIMIT
+                } else if req.remote_name == "read" {
+                    READ_OUTPUT_LIMIT
                 } else {
                     MODEL_OUTPUT_LIMIT
                 };
@@ -1895,24 +1898,33 @@ impl ToolExecutor {
             .kill_on_drop(true)
             .stdin(std::process::Stdio::null());
 
-        let output =
-            match tokio::time::timeout(Duration::from_millis(timeout_ms), child.output()).await {
-                Ok(Ok(output)) => output,
-                Ok(Err(error)) => {
-                    if let Some(path) = cleanup {
-                        let _ = tokio::fs::remove_file(path).await;
-                    }
-                    return Err(shell_launch_error(shell, error));
+        let output = tokio::select! {
+            _ = req.cancel.cancelled() => {
+                if let Some(path) = cleanup {
+                    let _ = tokio::fs::remove_file(path).await;
                 }
-                Err(_) => {
-                    if let Some(path) = cleanup {
-                        let _ = tokio::fs::remove_file(path).await;
+                return Err(CoreError::Cancelled);
+            }
+            result = tokio::time::timeout(Duration::from_millis(timeout_ms), child.output()) => {
+                match result {
+                    Ok(Ok(output)) => output,
+                    Ok(Err(error)) => {
+                        if let Some(path) = cleanup {
+                            let _ = tokio::fs::remove_file(path).await;
+                        }
+                        return Err(shell_launch_error(shell, error));
                     }
-                    return Err(CoreError::Message(format!(
-                        "Command timed out after {timeout_ms} ms."
-                    )));
+                    Err(_) => {
+                        if let Some(path) = cleanup {
+                            let _ = tokio::fs::remove_file(path).await;
+                        }
+                        return Err(CoreError::Message(format!(
+                            "Command timed out after {timeout_ms} ms."
+                        )));
+                    }
                 }
-            };
+            }
+        };
         if let Some(path) = cleanup {
             let _ = tokio::fs::remove_file(path).await;
         }

@@ -356,6 +356,7 @@ export function installMock(): void {
         });
         return true;
       }
+      case "steer_message":
       case "send_message": {
         const conversationId = String(args.conversationId);
         const text = String(args.text ?? "").trim();
