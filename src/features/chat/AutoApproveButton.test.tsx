@@ -18,7 +18,8 @@ describe("AutoApproveButton", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Auto/ }));
     expect(screen.getByText("Enable auto-approve?")).toBeInTheDocument();
-    expect(screen.getByText(/Dangerous shell commands still require approval/)).toBeInTheDocument();
+    expect(screen.getByText(/dangerous shell commands/i)).toBeInTheDocument();
+    expect(screen.getByText(/outside-workspace writes/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Enable for this session" }));
     await waitFor(() => expect(setAutoApprove).toHaveBeenCalledWith(true));

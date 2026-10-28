@@ -63,6 +63,8 @@ pub struct ToolExecRequest {
     pub tool: Option<ToolInfo>,
     pub default_effect: Effect,
     pub auto_approve: bool,
+    /// Set only after the user explicitly approves an outside-workspace write.
+    pub allow_outside_workspace: bool,
     pub disabled: bool,
     pub cancel: CancellationToken,
     pub active_server_slugs: Vec<String>,
@@ -296,6 +298,66 @@ pub(crate) fn resolve_read_path(
     normalize_lexically(&joined)
         .canonicalize()
         .map_err(|_| CoreError::invalid(format!("Path not found: {raw}")))
+}
+
+/// True when the target is outside the workspace, including symlink escapes.
+pub(crate) fn path_is_outside(workspace: &Path, raw: &str) -> bool {
+    if raw.trim().is_empty() {
+        return false;
+    }
+    let input = PathBuf::from(raw);
+    let joined = if input.is_absolute() {
+        input
+    } else {
+        workspace.join(input)
+    };
+    let normalized = normalize_lexically(&joined);
+    if !normalized.starts_with(workspace) {
+        return true;
+    }
+    if normalized.exists() {
+        return normalized
+            .canonicalize()
+            .map(|path| !path.starts_with(workspace))
+            .unwrap_or(true);
+    }
+    let mut ancestor = normalized.parent();
+    while let Some(path) = ancestor {
+        if path.exists() {
+            return path
+                .canonicalize()
+                .map(|path| !path.starts_with(workspace))
+                .unwrap_or(true);
+        }
+        ancestor = path.parent();
+    }
+    false
+}
+
+/// Writes stay confined unless the user approved a specific outside target.
+pub(crate) fn resolve_write_path(
+    workspace: &Path,
+    raw: &str,
+    allow_outside: bool,
+) -> Result<PathBuf> {
+    if !allow_outside {
+        return resolve_in_workspace(workspace, raw);
+    }
+    if raw.trim().is_empty() {
+        return Err(CoreError::invalid("filePath is required"));
+    }
+    let input = PathBuf::from(raw);
+    let joined = if input.is_absolute() {
+        input
+    } else {
+        workspace.join(input)
+    };
+    let normalized = normalize_lexically(&joined);
+    if normalized.exists() {
+        Ok(normalized.canonicalize()?)
+    } else {
+        Ok(normalized)
+    }
 }
 
 const MAX_TEXT_BYTES: u64 = 2_000_000;
@@ -595,7 +657,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "edit".into(),
-            description: "Replace an exact string in an existing workspace file. oldString must match once unless replaceAll is true. Ask before writing.".into(),
+            description: "Replace an exact string in an existing file. oldString must match once unless replaceAll is true. Outside-workspace targets require explicit approval.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -610,7 +672,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "apply_patch".into(),
-            description: "Apply a multi-file text patch. Format: `*** Begin Patch`, then `*** Add File: path`, `*** Update File: path`, `*** Delete File: path`, and `*** End Patch`. Update hunks start with `@@`; context/removed/added lines start with space/-/+. Add File lines start with +. Optional `*** Move to: path` inside an update. Paths are workspace-relative. Ask before writing.".into(),
+            description: "Apply a multi-file text patch. Format: `*** Begin Patch`, then `*** Add File: path`, `*** Update File: path`, `*** Delete File: path`, and `*** End Patch`. Update hunks start with `@@`; context/removed/added lines start with space/-/+. Add File lines start with +. Optional `*** Move to: path` inside an update. Paths are workspace-relative or explicitly approved outside paths. Ask before writing.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -622,7 +684,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "write".into(),
-            description: "Create or overwrite a workspace file. Parent folders are created automatically. Ask before writing.".into(),
+            description: "Create or overwrite a file. Parent folders are created automatically. Outside-workspace targets require explicit approval.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -956,7 +1018,7 @@ impl ToolExecutor {
         self.fail(req, state, message, Instant::now(), false).await
     }
 
-    pub async fn execute(&self, req: ToolExecRequest) -> ToolExecResult {
+    pub async fn execute(&self, mut req: ToolExecRequest) -> ToolExecResult {
         let started = Instant::now();
         let exposed_for_error = req.exposed_name.clone();
         if req.disabled {
@@ -1044,10 +1106,51 @@ impl ToolExecutor {
                 .await
                 .unwrap_or_default()
         };
-        let effect = auto_effective_effect(
-            &req,
-            permissions::evaluate(&action, &resource, default, &rules),
-        );
+        let outside_write = if builtin {
+            match req.remote_name.as_str() {
+                "write" | "edit" => {
+                    if let Some(raw) = req.args.get("filePath").and_then(Value::as_str) {
+                        match workspace_root_for_conversation(&self.db.pool, &req.conversation_id)
+                            .await
+                        {
+                            Ok(workspace) => path_is_outside(&workspace, raw),
+                            Err(_) => false,
+                        }
+                    } else {
+                        false
+                    }
+                }
+                "apply_patch" => {
+                    if let Some(patch_text) = req.args.get("patchText").and_then(Value::as_str) {
+                        match workspace_root_for_conversation(&self.db.pool, &req.conversation_id)
+                            .await
+                        {
+                            Ok(workspace) => {
+                                crate::agent::patch::touches_outside(&workspace, patch_text)
+                            }
+                            Err(_) => false,
+                        }
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+        let evaluated = permissions::evaluate(&action, &resource, default, &rules);
+        // Outside writes are always a per-call decision. Auto mode must not
+        // turn them into implicit filesystem writes.
+        let effect = if outside_write {
+            if evaluated == Effect::Deny {
+                Effect::Deny
+            } else {
+                Effect::Ask
+            }
+        } else {
+            auto_effective_effect(&req, evaluated)
+        };
         match effect {
             Effect::Allow => {}
             Effect::Deny => {
@@ -1069,6 +1172,9 @@ impl ToolExecutor {
                         "error"
                     };
                     return self.fail(req, state, message, started, false).await;
+                }
+                if outside_write {
+                    req.allow_outside_workspace = true;
                 }
             }
         }
@@ -1423,6 +1529,7 @@ impl ToolExecutor {
             tool: Some(tool.clone()),
             default_effect: default,
             auto_approve: req.auto_approve,
+            allow_outside_workspace: false,
             disabled: false,
             cancel: req.cancel.clone(),
             active_server_slugs: req.active_server_slugs.clone(),
@@ -1625,6 +1732,7 @@ impl ToolExecutor {
             tool: Some(tool.clone()),
             default_effect: default,
             auto_approve: req.auto_approve,
+            allow_outside_workspace: false,
             disabled: false,
             cancel: req.cancel.clone(),
             active_server_slugs: req.active_server_slugs.clone(),
@@ -1980,7 +2088,12 @@ impl ToolExecutor {
             .ok_or_else(|| CoreError::invalid("patchText is required"))?;
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
-        let result = crate::agent::patch::apply(&workspace, patch_text).await?;
+        let result = crate::agent::patch::apply_with_scope(
+            &workspace,
+            patch_text,
+            req.allow_outside_workspace,
+        )
+        .await?;
         Ok(Rendered {
             content: result.render(),
             structured: None,
@@ -2055,7 +2168,7 @@ impl ToolExecutor {
         }
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
-        let path = resolve_in_workspace(&workspace, raw)?;
+        let path = resolve_write_path(&workspace, raw, req.allow_outside_workspace)?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -2094,7 +2207,7 @@ impl ToolExecutor {
             .unwrap_or(false);
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
-        let path = resolve_in_workspace(&workspace, raw)?;
+        let path = resolve_write_path(&workspace, raw, req.allow_outside_workspace)?;
         let content = read_text_file(&path).await?;
         let count = content.matches(old).count();
         if count == 0 {
@@ -2853,6 +2966,21 @@ mod tests {
     }
 
     #[test]
+    fn write_paths_are_detected_outside_the_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("outside.txt");
+        assert!(!path_is_outside(&workspace, "inside.txt"));
+        assert!(path_is_outside(&workspace, outside_file.to_str().unwrap()));
+        assert!(resolve_write_path(&workspace, outside_file.to_str().unwrap(), false).is_err());
+        assert_eq!(
+            resolve_write_path(&workspace, outside_file.to_str().unwrap(), true).unwrap(),
+            outside_file
+        );
+    }
+
+    #[test]
     fn dangerous_shell_commands_are_classified() {
         assert!(is_dangerous_command("rm -rf build"));
         assert!(is_dangerous_command("Remove-Item -Recurse -Force C:\temp"));
@@ -3038,6 +3166,7 @@ mod tests {
             tool: builtin_tool_info(name),
             default_effect: builtin_default_effect(name),
             auto_approve: false,
+            allow_outside_workspace: false,
             disabled: false,
             cancel: CancellationToken::new(),
             active_server_slugs: Vec::new(),
@@ -3216,6 +3345,45 @@ mod tests {
             ))
             .await;
         assert!(escaped.is_err());
+    }
+
+    #[tokio::test]
+    async fn outside_writes_require_explicit_approval_even_in_auto_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("outside.txt");
+        let executor = Arc::new(test_executor(&workspace).await);
+        let approvals = executor.approvals.clone();
+        let mut events = executor.events.subscribe();
+
+        let mut req = request(
+            "write",
+            json!({"filePath": target.to_string_lossy(), "content": "approved"}),
+        );
+        req.auto_approve = true;
+        let handle = tokio::spawn(async move { executor.execute(req).await });
+
+        let call_id = loop {
+            let event = tokio::time::timeout(Duration::from_secs(2), events.recv())
+                .await
+                .expect("approval event timed out")
+                .expect("event channel");
+            if let CoreEvent::Approval { call_id, .. } = event {
+                break call_id;
+            }
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(approvals.respond(
+            &call_id,
+            crate::agent::approvals::ApprovalAnswer {
+                decision: ApprovalDecision::Once,
+                feedback: None,
+            }
+        ));
+        let result = handle.await.unwrap();
+        assert!(result.ok, "{}", result.content);
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "approved");
     }
 
     #[test]

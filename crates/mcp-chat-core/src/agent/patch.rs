@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use tokio::fs;
 
-use crate::agent::tools::resolve_in_workspace;
+use crate::agent::tools::{path_is_outside, resolve_write_path};
 use crate::{CoreError, Result};
 
 const MAX_PATCH_BYTES: usize = 1_000_000;
@@ -58,6 +58,32 @@ impl PatchResult {
 }
 
 pub async fn apply(workspace: &Path, patch_text: &str) -> Result<PatchResult> {
+    apply_with_scope(workspace, patch_text, false).await
+}
+
+pub fn touches_outside(workspace: &Path, patch_text: &str) -> bool {
+    let Ok(operations) = parse(patch_text) else {
+        return false;
+    };
+    operations.iter().any(|operation| match operation {
+        Operation::Add { path, .. } | Operation::Delete { path } => {
+            path_is_outside(workspace, path)
+        }
+        Operation::Update { path, move_to, .. } => {
+            path_is_outside(workspace, path)
+                || move_to
+                    .as_deref()
+                    .map(|value| path_is_outside(workspace, value))
+                    .unwrap_or(false)
+        }
+    })
+}
+
+pub async fn apply_with_scope(
+    workspace: &Path,
+    patch_text: &str,
+    allow_outside: bool,
+) -> Result<PatchResult> {
     if patch_text.len() > MAX_PATCH_BYTES {
         return Err(CoreError::invalid(format!(
             "Patch is too large ({} bytes); limit is {} bytes.",
@@ -80,7 +106,7 @@ pub async fn apply(workspace: &Path, patch_text: &str) -> Result<PatchResult> {
     for operation in operations {
         match operation {
             Operation::Add { path, lines } => {
-                let resolved = resolve_in_workspace(workspace, &path)?;
+                let resolved = resolve_write_path(workspace, &path, allow_outside)?;
                 ensure_new_path(&resolved, &mut seen).await?;
                 if fs::metadata(&resolved).await.is_ok() {
                     return Err(CoreError::invalid(format!(
@@ -105,7 +131,7 @@ pub async fn apply(workspace: &Path, patch_text: &str) -> Result<PatchResult> {
                 });
             }
             Operation::Delete { path } => {
-                let resolved = resolve_in_workspace(workspace, &path)?;
+                let resolved = resolve_write_path(workspace, &path, allow_outside)?;
                 ensure_new_path(&resolved, &mut seen).await?;
                 let old = read_text(&resolved).await?;
                 let deletions = count_lines(&old);
@@ -124,13 +150,13 @@ pub async fn apply(workspace: &Path, patch_text: &str) -> Result<PatchResult> {
                 move_to,
                 hunks,
             } => {
-                let resolved = resolve_in_workspace(workspace, &path)?;
+                let resolved = resolve_write_path(workspace, &path, allow_outside)?;
                 ensure_new_path(&resolved, &mut seen).await?;
                 let old = read_text(&resolved).await?;
                 let (new, additions, deletions) = apply_hunks(&old, &hunks)?;
                 let old_relative = relative(workspace, &resolved);
                 if let Some(move_to) = move_to {
-                    let destination = resolve_in_workspace(workspace, &move_to)?;
+                    let destination = resolve_write_path(workspace, &move_to, allow_outside)?;
                     ensure_new_path(&destination, &mut seen).await?;
                     if fs::metadata(&destination).await.is_ok() {
                         return Err(CoreError::invalid(format!(
@@ -566,6 +592,20 @@ mod tests {
             std::fs::read_to_string(workspace.join("file.txt")).unwrap(),
             "one\r\nthree\r\n"
         );
+    }
+
+    #[test]
+    fn detects_patch_paths_outside_the_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        assert!(!touches_outside(
+            &workspace,
+            "*** Begin Patch\n*** Add File: inside.txt\n+x\n*** End Patch"
+        ));
+        assert!(touches_outside(
+            &workspace,
+            "*** Begin Patch\n*** Add File: ../outside.txt\n+x\n*** End Patch"
+        ));
     }
 
     #[tokio::test]

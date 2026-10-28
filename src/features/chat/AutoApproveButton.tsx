@@ -60,9 +60,10 @@ export function AutoApproveButton() {
         }
       >
         <p className="text-[13px] leading-relaxed" style={{ color: "var(--muted)" }}>
-          All tool calls in this chat will run without asking for approval.
-          Dangerous shell commands still require approval. This setting lasts
-          until Jarvis is closed.
+          Built-in tools in this chat will run without asking for approval,
+          except dangerous shell commands, patch deletions, and
+          outside-workspace writes. MCP server policies still apply. This
+          setting lasts until Jarvis is closed.
         </p>
       </Modal>
     </>
