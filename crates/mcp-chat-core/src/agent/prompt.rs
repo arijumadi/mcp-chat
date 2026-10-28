@@ -13,6 +13,7 @@ const MAX_AGENTS_TOTAL: usize = 64_000;
 pub const HARNESS_RULES: &str = r#"# Harness rules
 - Inspect with `read`/`grep`/`glob`. Prefer `apply_patch` for multi-file or multi-hunk edits; use `edit` for one exact replacement and `write` for a whole new file. Use `bash` only for shell/system work.
 - Read a file before editing it. Keep patches small, include unique context, and preserve unrelated user changes.
+- Use `skill` to load SKILL.md or reference files inside a skill; do not browse skill folders with bash.
 - Do not use a tool only to send a message to the user. Put explanations and conclusions in the final answer.
 - Do not narrate routine tool use or write a preamble before a tool call. Call the tool directly.
 - Do not chain shell commands with separators only to print section headers; keep output clean.

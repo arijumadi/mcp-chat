@@ -273,6 +273,30 @@ pub(crate) fn resolve_in_workspace(workspace: &Path, raw: &str) -> Result<PathBu
     Ok(normalized)
 }
 
+/// Read-only tools may leave the workspace in auto mode. Writes and shell
+/// commands still use the workspace-confined resolver.
+pub(crate) fn resolve_read_path(
+    workspace: &Path,
+    raw: &str,
+    allow_outside: bool,
+) -> Result<PathBuf> {
+    if !allow_outside {
+        return resolve_in_workspace(workspace, raw);
+    }
+    if raw.trim().is_empty() {
+        return Err(CoreError::invalid("path is required"));
+    }
+    let input = PathBuf::from(raw);
+    let joined = if input.is_absolute() {
+        input
+    } else {
+        workspace.join(input)
+    };
+    normalize_lexically(&joined)
+        .canonicalize()
+        .map_err(|_| CoreError::invalid(format!("Path not found: {raw}")))
+}
+
 const MAX_TEXT_BYTES: u64 = 2_000_000;
 
 async fn read_text_file(path: &Path) -> Result<String> {
@@ -301,6 +325,53 @@ fn display_relative(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+async fn skill_listing(dir: &Path, name: &str, relative: &str) -> Result<String> {
+    let mut entries = Vec::new();
+    let mut reader = tokio::fs::read_dir(dir).await?;
+    let mut truncated = false;
+    while let Some(entry) = reader.next_entry().await? {
+        if entries.len() >= 200 {
+            truncated = true;
+            break;
+        }
+        let metadata = entry.metadata().await.ok();
+        let file_type = entry.file_type().await.ok();
+        let label = entry.file_name().to_string_lossy().replace('\\', "/");
+        let kind = if file_type.as_ref().is_some_and(|value| value.is_dir()) {
+            "dir"
+        } else if file_type.as_ref().is_some_and(|value| value.is_file()) {
+            "file"
+        } else {
+            "link"
+        };
+        let size = metadata
+            .as_ref()
+            .map(|value| value.len())
+            .unwrap_or_default();
+        entries.push((label, kind, size));
+    }
+    entries.sort_by_key(|entry| entry.0.to_lowercase());
+    let label = if relative.is_empty() || relative == "." {
+        name.to_owned()
+    } else {
+        format!("{name}/{relative}")
+    };
+    let mut out = format!("# Skill: {label}\n");
+    for (entry, kind, size) in entries {
+        if kind == "dir" {
+            out.push_str(&format!("- {entry}/\n"));
+        } else if kind == "file" {
+            out.push_str(&format!("- {entry} ({size} B)\n"));
+        } else {
+            out.push_str(&format!("- {entry} (link)\n"));
+        }
+    }
+    if truncated {
+        out.push_str("- ... (more entries not shown)\n");
+    }
+    Ok(out)
 }
 
 fn skip_dir(entry: &walkdir::DirEntry) -> bool {
@@ -607,11 +678,12 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "skill".into(),
-            description: "Load a skill (SKILL.md) by name. Empty name lists skills from .mcp-chat/skills, .opencode/skills, and app data.".into(),
+            description: "Load a skill by name. Empty name lists skills. Without file, returns SKILL.md; with file, reads a file or lists a subfolder inside that skill only.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Skill directory name. Empty lists available skills."}
+                    "name": {"type": "string", "description": "Skill directory name. Empty lists available skills."},
+                    "file": {"type": "string", "description": "Optional path relative to the skill directory. A directory returns a listing."}
                 },
                 "additionalProperties": false
             }),
@@ -795,6 +867,10 @@ pub fn builtin_default_effect(name: &str) -> Effect {
 }
 
 pub fn skill_roots(workspace: &Path, output_dir: &Path) -> Vec<PathBuf> {
+    skill_roots_with_home(workspace, output_dir, home_dir().as_deref())
+}
+
+fn skill_roots_with_home(workspace: &Path, output_dir: &Path, home: Option<&Path>) -> Vec<PathBuf> {
     let mut roots = vec![
         workspace.join(".mcp-chat").join("skills"),
         workspace.join(".opencode").join("skills"),
@@ -802,7 +878,17 @@ pub fn skill_roots(workspace: &Path, output_dir: &Path) -> Vec<PathBuf> {
     if let Some(parent) = output_dir.parent() {
         roots.push(parent.join("skills"));
     }
+    if let Some(home) = home {
+        roots.push(home.join(".config").join("opencode").join("skills"));
+        roots.push(home.join(".config").join("mcp-chat").join("skills"));
+    }
     roots
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
 }
 
 fn skill_description(path: &Path) -> String {
@@ -1910,7 +1996,7 @@ impl ToolExecutor {
             .clamp(1, 5_000) as usize;
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
-        let path = resolve_in_workspace(&workspace, raw)?;
+        let path = resolve_read_path(&workspace, raw, req.auto_approve)?;
         let content = read_text_file(&path).await?;
         let lines = content.lines().collect::<Vec<_>>();
         let total = lines.len();
@@ -2048,9 +2134,10 @@ impl ToolExecutor {
             .clamp(1, 1_000) as usize;
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
-        let search = resolve_in_workspace(
+        let search = resolve_read_path(
             &workspace,
             req.args.get("path").and_then(Value::as_str).unwrap_or("."),
+            req.auto_approve,
         )?;
         let include = req
             .args
@@ -2150,9 +2237,10 @@ impl ToolExecutor {
             .clamp(1, 2_000) as usize;
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
-        let search = resolve_in_workspace(
+        let search = resolve_read_path(
             &workspace,
             req.args.get("path").and_then(Value::as_str).unwrap_or("."),
+            req.auto_approve,
         )?;
         let matcher = glob_matcher(&pattern)?;
         let root = workspace.clone();
@@ -2201,13 +2289,24 @@ impl ToolExecutor {
             .and_then(Value::as_str)
             .unwrap_or("")
             .trim();
+        let file = req
+            .args
+            .get("file")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let roots = skill_roots(&workspace, &self.output_dir);
         let catalog = skill_catalog(&workspace, &self.output_dir);
         if name.is_empty() {
+            if file.is_some() {
+                return Err(CoreError::invalid(
+                    "A skill name is required when reading a skill file.",
+                ));
+            }
             let content = if catalog.is_empty() {
-                "No skills found. Create .mcp-chat/skills/<name>/SKILL.md in the workspace.".into()
+                "No skills found. Add <name>/SKILL.md to .mcp-chat/skills, .opencode/skills, app data, or ~/.config/opencode/skills.".into()
             } else {
                 format!(
                     "Available skills:\n{}",
@@ -2238,29 +2337,65 @@ impl ToolExecutor {
         {
             return Err(CoreError::invalid("Invalid skill name."));
         }
-        for root in &roots {
-            let path = root.join(name).join("SKILL.md");
-            if path.is_file() {
-                let content = read_text_file(&path).await?;
-                return Ok(Rendered {
-                    content: format!("# Skill: {name}\n\n{content}"),
-                    structured: None,
-                    ok: true,
-                });
-            }
+        let skill_dir = roots
+            .iter()
+            .map(|root| root.join(name))
+            .find(|path| path.join("SKILL.md").is_file())
+            .ok_or_else(|| {
+                CoreError::invalid(format!(
+                    "Skill {name:?} was not found. Available skills: {}",
+                    if catalog.is_empty() {
+                        "(none)".into()
+                    } else {
+                        catalog
+                            .iter()
+                            .map(|(name, _)| name.clone())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                ))
+            })?;
+        let canonical_dir = skill_dir.canonicalize()?;
+        let requested = file.unwrap_or("SKILL.md");
+        if requested.len() > 512 || Path::new(requested).is_absolute() {
+            return Err(CoreError::invalid("Invalid skill file path."));
         }
-        Err(CoreError::invalid(format!(
-            "Skill {name:?} was not found. Available skills: {}",
-            if catalog.is_empty() {
-                "(none)".into()
-            } else {
-                catalog
-                    .iter()
-                    .map(|(name, _)| name.clone())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
-        )))
+        let target = skill_dir.join(requested);
+        let target = target
+            .canonicalize()
+            .map_err(|_| CoreError::invalid(format!("Skill file not found: {requested}")))?;
+        if !target.starts_with(&canonical_dir) {
+            return Err(CoreError::invalid(
+                "Skill file must stay inside the skill directory.",
+            ));
+        }
+        let relative = target
+            .strip_prefix(&canonical_dir)
+            .unwrap_or(&target)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if target.is_dir() {
+            let listing = skill_listing(&target, name, &relative).await?;
+            return Ok(Rendered {
+                content: listing,
+                structured: None,
+                ok: true,
+            });
+        }
+        if !target.is_file() {
+            return Err(CoreError::invalid("Skill path is not a file or directory."));
+        }
+        let content = read_text_file(&target).await?;
+        let label = if file.is_none() {
+            name.to_owned()
+        } else {
+            format!("{name}/{relative}")
+        };
+        Ok(Rendered {
+            content: format!("# Skill: {label}\n\n{content}"),
+            structured: None,
+            ok: true,
+        })
     }
 
     async fn run_question(&self, req: &ToolExecRequest) -> Result<Rendered> {
@@ -3041,5 +3176,83 @@ mod tests {
             .await
             .unwrap();
         assert!(loaded.content.contains("Use the demo workflow."));
+
+        std::fs::create_dir_all(skill_dir.join("references")).unwrap();
+        std::fs::write(skill_dir.join("references/api.md"), "reference content").unwrap();
+        let reference = executor
+            .run_skill(&request(
+                "skill",
+                json!({"name": "demo", "file": "references/api.md"}),
+            ))
+            .await
+            .unwrap();
+        assert!(reference.content.contains("reference content"));
+
+        let listing = executor
+            .run_skill(&request(
+                "skill",
+                json!({"name": "demo", "file": "references"}),
+            ))
+            .await
+            .unwrap();
+        assert!(listing.content.contains("api.md"));
+
+        let escaped = executor
+            .run_skill(&request(
+                "skill",
+                json!({"name": "demo", "file": "../outside.md"}),
+            ))
+            .await;
+        assert!(escaped.is_err());
+    }
+
+    #[test]
+    fn global_skill_roots_are_discovered() {
+        let workspace = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let output = workspace.path().join("tool-output");
+        let roots = skill_roots_with_home(workspace.path(), &output, Some(home.path()));
+        assert!(roots.contains(&home.path().join(".config/opencode/skills")));
+        assert!(roots.contains(&home.path().join(".config/mcp-chat/skills")));
+        assert!(roots.contains(&workspace.path().join(".mcp-chat/skills")));
+    }
+
+    #[tokio::test]
+    async fn read_only_tools_can_leave_workspace_only_in_auto_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("outside.txt");
+        std::fs::write(&outside_file, "outside content").unwrap();
+        let executor = test_executor(&workspace).await;
+
+        let denied = executor
+            .run_read(&request(
+                "read",
+                json!({"filePath": outside_file.to_string_lossy()}),
+            ))
+            .await;
+        assert!(denied.is_err());
+
+        let mut allowed = request("read", json!({"filePath": outside_file.to_string_lossy()}));
+        allowed.auto_approve = true;
+        let result = executor.run_read(&allowed).await.unwrap();
+        assert!(result.content.contains("outside content"));
+
+        let mut grep = request(
+            "grep",
+            json!({"pattern": "outside", "path": outside.path().to_string_lossy()}),
+        );
+        grep.auto_approve = true;
+        let result = executor.run_grep(&grep).await.unwrap();
+        assert!(result.content.contains("outside content"));
+
+        let mut glob = request(
+            "glob",
+            json!({"pattern": "**/*.txt", "path": outside.path().to_string_lossy()}),
+        );
+        glob.auto_approve = true;
+        let result = executor.run_glob(&glob).await.unwrap();
+        assert!(result.content.contains("outside.txt"));
     }
 }
