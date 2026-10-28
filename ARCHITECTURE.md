@@ -116,7 +116,9 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 14. **Token estimates use `chars / 3`.** No tokenizer dependency; conservative enough to trigger compaction early. Exact provider usage is not required for correctness.
 15. **Attachments are copied into Rust-owned storage.** The native picker or a Tauri drag-drop event supplies paths to a Tauri command; the core copies files into app data, classifies image/text/binary content from magic bytes and extension, and stores only metadata plus extracted text in message parts. Image bytes are read at provider-serialization time and sent as native image blocks; text/code files and text-based PDFs are inlined with a 100k-character cap; scanned PDFs and other binaries are metadata-only. Pending copies are swept at startup, and conversation/revert cleanup removes or restores them. This keeps the webview out of arbitrary filesystem access and keeps prompts rebuildable.
 
-16. **Frontend verification without Tauri.** The renderer is exercised in Chromium through Playwright with a stubbed IPC bridge. The native shell is intentionally thin so the untested surface is limited to command wiring and window setup (see gaps).
+16. **Window state is persisted.** `tauri-plugin-window-state` restores size, position and maximized state on launch. The plugin is configured in the Rust shell and does not add webview permissions.
+
+17. **Frontend verification without Tauri.** The renderer is exercised in Chromium through Playwright with a stubbed IPC bridge. The native shell is intentionally thin so the untested surface is limited to command wiring and window setup (see gaps).
 
 ## Test map
 

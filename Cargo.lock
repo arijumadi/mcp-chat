@@ -2681,7 +2681,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mcp-chat"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "mcp-chat-core",
  "serde",
@@ -2690,6 +2690,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tauri-plugin-window-state",
  "tokio",
  "tokio-util",
  "tracing",
@@ -2700,7 +2701,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-chat-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2732,7 +2733,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-mock"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axum",
  "bytes",
@@ -5025,6 +5026,21 @@ dependencies = [
  "url",
  "windows",
  "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-window-state"
+version = "2.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73736611e14142408d15353e21e3cca2f12a3cfb523ad0ce85999b6d2ef1a704"
+dependencies = [
+ "bitflags 2.13.2",
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
