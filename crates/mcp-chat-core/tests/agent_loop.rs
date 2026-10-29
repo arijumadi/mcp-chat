@@ -948,19 +948,24 @@ async fn read_tool_output_pages_are_not_recursively_truncated() {
         .await;
     let requests = h.provider.requests();
     assert_eq!(requests.len(), 3);
-    let paged_content = requests[2]["messages"]
+    let paged_message = requests[2]["messages"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|message| message["role"] == "tool")
-        .filter_map(|message| message["content"].as_str())
-        .max_by_key(|content| content.len())
-        .unwrap_or("");
-    assert!(
-        paged_content.len() > 20_000,
-        "read_tool_output page was truncated again: {} chars",
-        paged_content.len()
-    );
+        .find(|message| message["role"] == "tool" && message["tool_call_id"] == "call_read")
+        .expect("read_tool_output tool result");
+    let paged: serde_json::Value = serde_json::from_str(paged_message["content"].as_str().unwrap())
+        .expect("read_tool_output result should stay valid JSON");
+    assert_eq!(paged["total"], 50_000);
+    assert_eq!(paged["next_offset"], 24_000);
+    assert_eq!(paged["truncated"], true);
+    assert_eq!(paged["content"].as_str().unwrap().chars().count(), 24_000);
+
+    let second = h.engine.read_tool_output("call_1", 24_000).await.unwrap();
+    let second: serde_json::Value = serde_json::from_str(&second).unwrap();
+    assert_eq!(second["offset"], 24_000);
+    assert_eq!(second["next_offset"], 48_000);
+    assert_eq!(second["truncated"], true);
     assert!(h.assistant_text().await.contains("Paged output complete."));
 }
 

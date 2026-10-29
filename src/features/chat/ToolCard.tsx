@@ -260,8 +260,12 @@ export function ToolCard({ part }: { part: Part }) {
           {full}
         </pre>
         <div className="mt-3 flex items-center justify-between">
-          <span className="text-[10.5px]" style={{ color: "var(--faint)" }}>
-            {total != null ? `${full?.length ?? 0} of ${total} characters` : ""}
+          <span
+            className="text-[10.5px]"
+            style={{ color: "var(--faint)" }}
+            title="Counts the formatted tool output, including line numbers; it can differ from the source file size."
+          >
+            {total != null ? `${full?.length ?? 0} of ${total} formatted chars` : ""}
           </span>
           {nextOffset != null ? (
             <Button

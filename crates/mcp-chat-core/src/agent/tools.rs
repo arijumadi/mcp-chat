@@ -31,7 +31,6 @@ const MODEL_OUTPUT_LIMIT: usize = 12_000;
 const SHELL_OUTPUT_LIMIT: usize = 16_000;
 const READ_OUTPUT_LIMIT: usize = 24_000;
 const PS_PROLOG: &str = "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;";
-const PAGER_OUTPUT_LIMIT: usize = 24_000;
 const READ_PAGE_CHARS: usize = 24_000;
 const PREVIEW_LIMIT: usize = 4_000;
 #[cfg(windows)]
@@ -625,12 +624,12 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: "read_tool_output".into(),
-            description: "Read a truncated tool result by call_id, optionally from a character offset.".into(),
+            description: "Read a truncated tool result by call_id, optionally from a character offset. Pages align to line starts when the output has newlines.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "call_id": {"type": "string", "description": "The tool call id whose spilled output should be read."},
-                    "offset": {"type": "integer", "minimum": 0, "description": "Character offset to start from. Default 0."}
+                    "offset": {"type": "integer", "minimum": 0, "description": "Character offset to start from. Default 0. Page ends align to line boundaries when possible."}
                 },
                 "required": ["call_id"],
                 "additionalProperties": false
@@ -1222,8 +1221,11 @@ impl ToolExecutor {
                 let mut full_result_ref = None;
                 let mut truncated = false;
                 let is_pager = req.remote_name == "read_tool_output";
+                // A pager page is already capped at READ_PAGE_CHARS. The JSON
+                // envelope can push it past that limit; truncating the envelope
+                // would hide next_offset and create a new call_id on every page.
                 let output_limit = if is_pager {
-                    PAGER_OUTPUT_LIMIT
+                    usize::MAX
                 } else if req.remote_name == "bash" {
                     SHELL_OUTPUT_LIMIT
                 } else if req.remote_name == "read" {
@@ -2123,6 +2125,7 @@ impl ToolExecutor {
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let path = resolve_read_path(&workspace, raw, req.auto_approve)?;
         let content = read_text_file(&path).await?;
+        let content = strip_utf8_bom(&content);
         let lines = content.lines().collect::<Vec<_>>();
         let total = lines.len();
         let relative = display_relative(&workspace, &path);
@@ -2847,6 +2850,32 @@ fn validate_args(schema: &Value, args: &Value) -> std::result::Result<(), String
     }
 }
 
+fn strip_utf8_bom(value: &str) -> &str {
+    value.strip_prefix('\u{feff}').unwrap_or(value)
+}
+
+/// Page formatted tool output without ending a page in the middle of a line.
+/// Offsets returned by a previous page are line-aligned. A single line longer
+/// than the page limit still gets a hard cut so paging always makes progress.
+fn page_text(content: &str, offset: usize) -> (usize, String, usize, usize) {
+    let total = content.chars().count();
+    if offset >= total {
+        return (total, String::new(), total, total);
+    }
+
+    let start = offset;
+
+    let mut chunk: String = content.chars().skip(start).take(READ_PAGE_CHARS).collect();
+    let mut next = start + chunk.chars().count();
+    if next < total {
+        if let Some(last_newline) = chunk.rfind('\n') {
+            chunk.truncate(last_newline + 1);
+            next = start + chunk.chars().count();
+        }
+    }
+    (start, chunk, next, total)
+}
+
 pub async fn read_spilled(dir: &Path, call_id: &str, offset: usize) -> Result<String> {
     if call_id.is_empty()
         || call_id.len() > 128
@@ -2870,22 +2899,20 @@ pub async fn read_spilled(dir: &Path, call_id: &str, offset: usize) -> Result<St
                 .map(|value| serde_json::to_string_pretty(value).unwrap_or_default())
         })
         .unwrap_or_default();
-    let total = content.chars().count();
-    if offset >= total {
+    let (start, chunk, next, total) = page_text(&content, offset);
+    if chunk.is_empty() {
         return Ok(json!({
             "content": "",
-            "offset": offset,
+            "offset": total,
             "next_offset": total,
             "total": total,
             "message": "Offset is at or beyond the end of this output."
         })
         .to_string());
     }
-    let chunk: String = content.chars().skip(offset).take(READ_PAGE_CHARS).collect();
-    let next = offset + chunk.chars().count();
     Ok(json!({
         "content": chunk,
-        "offset": offset,
+        "offset": start,
         "next_offset": next,
         "total": total,
         "truncated": next < total
@@ -2963,6 +2990,47 @@ mod tests {
             chars < 6_000,
             "builtin tool schema grew unexpectedly: {chars} characters"
         );
+    }
+
+    #[test]
+    fn pager_pages_align_to_lines_when_possible() {
+        let content = (1..=1_000)
+            .map(|index| format!("{index:05} | {}\n", "x".repeat(100)))
+            .collect::<String>();
+        let (start, first, next, total) = page_text(&content, 0);
+        assert_eq!(start, 0);
+        assert!(next < total);
+        assert!(first.ends_with('\n'));
+        assert!(first.chars().count() <= READ_PAGE_CHARS);
+
+        let (second_start, second, second_next, _) = page_text(&content, next);
+        assert_eq!(second_start, next);
+        assert!(second.ends_with('\n'));
+        assert!(content.starts_with(&format!("{first}{second}")));
+
+        let (third_start, third, _, _) = page_text(&content, second_next);
+        assert_eq!(third_start, second_next);
+        assert!(third.ends_with('\n'));
+    }
+
+    #[test]
+    fn pager_hard_cuts_a_single_long_line_and_counts_unicode() {
+        let content = "\u{e9}".repeat(READ_PAGE_CHARS + 100);
+        let (start, page, next, total) = page_text(&content, 0);
+        assert_eq!(start, 0);
+        assert_eq!(page.chars().count(), READ_PAGE_CHARS);
+        assert_eq!(next, READ_PAGE_CHARS);
+        assert_eq!(total, READ_PAGE_CHARS + 100);
+
+        let (second_start, tail, _, _) = page_text(&content, next);
+        assert_eq!(second_start, next);
+        assert_eq!(tail.chars().count(), 100);
+    }
+
+    #[test]
+    fn read_strips_a_utf8_bom() {
+        assert_eq!(strip_utf8_bom("\u{feff}L000001"), "L000001");
+        assert_eq!(strip_utf8_bom("plain"), "plain");
     }
 
     #[test]
