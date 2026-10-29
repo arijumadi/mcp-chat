@@ -65,7 +65,7 @@ export interface AppStore {
   refreshServers: () => Promise<void>;
   refreshSettings: () => Promise<void>;
   openConversation: (id: string) => Promise<void>;
-  newChat: () => Promise<void>;
+  newChat: (seed?: string) => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
   steerMessage: (text: string) => Promise<void>;
   stageAttachments: (paths: string[]) => Promise<void>;
@@ -259,7 +259,7 @@ export const useApp = create<AppStore>()((set, get) => ({
     }
   },
 
-  async newChat() {
+  async newChat(seed = "") {
     try {
       const current = get().conversations.find((item) => item.id === get().activeId);
       const conversation = await call<Conversation>("create_conversation", {
@@ -273,7 +273,7 @@ export const useApp = create<AppStore>()((set, get) => ({
         activeId: conversation.id,
         messages: [],
         pendingAttachments: [],
-        draft: "",
+        draft: seed,
         view: "chat",
         status: "idle",
         approvals: [],

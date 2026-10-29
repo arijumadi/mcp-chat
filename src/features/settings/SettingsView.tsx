@@ -1,22 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
+  Check,
+  ChevronDown,
   Database,
   ExternalLink,
   FileJson,
   FileText,
   KeyRound,
+  List,
+  Loader2,
   Monitor,
   Moon,
   Pencil,
   Plus,
+  Search,
   ShieldCheck,
   Sun,
   Trash2,
 } from "lucide-react";
 import { useApp } from "@/app/store";
 import { call, downloadText } from "@/lib/ipc";
-import type { ExportResult, KeyTest, ProviderView } from "@/lib/types";
+import type { Conversation, ExportResult, KeyTest, ProviderView } from "@/lib/types";
 import { Button } from "@/components/Button";
 import { Modal } from "@/components/Modal";
 import { inputClass, hintClass } from "@/components/ui";
@@ -268,32 +273,48 @@ export function SettingsView() {
                           {provider.models.length === 1 ? "" : "s"}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          loading={testing === provider.id}
-                          onClick={() => void test(provider)}
-                        >
-                          Test key
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => void fetchModels(provider)}>
-                          Models
-                        </Button>
+                      <div className="flex shrink-0 items-center gap-0.5">
                         <button
+                          type="button"
+                          onClick={() => void test(provider)}
+                          disabled={testing === provider.id}
+                          className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)] disabled:opacity-45"
+                          title="Test API key"
+                          aria-label="Test API key"
+                        >
+                          {testing === provider.id ? (
+                            <Loader2 size={14} className="animate-spin" />
+                          ) : (
+                            <KeyRound size={14} />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void fetchModels(provider)}
+                          className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)]"
+                          title="Fetch models"
+                          aria-label="Fetch models"
+                        >
+                          <List size={14} />
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => {
                             setEditing(provider);
                             setFormOpen(true);
                           }}
                           className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)]"
                           title="Edit provider"
+                          aria-label="Edit provider"
                         >
                           <Pencil size={13} />
                         </button>
                         <button
+                          type="button"
                           onClick={() => setDeleting(provider)}
                           className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--danger-soft)] hover:text-[var(--danger)]"
                           title="Delete provider"
+                          aria-label="Delete provider"
                         >
                           <Trash2 size={13} />
                         </button>
@@ -430,29 +451,14 @@ export function SettingsView() {
                   <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
                     Conversation
                   </span>
-                  <select
+                  <ConversationSelect
+                    conversations={conversations}
                     value={exportId}
-                    onChange={(event) => setExportId(event.target.value)}
-                    className={inputClass}
-                    style={{ borderColor: "var(--border)", background: "var(--panel)" }}
-                  >
-                    {conversations.map((conversation) => (
-                      <option key={conversation.id} value={conversation.id}>
-                        {conversation.title}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setExportId}
+                    hasMore={conversationHasMore}
+                    onLoadMore={() => void loadMoreConversations()}
+                  />
                 </label>
-                {conversationHasMore ? (
-                  <button
-                    type="button"
-                    onClick={() => void loadMoreConversations()}
-                    className="focus-ring mt-1 rounded px-1 text-[10.5px] font-medium transition hover:bg-[var(--panel-2)]"
-                    style={{ color: "var(--accent)" }}
-                  >
-                    Load older conversations…
-                  </button>
-                ) : null}
                 <div className="mt-2 flex justify-end gap-2">
                   <Button
                     size="sm"
@@ -618,6 +624,129 @@ export function SettingsView() {
   );
 }
 
+function ConversationSelect({
+  conversations,
+  value,
+  onChange,
+  hasMore,
+  onLoadMore,
+}: {
+  conversations: Conversation[];
+  value: string;
+  onChange: (id: string) => void;
+  hasMore: boolean;
+  onLoadMore: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const selected = conversations.find((conversation) => conversation.id === value);
+  const filtered = conversations.filter((conversation) =>
+    conversation.title.toLowerCase().includes(query.trim().toLowerCase()),
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    setQuery("");
+    const onPointer = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className={cn(inputClass, "flex w-full items-center justify-between gap-2 text-left")}
+        style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Export conversation"
+      >
+        <span className="min-w-0 truncate">{selected?.title ?? "Choose a conversation"}</span>
+        <ChevronDown size={14} className="shrink-0" style={{ color: "var(--faint)" }} />
+      </button>
+      {open ? (
+        <div
+          className="absolute z-30 mt-1 w-full rounded-xl border p-1.5 shadow-xl"
+          style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+        >
+          <div className="relative mb-1.5">
+            <Search
+              size={13}
+              className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2"
+              style={{ color: "var(--faint)" }}
+            />
+            <input
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className={cn(inputClass, "h-8 py-1 pl-8 text-[12.5px]")}
+              style={{ borderColor: "var(--border)" }}
+              placeholder="Search conversations…"
+              aria-label="Search export conversations"
+            />
+          </div>
+          <div className="max-h-60 overflow-y-auto" role="listbox" aria-label="Conversations">
+            {filtered.length === 0 ? (
+              <div className="px-2 py-2 text-[11.5px]" style={{ color: "var(--faint)" }}>
+                No matching conversations.
+              </div>
+            ) : (
+              filtered.map((conversation) => {
+                const active = conversation.id === value;
+                return (
+                  <button
+                    key={conversation.id}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    onClick={() => {
+                      onChange(conversation.id);
+                      setOpen(false);
+                      triggerRef.current?.focus();
+                    }}
+                    className="focus-ring flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition hover:bg-[var(--panel-2)]"
+                    style={{ background: active ? "var(--panel-2)" : "transparent" }}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{conversation.title}</span>
+                    {active ? <Check size={12} style={{ color: "var(--accent)" }} /> : null}
+                  </button>
+                );
+              })
+            )}
+          </div>
+          {hasMore ? (
+            <button
+              type="button"
+              onClick={onLoadMore}
+              className="focus-ring mt-1 w-full rounded-lg px-2 py-1.5 text-left text-[11px] font-medium transition hover:bg-[var(--panel-2)]"
+              style={{ color: "var(--accent)" }}
+            >
+              Load older conversations…
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SettingsNav() {
   const items = [
     ["providers", "Providers"],
@@ -639,9 +768,12 @@ function SettingsNav() {
           key={id}
           type="button"
           onClick={() =>
-            document
-              .getElementById(id)
-              ?.scrollIntoView({ behavior: "smooth", block: "start" })
+            document.getElementById(id)?.scrollIntoView({
+              behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+                ? "auto"
+                : "smooth",
+              block: "start",
+            })
           }
           className="focus-ring shrink-0 rounded-md px-2 py-1 text-[11.5px] transition hover:bg-[var(--panel-2)]"
           style={{ color: "var(--muted)" }}

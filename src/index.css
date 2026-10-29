@@ -12,8 +12,8 @@
   --panel: #fbfbf8;
   --panel-2: #ecece7;
   --fg: #1b1d1a;
-  --muted: #6b6f68;
-  --faint: #8c9088;
+  --muted: #5f645c;
+  --faint: #686d65;
   --border: #dedfd8;
   --border-strong: #c9cbc3;
   --accent: #1a73b0;
@@ -33,8 +33,8 @@
   --panel: #101113;
   --panel-2: #17181b;
   --fg: #e9eae6;
-  --muted: #989b93;
-  --faint: #72756f;
+  --muted: #a6aaa1;
+  --faint: #7d837a;
   --border: #24262a;
   --border-strong: #33363b;
   --accent: #67c8ef;
@@ -159,6 +159,17 @@ button {
 .shimmer {
   background: var(--panel-2);
   animation: shimmer-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 @keyframes shimmer-pulse {

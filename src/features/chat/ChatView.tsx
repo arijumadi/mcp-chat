@@ -18,6 +18,7 @@ export function ChatView() {
   const sidebarOpen = useApp((state) => state.sidebarOpen);
   const toggleSidebar = useApp((state) => state.toggleSidebar);
   const setView = useApp((state) => state.setView);
+  const setDraft = useApp((state) => state.setDraft);
   const newChat = useApp((state) => state.newChat);
   const renameConversation = useApp((state) => state.renameConversation);
   const conversation = conversations.find((item) => item.id === activeId);
@@ -39,7 +40,7 @@ export function ChatView() {
         servers={servers.length}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={toggleSidebar}
-        onNewChat={() => void newChat()}
+        onNewChat={(seed) => void newChat(seed)}
         onSettings={() => setView("settings")}
         onServers={() => setView("servers")}
       />
@@ -105,7 +106,7 @@ export function ChatView() {
 
       {messages.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center px-6">
-          <div className="max-w-sm text-center">
+          <div className="w-full max-w-[640px] text-center">
             <div className="mx-auto mb-3 flex items-center justify-center">
               <Logo size={44} />
             </div>
@@ -114,6 +115,9 @@ export function ChatView() {
               Ask a question, paste some code, or connect an MCP server and let the model use its
               tools.
             </p>
+            {providers.length > 0 ? (
+              <QuickStarts onSelect={(prompt) => setDraft(prompt)} />
+            ) : null}
           </div>
         </div>
       ) : (
@@ -121,6 +125,48 @@ export function ChatView() {
       )}
       <Composer conversation={conversation} />
 
+    </div>
+  );
+}
+
+const QUICK_STARTS = [
+  {
+    title: "Map the workspace",
+    body: "Orient me in this project and point to the files that matter.",
+    prompt:
+      "Map this workspace and tell me the main entry points, architecture, and the first files I should read.",
+  },
+  {
+    title: "Find a bug",
+    body: "Inspect the current state, tests, and likely failure points.",
+    prompt:
+      "Help me find and fix the next bug in this workspace. Start by checking the current state and tests.",
+  },
+  {
+    title: "Use MCP tools",
+    body: "See what tools are available and try a safe read-only call.",
+    prompt:
+      "Show me which MCP tools are available, then demonstrate one useful read-only call.",
+  },
+] as const;
+
+function QuickStarts({ onSelect }: { onSelect: (prompt: string) => void }) {
+  return (
+    <div className="mt-6 grid w-full gap-2 text-left sm:grid-cols-3">
+      {QUICK_STARTS.map((item) => (
+        <button
+          key={item.title}
+          type="button"
+          onClick={() => onSelect(item.prompt)}
+          className="focus-ring rounded-xl border px-3 py-3 text-left transition hover:bg-[var(--panel-2)]"
+          style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+        >
+          <div className="text-[12.5px] font-medium">{item.title}</div>
+          <div className="mt-0.5 text-[11.5px] leading-snug" style={{ color: "var(--muted)" }}>
+            {item.body}
+          </div>
+        </button>
+      ))}
     </div>
   );
 }
@@ -140,7 +186,7 @@ function EmptyChat({
   servers: number;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
-  onNewChat: () => void;
+  onNewChat: (seed?: string) => void;
   onSettings: () => void;
   onServers: () => void;
 }) {
@@ -172,7 +218,7 @@ function EmptyChat({
         </div>
       </header>
       <div className="flex min-h-0 flex-1 items-center justify-center px-6">
-        <div className="max-w-[430px] text-center">
+        <div className="w-full max-w-[640px] text-center">
           <div className="mx-auto mb-5 flex justify-center">
             <Logo size={64} />
           </div>
@@ -184,7 +230,7 @@ function EmptyChat({
             approval. Everything stays on this machine.
           </p>
           <div className="mt-6 flex items-center justify-center gap-2">
-            <Button variant="primary" icon={<Plus size={14} />} onClick={onNewChat}>
+            <Button variant="primary" icon={<Plus size={14} />} onClick={() => onNewChat()}>
               New chat
             </Button>
             {providers === 0 ? (
@@ -205,7 +251,9 @@ function EmptyChat({
               onSettings={onSettings}
               onServers={onServers}
             />
-          ) : null}
+          ) : (
+            <QuickStarts onSelect={(prompt) => onNewChat(prompt)} />
+          )}
           <div
             className="mt-6 flex items-center justify-center gap-4 text-[10.5px]"
             style={{ color: "var(--faint)" }}

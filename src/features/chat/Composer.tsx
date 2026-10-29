@@ -355,7 +355,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
           </div>
         </div>
         <div
-          className="mt-1.5 flex items-center justify-between px-1 text-[10.5px]"
+          className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 text-[10.5px]"
           style={{ color: "var(--faint)" }}
         >
           <span>

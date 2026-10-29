@@ -116,7 +116,7 @@ pnpm fmt:check     # cargo fmt --check
 pnpm core:test     # 69 unit + 32 agent + 6 MCP integration + 1 auth + 1 provider test = 109 Rust tests
 pnpm core:clippy   # cargo clippy -p mcp-chat-core --all-targets -- -D warnings
 pnpm mock:clippy   # same for the mock server
-pnpm test:e2e      # Playwright: 5 smoke tests against vite preview with a stubbed IPC bridge
+pnpm test:e2e      # Playwright: 6 smoke + 6 visual-regression tests against vite preview
 ```
 
 `pnpm check` runs all of the above except Playwright.
@@ -158,7 +158,7 @@ crates/mcp-chat-core/   db, llm, mcp, secrets, agent loop (testable without Taur
 src-tauri/              thin Tauri shell: commands, events, capabilities
 src/                    React 19 + TypeScript + Tailwind 4 renderer
 tests/mock_servers/     axum MCP + OpenAI/Anthropic mock server
-e2e/                    Playwright smoke tests
+e2e/                    Playwright smoke and visual-regression tests
 docs/screenshots/       UI captures from the mock bridge
 PACKAGING.md             Windows/macOS/Linux installer and signing guide
 ```

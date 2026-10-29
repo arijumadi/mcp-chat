@@ -1,13 +1,13 @@
 import { useState } from "react";
 import {
   ArrowLeft,
+  ChevronDown,
   Pencil,
   Play,
   Plug,
   Plus,
   RefreshCw,
   Trash2,
-  Wrench,
 } from "lucide-react";
 import { useApp } from "@/app/store";
 import { call } from "@/lib/ipc";
@@ -211,15 +211,12 @@ export function ServersView() {
                     <div className="flex flex-wrap items-start gap-3 px-4 py-3.5">
                       <StatusDot status={server.lastStatus} />
                       <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="text-[13.5px] font-medium">{server.name}</span>
-                          {server.protocolVersion ? (
-                            <Chip label={server.protocolVersion} accent />
-                          ) : null}
                           <Chip
-                            label={server.transport === "sse" ? "HTTP+SSE" : "streamable HTTP"}
+                            label={`policy: ${server.policy}`}
+                            accent={server.policy === "auto"}
                           />
-                          <Chip label={`policy: ${server.policy}`} />
                           {!server.enabled ? <Chip label="disabled" /> : null}
                         </div>
                         <div
@@ -228,11 +225,21 @@ export function ServersView() {
                         >
                           {server.url}
                         </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11.5px]" style={{ color: "var(--muted)" }}>
+                        <div
+                          className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px]"
+                          style={{ color: "var(--muted)" }}
+                        >
                           <span>
                             {server.toolCount} tool{server.toolCount === 1 ? "" : "s"}
                           </span>
-                          <span>·</span>
+                          <span style={{ color: "var(--faint)" }}>·</span>
+                          <span>
+                            {server.transport === "sse"
+                              ? "HTTP+SSE"
+                              : "streamable HTTP"}
+                            {server.protocolVersion ? ` · ${server.protocolVersion}` : ""}
+                          </span>
+                          <span style={{ color: "var(--faint)" }}>·</span>
                           <span>
                             auth: {server.authKind}
                             {server.authKind === "bearer" && !server.hasBearer
@@ -243,44 +250,60 @@ export function ServersView() {
                               : ""}
                           </span>
                           {server.lastError ? (
-                            <>
-                              <span>·</span>
-                              <span style={{ color: "var(--danger)" }}>{server.lastError}</span>
-                            </>
+                            <span className="w-full" style={{ color: "var(--danger)" }}>
+                              {server.lastError}
+                            </span>
                           ) : null}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          icon={<RefreshCw size={11} className={refreshing === server.id ? "animate-spin" : ""} />}
-                          onClick={() => void refreshOne(server)}
-                        >
-                          Refresh
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          icon={<Wrench size={11} />}
-                          onClick={() => void toggleTools(server)}
-                        >
-                          Tools
-                        </Button>
+                      <div className="flex shrink-0 items-center gap-0.5">
                         <button
+                          type="button"
+                          onClick={() => void refreshOne(server)}
+                          disabled={refreshing === server.id}
+                          className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)] disabled:opacity-45"
+                          title="Refresh server"
+                          aria-label="Refresh server"
+                        >
+                          <RefreshCw
+                            size={14}
+                            className={refreshing === server.id ? "animate-spin" : ""}
+                          />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void toggleTools(server)}
+                          className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)]"
+                          title={expanded === server.id ? "Hide tools" : "Show tools"}
+                          aria-label={expanded === server.id ? "Hide tools" : "Show tools"}
+                          aria-expanded={expanded === server.id}
+                        >
+                          <ChevronDown
+                            size={14}
+                            className={cn(
+                              "transition-transform",
+                              expanded === server.id && "rotate-180",
+                            )}
+                          />
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => {
                             setEditing(server);
                             setFormOpen(true);
                           }}
                           className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)]"
                           title="Edit server"
+                          aria-label="Edit server"
                         >
                           <Pencil size={13} />
                         </button>
                         <button
+                          type="button"
                           onClick={() => setDeleting(server)}
                           className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--danger-soft)] hover:text-[var(--danger)]"
                           title="Delete server"
+                          aria-label="Delete server"
                         >
                           <Trash2 size={13} />
                         </button>

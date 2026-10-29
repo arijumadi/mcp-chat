@@ -43,7 +43,7 @@ test("settings and MCP screens render", async ({ page }) => {
 
   await page.getByRole("complementary").getByRole("button", { name: "MCP servers" }).click();
   await expect(page.getByText("Mock MCP").first()).toBeVisible();
-  await page.getByRole("button", { name: "Tools" }).click();
+  await page.getByRole("button", { name: "Show tools" }).click();
   await expect(page.getByText("Echo text back")).toBeVisible();
 });
 
@@ -88,7 +88,27 @@ test("captures README screenshots", async ({ page }) => {
   await page.screenshot({ path: "docs/screenshots/settings.png", fullPage: false });
 
   await page.getByRole("complementary").getByRole("button", { name: "MCP servers" }).click();
-  await page.getByRole("button", { name: "Tools" }).click();
+  await page.getByRole("button", { name: "Show tools" }).click();
   await expect(page.getByText("Echo text back")).toBeVisible();
   await page.screenshot({ path: "docs/screenshots/servers.png", fullPage: false });
+});
+
+test("export picker filters and selects a conversation", async ({ page }) => {
+  await page.goto("/?mock=1");
+  await page.getByRole("complementary").getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+
+  const picker = page.getByRole("button", { name: "Export conversation" });
+  await expect(picker).toBeVisible();
+  await expect(picker).toContainText("Welcome to Jarvis");
+
+  await picker.click();
+  await expect(page.getByRole("listbox", { name: "Conversations" })).toBeVisible();
+  const search = page.getByRole("textbox", { name: "Search export conversations" });
+  await search.fill("Welcome");
+  await expect(page.getByRole("option", { name: "Welcome to Jarvis" })).toBeVisible();
+  await page.getByRole("option", { name: "Welcome to Jarvis" }).click();
+
+  await expect(page.getByRole("listbox", { name: "Conversations" })).toHaveCount(0);
+  await expect(picker).toContainText("Welcome to Jarvis");
 });

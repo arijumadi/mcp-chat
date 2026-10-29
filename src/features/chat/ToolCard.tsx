@@ -5,7 +5,6 @@ import {
   Clock3,
   Copy,
   Loader2,
-  Wrench,
   XCircle,
 } from "lucide-react";
 import type { Part, ToolCallPayload } from "@/lib/types";
@@ -103,17 +102,16 @@ export function ToolCard({ part }: { part: Part }) {
   return (
     <>
       <div
-        className="my-2.5 overflow-hidden rounded-xl border text-[12.5px]"
+        className="my-2 overflow-hidden rounded-lg border text-[12.5px]"
         style={{ borderColor: "var(--border)", background: "var(--panel)" }}
       >
-        <div className="flex items-center gap-2 px-3 py-2.5">
+        <div className="flex items-center gap-2 px-3 py-2">
           <StatusIcon state={state} />
-          <Wrench size={13} className="shrink-0" style={{ color: "var(--muted)" }} />
           <span className="min-w-0 truncate font-medium" title={displayName}>
             {displayName}
           </span>
           <span
-            className="truncate rounded border px-1.5 py-0.5 text-[10.5px]"
+            className="min-w-0 truncate rounded border px-1.5 py-0.5 text-[10.5px]"
             style={{
               borderColor: "var(--border)",
               color: "var(--muted)",
@@ -124,7 +122,7 @@ export function ToolCard({ part }: { part: Part }) {
             {displayServer || "unknown"}
           </span>
           <span
-            className="ml-auto flex items-center gap-1.5 text-[10.5px]"
+            className="ml-auto flex shrink-0 items-center gap-1.5 text-[10.5px]"
             style={{ color: "var(--faint)" }}
           >
             {payload.approval === "pending" ? (
@@ -172,8 +170,8 @@ export function ToolCard({ part }: { part: Part }) {
           </summary>
           <div className="px-3 pb-3">
             <pre
-              className="max-h-56 overflow-auto rounded-lg border p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
-              style={{ borderColor: "var(--border)", background: "var(--code)" }}
+              className="max-h-56 overflow-auto rounded-md p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
+              style={{ background: "var(--code)" }}
             >
               {formatJson(displayArgs)}
             </pre>
@@ -223,6 +221,7 @@ export function ToolCard({ part }: { part: Part }) {
                   }}
                   className="focus-ring rounded p-0.5 hover:bg-[var(--panel-2)]"
                   title="Copy result"
+                  aria-label="Copy result"
                 >
                   {copied ? <CheckCircle2 size={11} /> : <Copy size={11} />}
                 </button>
@@ -230,8 +229,8 @@ export function ToolCard({ part }: { part: Part }) {
             </summary>
             <div className="px-3 pb-3">
               <pre
-                className="max-h-72 overflow-auto rounded-lg border p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
-                style={{ borderColor: "var(--border)", background: "var(--code)" }}
+                className="max-h-72 overflow-auto rounded-md p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
+                style={{ background: "var(--code)" }}
               >
                 {payload.resultPreview}
               </pre>
