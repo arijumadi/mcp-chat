@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent } from "react";
 import { ArrowUp, Loader2, Paperclip, Square, Upload } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -30,6 +30,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const setView = useApp((state) => state.setView);
   const pendingAttachments = useApp((state) => state.pendingAttachments);
   const stageAttachments = useApp((state) => state.stageAttachments);
+  const stageImageFile = useApp((state) => state.stageImageFile);
   const removeAttachment = useApp((state) => state.removeAttachment);
   const [attaching, setAttaching] = useState(false);
   const [steering, setSteering] = useState(false);
@@ -144,6 +145,17 @@ export function Composer({ conversation }: { conversation: Conversation }) {
     void send(text);
   };
 
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const image = Array.from(event.clipboardData?.items ?? []).find(
+      (item) => item.kind === "file" && item.type.startsWith("image/"),
+    );
+    if (!image) return;
+    const file = image.getAsFile();
+    if (!file) return;
+    event.preventDefault();
+    void stageImageFile(file);
+  };
+
   const chooseFiles = async () => {
     if (active || disabled || attaching) return;
     if (window.__MCP_CHAT_MOCK__) {
@@ -201,7 +213,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
             <div className="mt-4 text-[15px] font-semibold">
               Drop {dragCount > 0 ? `${dragCount} file${dragCount === 1 ? "" : "s"}` : "files"} to attach
             </div>
-            <div className="mt-1 text-[12px]" style={{ color: "var(--muted)" }}>
+            <div className="mt-1 text-[12.5px]" style={{ color: "var(--muted)" }}>
               Images, text and PDFs · up to 6 files · 25 MB total
             </div>
           </div>
@@ -210,7 +222,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
       <div className="mx-auto w-full max-w-[760px]">
         {limitReached && !active ? (
           <div
-            className="mb-2 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-[12px]"
+            className="mb-2 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-[12.5px]"
             style={{ borderColor: "var(--border)", background: "var(--panel)" }}
           >
             <span style={{ color: "var(--muted)" }}>
@@ -227,7 +239,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
         ) : null}
         {disabled ? (
           <div
-            className="mb-2 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-[12px]"
+            className="mb-2 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-[12.5px]"
             style={{ borderColor: "var(--border)", background: "var(--panel)" }}
           >
             <span style={{ color: "var(--muted)" }}>
@@ -272,6 +284,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
                 submit();
               }
             }}
+            onPaste={onPaste}
             rows={1}
             disabled={disabled}
             placeholder={disabled ? "Configure a provider first…" : "Message the model…"}
@@ -285,7 +298,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
               disabled={active || disabled || attaching}
               className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-40"
               style={{ color: "var(--muted)" }}
-              title="Attach files or images — or drop them anywhere"
+              title="Attach files or images — drop or paste them here"
               aria-label="Attach files or images"
             >
               {attaching ? (
@@ -348,7 +361,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
           <span>
             {steering
               ? "Steering… stopping the current turn"
-              : "Enter to send · Shift+Enter newline · drag/drop or attach files · max 6 / 25 MB"}
+              : "Enter to send · Shift+Enter newline · drop or paste files"}
           </span>
           <span>
             {active && step

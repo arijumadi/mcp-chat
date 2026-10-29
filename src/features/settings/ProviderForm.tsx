@@ -267,7 +267,7 @@ export function ProviderForm({
 
         {error ? (
           <div
-            className="rounded-lg border px-3 py-2 text-[12px]"
+            className="rounded-lg border px-3 py-2 text-[12.5px]"
             style={{ borderColor: "var(--danger)", color: "var(--danger)", background: "var(--danger-soft)" }}
           >
             {error}

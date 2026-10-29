@@ -107,7 +107,7 @@ export function MessageItem({
             </>
           }
         >
-          <p className="text-[13px] leading-relaxed" style={{ color: "var(--muted)" }}>
+          <p className="text-[13.5px] leading-relaxed" style={{ color: "var(--muted)" }}>
             The message text will be placed back in the composer so you can edit
             and send it again.
           </p>
@@ -187,7 +187,7 @@ export function MessageItem({
           return (
             <div
               key={part.id}
-              className="my-2.5 rounded-xl border px-3.5 py-3 text-[13px]"
+              className="my-2.5 rounded-xl border px-3.5 py-3 text-[13.5px]"
               style={{
                 borderColor: "color-mix(in srgb, var(--danger) 40%, var(--border))",
                 background: "var(--danger-soft)",
@@ -248,7 +248,7 @@ export function MessageItem({
         </div>
       ) : null}
       {message.status === "error" && !parts.some((part) => part.kind === "error") ? (
-        <div className="mt-1 text-[12px]" style={{ color: "var(--danger)" }}>
+        <div className="mt-1 text-[12.5px]" style={{ color: "var(--danger)" }}>
           {message.error ?? "The turn failed."}
         </div>
       ) : null}
@@ -264,7 +264,7 @@ export function MessageItem({
 function Thinking() {
   return (
     <div
-      className="flex items-center gap-2 py-1 text-[13px]"
+      className="flex items-center gap-2 py-1 text-[13.5px]"
       style={{ color: "var(--muted)" }}
     >
       <span className="pulse-dot inline-block h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />

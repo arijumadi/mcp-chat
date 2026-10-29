@@ -228,7 +228,7 @@ export function ServersView() {
                         >
                           {server.url}
                         </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]" style={{ color: "var(--muted)" }}>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11.5px]" style={{ color: "var(--muted)" }}>
                           <span>
                             {server.toolCount} tool{server.toolCount === 1 ? "" : "s"}
                           </span>
@@ -303,7 +303,7 @@ export function ServersView() {
                               >
                                 <div className="flex flex-wrap items-center gap-2">
                                   <code className="font-mono text-[11.5px]">{tool.name}</code>
-                                  <span className="min-w-0 flex-1 truncate text-[11px]" style={{ color: "var(--muted)" }}>
+                                  <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--muted)" }}>
                                     {tool.description}
                                   </span>
                                   <Button
@@ -369,7 +369,7 @@ export function ServersView() {
           </>
         }
       >
-        <p className="text-[13px]" style={{ color: "var(--muted)" }}>
+        <p className="text-[13.5px]" style={{ color: "var(--muted)" }}>
           Its cached tools, permission rules and bearer token will be removed. Conversations keep
           their transcripts.
         </p>
@@ -392,7 +392,7 @@ export function ServersView() {
               <Chip label={`${report.tools.length} tools`} />
             </div>
             {report.instructions ? (
-              <p className="mt-3 text-[12px]" style={{ color: "var(--muted)" }}>
+              <p className="mt-3 text-[12.5px]" style={{ color: "var(--muted)" }}>
                 {report.instructions}
               </p>
             ) : null}
@@ -456,7 +456,7 @@ export function ServersView() {
               Result
             </div>
             <pre
-              className="max-h-64 overflow-auto rounded-lg border p-2.5 font-mono text-[11px] whitespace-pre-wrap"
+              className="max-h-64 overflow-auto rounded-lg border p-2.5 font-mono text-[11.5px] whitespace-pre-wrap"
               style={{ borderColor: "var(--border)", background: "var(--code)" }}
             >
               {runResult}
@@ -487,7 +487,7 @@ function StatusDot({ status }: { status: string | null }) {
 function Chip({ label, accent }: { label: string; accent?: boolean }) {
   return (
     <span
-      className="rounded border px-1.5 py-0.5 text-[10px]"
+      className="rounded border px-1.5 py-0.5 text-[10.5px]"
       style={{
         borderColor: accent ? "var(--accent)" : "var(--border)",
         color: accent ? "var(--accent)" : "var(--muted)",

@@ -121,7 +121,7 @@ export function Transcript() {
                     }
                   });
                 }}
-                className="focus-ring rounded-full border px-3 py-1.5 text-[11px] transition hover:bg-[var(--panel-2)]"
+                className="focus-ring rounded-full border px-3 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)]"
                 style={{ borderColor: "var(--border)", color: "var(--muted)" }}
               >
                 Show earlier messages ({hiddenMessages})
@@ -166,7 +166,7 @@ export function Transcript() {
             ));
           })}
           {showThinking ? (
-            <div className="flex items-center gap-2 py-2 text-[13px]" style={{ color: "var(--muted)" }}>
+            <div className="flex items-center gap-2 py-2 text-[13.5px]" style={{ color: "var(--muted)" }}>
               <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
               <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-[var(--accent)] [animation-delay:150ms]" />
               <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-[var(--accent)] [animation-delay:300ms]" />

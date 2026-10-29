@@ -77,7 +77,7 @@ export function ApprovalModal() {
       <p className="mb-3 text-[12.5px]" style={{ color: "var(--muted)" }}>
         The model asked to execute this tool. Review the arguments before allowing it.
       </p>
-      <div className="mb-1 text-[11px] font-medium" style={{ color: "var(--muted)" }}>
+      <div className="mb-1 text-[11.5px] font-medium" style={{ color: "var(--muted)" }}>
         Arguments
       </div>
       <pre

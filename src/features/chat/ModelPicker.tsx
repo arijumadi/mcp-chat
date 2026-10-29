@@ -63,8 +63,8 @@ export function ModelPicker({
       <button
         onClick={() => setOpen((value) => !value)}
         disabled={disabled}
-        className="focus-ring flex max-w-[220px] items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
-        style={{ borderColor: "var(--border)", color: "var(--muted)" }}
+        className="focus-ring flex max-w-[220px] items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
+        style={{ color: "var(--muted)" }}
         title="Change model"
       >
         <span className="truncate font-medium" style={{ color: "var(--fg)" }}>
@@ -108,7 +108,7 @@ export function ModelPicker({
             </div>
           ) : (
             <>
-              <label className="mb-1 block text-[11px]" style={{ color: "var(--muted)" }}>
+              <label className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
                 Provider
               </label>
               <select
@@ -133,7 +133,7 @@ export function ModelPicker({
                 ))}
               </select>
 
-              <label className="mt-2.5 mb-1 block text-[11px]" style={{ color: "var(--muted)" }}>
+              <label className="mt-2.5 mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
                 Model
               </label>
               {models.length > 0 ? (
@@ -152,7 +152,7 @@ export function ModelPicker({
                     data-testid="model-options"
                   >
                     {filteredModels.length === 0 ? (
-                      <div className="px-2 py-2 text-[11px]" style={{ color: "var(--faint)" }}>
+                      <div className="px-2 py-2 text-[11.5px]" style={{ color: "var(--faint)" }}>
                         No matching models.
                       </div>
                     ) : (
@@ -163,7 +163,7 @@ export function ModelPicker({
                             key={item}
                             type="button"
                             onClick={() => setSelectedModel(item)}
-                            className="focus-ring flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] transition hover:bg-[var(--panel-2)]"
+                            className="focus-ring flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition hover:bg-[var(--panel-2)]"
                             style={{ background: active ? "var(--panel-2)" : "transparent" }}
                             title={item}
                           >
@@ -199,7 +199,7 @@ export function ModelPicker({
                   Use a custom model…
                 </button>
               )}
-              <div className="mt-1 text-[9.5px]" style={{ color: "var(--faint)" }}>
+              <div className="mt-1 text-[10.5px]" style={{ color: "var(--faint)" }}>
                 {models.length > 0
                   ? "Model list saved with this provider."
                   : "No saved models. Add or fetch models in Settings."}

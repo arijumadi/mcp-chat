@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::io::AsyncReadExt;
@@ -412,6 +413,59 @@ pub async fn stage(root: &Path, paths: &[String]) -> Result<Vec<Attachment>> {
     Ok(staged)
 }
 
+/// Stage a clipboard image (data URL or raw base64) without a filesystem path.
+pub async fn stage_image(root: &Path, data: &str, name: Option<&str>) -> Result<Attachment> {
+    let payload = data
+        .split_once(',')
+        .filter(|(prefix, _)| prefix.starts_with("data:"))
+        .map(|(_, payload)| payload)
+        .unwrap_or(data);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload.trim())
+        .map_err(|_| invalid("Clipboard image is not valid base64."))?;
+    if bytes.len() as u64 > MAX_IMAGE_BYTES {
+        return Err(invalid("Clipboard image is larger than 5 MB."));
+    }
+    let mime = image_mime(&bytes).ok_or_else(|| {
+        invalid("Clipboard data is not a supported PNG, JPEG, GIF or WebP image.")
+    })?;
+    let extension = match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "png",
+    };
+    let requested = name
+        .and_then(|value| Path::new(value).file_stem().and_then(|stem| stem.to_str()))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("clipboard");
+    let name = safe_name(Path::new(&format!("{requested}.{extension}")));
+    let id = new_id();
+    let dir = root.join("pending").join(&id);
+    fs::create_dir_all(&dir).await?;
+    let path = dir.join(&name);
+    if let Err(error) = fs::write(&path, &bytes).await {
+        let _ = fs::remove_dir_all(&dir).await;
+        return Err(error.into());
+    }
+    let attachment = Attachment {
+        id,
+        name,
+        mime: mime.to_owned(),
+        size: bytes.len() as i64,
+        kind: "image".into(),
+        path: path.to_string_lossy().into_owned(),
+        text: None,
+        truncated: false,
+    };
+    if let Err(error) = write_meta(&dir, &attachment).await {
+        let _ = fs::remove_dir_all(&dir).await;
+        return Err(error);
+    }
+    Ok(attachment)
+}
+
 async fn write_meta(dir: &Path, attachment: &Attachment) -> Result<()> {
     let json = serde_json::to_vec(attachment)?;
     fs::write(dir.join(META_FILE), json).await?;
@@ -607,6 +661,25 @@ mod tests {
                 .unwrap_or("")
                 .contains("Hello attachment PDF")
         );
+    }
+
+    #[tokio::test]
+    async fn stages_clipboard_images_from_base64() {
+        let root = tempfile::tempdir().unwrap();
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&[0_u8; 32]);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+        let attachment = stage_image(
+            &root.path().join("attachments"),
+            &format!("data:image/png;base64,{encoded}"),
+            Some("pasted.png"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(attachment.kind, "image");
+        assert_eq!(attachment.mime, "image/png");
+        assert_eq!(attachment.name, "pasted.png");
+        assert!(Path::new(&attachment.path).is_file());
     }
 
     #[tokio::test]

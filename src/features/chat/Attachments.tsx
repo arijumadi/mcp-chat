@@ -106,7 +106,7 @@ export function AttachmentGrid({
                 className="mx-auto max-h-[70vh] max-w-full rounded-lg object-contain"
               />
             ) : (
-              <p className="text-[13px]" style={{ color: "var(--muted)" }}>
+              <p className="text-[13.5px]" style={{ color: "var(--muted)" }}>
                 Preview is unavailable. The image is stored locally.
               </p>
             )}
@@ -123,13 +123,13 @@ export function AttachmentGrid({
               {preview.text ?? ""}
             </pre>
             {preview.truncated ? (
-              <p className="mt-2 text-[11px]" style={{ color: "var(--faint)" }}>
+              <p className="mt-2 text-[11.5px]" style={{ color: "var(--faint)" }}>
                 Preview is truncated.
               </p>
             ) : null}
           </div>
         ) : preview ? (
-          <p className="text-[13px]" style={{ color: "var(--muted)" }}>
+          <p className="text-[13.5px]" style={{ color: "var(--muted)" }}>
             This is a binary file. Its metadata is included in the message; the
             binary content is not sent to the model.
           </p>
@@ -217,7 +217,7 @@ function AttachmentTile({
         <span className="block truncate text-[11.5px] font-medium">
           {attachment.name}
         </span>
-        <span className="block truncate text-[9.5px]" style={{ color: "var(--faint)" }}>
+        <span className="block truncate text-[10.5px]" style={{ color: "var(--faint)" }}>
           {formatBytes(attachment.size)}
           {attachment.kind === "text" && attachment.truncated ? " · truncated" : ""}
           {attachment.kind === "file" ? " · binary" : ""}
@@ -238,7 +238,7 @@ function AttachmentTile({
         <button
           type="button"
           onClick={onPreview}
-          className="focus-ring shrink-0 rounded p-1 text-[10px] transition hover:bg-[var(--panel)]"
+          className="focus-ring shrink-0 rounded p-1 text-[10.5px] transition hover:bg-[var(--panel)]"
           style={{ color: "var(--accent)" }}
           aria-label={`View ${attachment.name}`}
         >

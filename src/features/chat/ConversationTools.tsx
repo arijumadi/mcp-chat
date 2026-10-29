@@ -138,7 +138,7 @@ export function ConversationTools({
         >
           {loading ? (
             <div
-              className="flex items-center gap-2 py-6 text-[12px]"
+              className="flex items-center gap-2 py-6 text-[12.5px]"
               style={{ color: "var(--muted)" }}
             >
               <Loader2 size={13} className="animate-spin" /> Loading tools…
@@ -146,7 +146,7 @@ export function ConversationTools({
           ) : (
             <>
               <div className="mb-2 flex items-center justify-between">
-                <div className="text-[12px] font-medium">MCP servers for this chat</div>
+                <div className="text-[12.5px] font-medium">MCP servers for this chat</div>
                 <button
                   onClick={() => {
                     setAllServers(true);
@@ -175,7 +175,7 @@ export function ConversationTools({
                     return (
                       <label
                         key={server.id}
-                        className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] transition hover:bg-[var(--panel-2)]"
+                        className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] transition hover:bg-[var(--panel-2)]"
                       >
                         <input
                           type="checkbox"
@@ -183,7 +183,7 @@ export function ConversationTools({
                           onChange={() => toggleServer(server.id)}
                         />
                         <span className="min-w-0 flex-1 truncate">{server.name}</span>
-                        <span className="text-[10px]" style={{ color: "var(--faint)" }}>
+                        <span className="text-[10.5px]" style={{ color: "var(--faint)" }}>
                           {server.slug} · {server.policy}
                         </span>
                       </label>

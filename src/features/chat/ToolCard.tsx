@@ -161,7 +161,7 @@ export function ToolCard({ part }: { part: Part }) {
           style={{ borderColor: "var(--border)" }}
         >
           <summary
-            className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-1.5 text-[11px] select-none"
+            className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-1.5 text-[11.5px] select-none"
             style={{ color: "var(--muted)" }}
           >
             <ChevronDown
@@ -172,7 +172,7 @@ export function ToolCard({ part }: { part: Part }) {
           </summary>
           <div className="px-3 pb-3">
             <pre
-              className="max-h-56 overflow-auto rounded-lg border p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap"
+              className="max-h-56 overflow-auto rounded-lg border p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
               style={{ borderColor: "var(--border)", background: "var(--code)" }}
             >
               {formatJson(displayArgs)}
@@ -200,7 +200,7 @@ export function ToolCard({ part }: { part: Part }) {
             open={state !== "completed" ? true : undefined}
           >
             <summary
-              className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-1.5 text-[11px] select-none"
+              className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-1.5 text-[11.5px] select-none"
               style={{ color: "var(--muted)" }}
             >
               <ChevronDown size={12} className="transition group-open:rotate-180" />
@@ -230,7 +230,7 @@ export function ToolCard({ part }: { part: Part }) {
             </summary>
             <div className="px-3 pb-3">
               <pre
-                className="max-h-72 overflow-auto rounded-lg border p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap"
+                className="max-h-72 overflow-auto rounded-lg border p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
                 style={{ borderColor: "var(--border)", background: "var(--code)" }}
               >
                 {payload.resultPreview}

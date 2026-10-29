@@ -69,6 +69,36 @@ describe("Composer", () => {
     expect(continueTurn).toHaveBeenCalledOnce();
   });
 
+  it("stages an image pasted into the composer", () => {
+    const stageImageFile = vi.fn().mockResolvedValue(undefined);
+    useApp.setState({
+      providers: [provider],
+      status: "idle",
+      step: null,
+      limitReached: false,
+      continueTurn: vi.fn(),
+      draft: "",
+      pendingAttachments: [],
+      stageImageFile,
+    });
+    render(<Composer conversation={conversation} />);
+    const file = new File([new Uint8Array([1, 2, 3])], "clipboard.png", {
+      type: "image/png",
+    });
+    fireEvent.paste(screen.getByRole("textbox", { name: "Message" }), {
+      clipboardData: {
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => file,
+          },
+        ],
+      },
+    });
+    expect(stageImageFile).toHaveBeenCalledWith(file);
+  });
+
   it("steers an active turn instead of blocking the send", () => {
     const steerMessage = vi.fn().mockResolvedValue(undefined);
     useApp.setState({

@@ -199,7 +199,7 @@ export function AssistantTurn({
                   }}
                 >
                   <div
-                    className="mb-1 text-[10px] tracking-[0.06em] uppercase"
+                    className="mb-1 text-[10.5px] tracking-[0.06em] uppercase"
                     style={{ color: "var(--faint)" }}
                   >
                     Thought {thought}

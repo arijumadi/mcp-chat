@@ -69,6 +69,7 @@ export interface AppStore {
   sendMessage: (text: string) => Promise<void>;
   steerMessage: (text: string) => Promise<void>;
   stageAttachments: (paths: string[]) => Promise<void>;
+  stageImageFile: (file: File) => Promise<void>;
   removeAttachment: (id: string) => Promise<void>;
   setDraft: (text: string) => void;
   stop: () => Promise<void>;
@@ -436,6 +437,39 @@ export const useApp = create<AppStore>()((set, get) => ({
       });
       set((state) => ({
         pendingAttachments: [...state.pendingAttachments, ...staged].slice(0, 6),
+      }));
+    } catch (error) {
+      get().toast(String(error), "error");
+    }
+  },
+
+  async stageImageFile(file) {
+    const existing = get().pendingAttachments;
+    if (existing.length >= 6) {
+      get().toast("You can attach up to 6 files per message.", "error");
+      return;
+    }
+    if (file.type && !file.type.startsWith("image/")) {
+      get().toast("Only image data can be pasted as an attachment.", "error");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      get().toast("Clipboard image is larger than 5 MB.", "error");
+      return;
+    }
+    try {
+      const data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ""));
+        reader.onerror = () => reject(reader.error ?? new Error("Could not read clipboard image."));
+        reader.readAsDataURL(file);
+      });
+      const staged = await call<Attachment>("stage_attachment_bytes", {
+        data,
+        name: file.name || "clipboard.png",
+      });
+      set((state) => ({
+        pendingAttachments: [...state.pendingAttachments, staged].slice(0, 6),
       }));
     } catch (error) {
       get().toast(String(error), "error");

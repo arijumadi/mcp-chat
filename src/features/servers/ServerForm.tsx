@@ -289,7 +289,7 @@ export function ServerForm({
 
         {error ? (
           <div
-            className="rounded-lg border px-3 py-2 text-[12px]"
+            className="rounded-lg border px-3 py-2 text-[12.5px]"
             style={{ borderColor: "var(--danger)", color: "var(--danger)", background: "var(--danger-soft)" }}
           >
             {error}
@@ -303,7 +303,7 @@ export function ServerForm({
           >
             <div className="flex flex-wrap items-center gap-1.5">
               <span
-                className="rounded border px-1.5 py-0.5 text-[10px]"
+                className="rounded border px-1.5 py-0.5 text-[10.5px]"
                 style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
               >
                 {report.protocolVersion}
@@ -318,21 +318,21 @@ export function ServerForm({
                 capabilities.map((capability) => (
                   <span
                     key={capability}
-                    className="rounded border px-1.5 py-0.5 text-[10px]"
+                    className="rounded border px-1.5 py-0.5 text-[10.5px]"
                     style={{ borderColor: "var(--border)", color: "var(--muted)" }}
                   >
                     {capability}
                   </span>
                 ))
               ) : (
-                <span className="text-[10px]" style={{ color: "var(--faint)" }}>
+                <span className="text-[10.5px]" style={{ color: "var(--faint)" }}>
                   no capabilities advertised
                 </span>
               )}
             </div>
             <div className="mt-2 grid gap-1">
               {report.tools.map((tool) => (
-                <div key={tool.name} className="text-[11px]" style={{ color: "var(--muted)" }}>
+                <div key={tool.name} className="text-[11.5px]" style={{ color: "var(--muted)" }}>
                   <span className="font-mono" style={{ color: "var(--fg)" }}>
                     {tool.name}
                   </span>{" "}

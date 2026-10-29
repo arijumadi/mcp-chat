@@ -60,7 +60,7 @@ export function Sidebar() {
       style={{ background: "var(--panel)", borderColor: "var(--border)" }}
     >
       <div className="flex items-center gap-2 px-3 pt-3.5 pb-2">
-        <Logo size={28} />
+        <Logo size={30} />
         <div className="min-w-0 flex-1">
           <div className="text-[13.5px] font-semibold tracking-[-0.01em]">Jarvis</div>
           <div className="text-[10.5px]" style={{ color: "var(--faint)" }}>
@@ -110,11 +110,11 @@ export function Sidebar() {
         {query.trim() ? (
           <div className="pt-1">
             {searching ? (
-              <div className="px-2 py-3 text-[12px]" style={{ color: "var(--faint)" }}>
+              <div className="px-2 py-3 text-[12.5px]" style={{ color: "var(--faint)" }}>
                 Searching…
               </div>
             ) : searchHits.length === 0 ? (
-              <div className="px-2 py-3 text-[12px]" style={{ color: "var(--faint)" }}>
+              <div className="px-2 py-3 text-[12.5px]" style={{ color: "var(--faint)" }}>
                 No matches.
               </div>
             ) : (
@@ -142,7 +142,7 @@ export function Sidebar() {
             )}
           </div>
         ) : conversations.length === 0 ? (
-          <div className="px-3 py-6 text-[12px]" style={{ color: "var(--faint)" }}>
+          <div className="px-3 py-6 text-[12.5px]" style={{ color: "var(--faint)" }}>
             No threads yet.
           </div>
         ) : (
@@ -270,7 +270,7 @@ export function Sidebar() {
         >
           <Plug size={14} />
           <span className="flex-1">MCP servers</span>
-          <span className="flex items-center gap-0.5 text-[10px]" style={{ color: "var(--faint)" }}>
+          <span className="flex items-center gap-0.5 text-[10.5px]" style={{ color: "var(--faint)" }}>
             <Lock size={10} /> local
           </span>
         </button>
@@ -313,7 +313,7 @@ export function Sidebar() {
           </>
         }
       >
-        <p className="text-[13px]" style={{ color: "var(--muted)" }}>
+        <p className="text-[13.5px]" style={{ color: "var(--muted)" }}>
           This cannot be undone.
         </p>
       </Modal>

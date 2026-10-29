@@ -16,6 +16,17 @@ pub async fn stage_attachments(
 }
 
 #[tauri::command]
+pub async fn stage_attachment_bytes(
+    state: State<'_, AppState>,
+    data: String,
+    name: Option<String>,
+) -> CmdResult<Attachment> {
+    attachment_files::stage_image(&state.engine.attachments_dir, &data, name.as_deref())
+        .await
+        .map_err(cmd_err)
+}
+
+#[tauri::command]
 pub async fn discard_staged_attachments(
     state: State<'_, AppState>,
     ids: Vec<String>,

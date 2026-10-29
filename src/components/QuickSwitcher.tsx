@@ -98,7 +98,7 @@ export function QuickSwitcher({
             placeholder="Search conversations…"
             className={cn(inputClass, "h-12 flex-1 border-0 px-0 shadow-none outline-none")}
           />
-          <span className="rounded border px-1.5 py-0.5 text-[10px]" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
+          <span className="rounded border px-1.5 py-0.5 text-[10.5px]" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
             Esc
           </span>
         </div>
@@ -119,9 +119,9 @@ export function QuickSwitcher({
                 )}
               >
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px]">{result.title}</div>
+                  <div className="truncate text-[13.5px]">{result.title}</div>
                   {result.subtitle ? (
-                    <div className="truncate text-[11px]" style={{ color: "var(--muted)" }}>
+                    <div className="truncate text-[11.5px]" style={{ color: "var(--muted)" }}>
                       {result.subtitle}
                     </div>
                   ) : null}

@@ -10,7 +10,7 @@ export function Toasts() {
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className="animate-in pointer-events-auto flex items-start gap-2.5 rounded-xl border px-3.5 py-3 text-[13px] shadow-xl"
+          className="animate-in pointer-events-auto flex items-start gap-2.5 rounded-xl border px-3.5 py-3 text-[13.5px] shadow-xl"
           style={{
             background: "var(--panel)",
             borderColor: toast.kind === "error" ? "var(--danger)" : "var(--border)",

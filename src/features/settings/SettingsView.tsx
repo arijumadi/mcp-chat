@@ -239,21 +239,21 @@ export function SettingsView() {
                         <div className="flex items-center gap-2">
                           <span className="truncate text-[13.5px] font-medium">{provider.name}</span>
                           <span
-                            className="rounded border px-1.5 py-0.5 text-[10px]"
+                            className="rounded border px-1.5 py-0.5 text-[10.5px]"
                             style={{ borderColor: "var(--border)", color: "var(--muted)" }}
                           >
                             {provider.kind === "anthropic" ? "Anthropic" : "OpenAI-compatible"}
                           </span>
                           {provider.hasKey ? (
                             <span
-                              className="flex items-center gap-1 text-[10px]"
+                              className="flex items-center gap-1 text-[10.5px]"
                               style={{ color: "var(--accent)" }}
                               title={`Keychain: ${provider.keyHint ?? "saved"}`}
                             >
                               <KeyRound size={10} /> key
                             </span>
                           ) : (
-                            <span className="text-[10px]" style={{ color: "var(--faint)" }}>
+                            <span className="text-[10.5px]" style={{ color: "var(--faint)" }}>
                               no key
                             </span>
                           )}
@@ -419,7 +419,7 @@ export function SettingsView() {
           >
             {conversations.length === 0 ? (
               <div
-                className="rounded-lg border px-3 py-2 text-[12px]"
+                className="rounded-lg border px-3 py-2 text-[12.5px]"
                 style={{ borderColor: "var(--border)", color: "var(--muted)" }}
               >
                 No conversations to export.
@@ -479,7 +479,7 @@ export function SettingsView() {
               style={{ borderColor: "var(--border)", background: "var(--panel)" }}
             >
               <Database size={14} style={{ color: "var(--muted)" }} />
-              <code className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: "var(--muted)" }}>
+              <code className="min-w-0 flex-1 truncate font-mono text-[11.5px]" style={{ color: "var(--muted)" }}>
                 {appInfo?.dataDir ?? "loading…"}
               </code>
               <Button
@@ -510,7 +510,7 @@ export function SettingsView() {
           </Section>
 
           <Section id="about" title="About" description="">
-            <div className="flex items-start gap-2 text-[12px]" style={{ color: "var(--muted)" }}>
+            <div className="flex items-start gap-2 text-[12.5px]" style={{ color: "var(--muted)" }}>
               <ShieldCheck size={15} className="mt-0.5 shrink-0" style={{ color: "var(--accent)" }} />
               <div>
                 Jarvis {appInfo?.version ?? "0.1.0"} · no telemetry, no accounts, no cloud sync.
@@ -546,7 +546,7 @@ export function SettingsView() {
           </>
         }
       >
-        <p className="text-[13px]" style={{ color: "var(--muted)" }}>
+        <p className="text-[13.5px]" style={{ color: "var(--muted)" }}>
           The API key will be removed from the OS keychain. Conversations that used this provider
           will need a new model selected.
         </p>
@@ -599,7 +599,7 @@ export function SettingsView() {
           </>
         }
       >
-        <p className="mb-3 text-[13px]" style={{ color: "var(--muted)" }}>
+        <p className="mb-3 text-[13.5px]" style={{ color: "var(--muted)" }}>
           Conversations, messages, tool output, providers, MCP server configs, permission rules
           and keychain entries will be removed.
         </p>
@@ -643,7 +643,7 @@ function SettingsNav() {
               .getElementById(id)
               ?.scrollIntoView({ behavior: "smooth", block: "start" })
           }
-          className="focus-ring shrink-0 rounded-md px-2 py-1 text-[11px] transition hover:bg-[var(--panel-2)]"
+          className="focus-ring shrink-0 rounded-md px-2 py-1 text-[11.5px] transition hover:bg-[var(--panel-2)]"
           style={{ color: "var(--muted)" }}
         >
           {label}

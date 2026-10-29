@@ -43,7 +43,7 @@ export function SetupChecklist({
       <div className="text-[12.5px] font-medium">Finish setup</div>
       <div className="mt-2.5 grid gap-1.5">
         {items.map((item) => (
-          <div key={item.label} className="flex items-center gap-2 text-[12px]">
+          <div key={item.label} className="flex items-center gap-2 text-[12.5px]">
             {item.done ? (
               <CheckCircle2 size={14} style={{ color: "var(--accent)" }} />
             ) : (

@@ -93,8 +93,8 @@ export function WorkspacePicker({
         type="button"
         onClick={() => setOpenPicker((value) => !value)}
         disabled={disabled}
-        className="focus-ring flex max-w-[170px] items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
-        style={{ borderColor: "var(--border)", color: "var(--muted)" }}
+        className="focus-ring flex max-w-[170px] items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
+        style={{ color: "var(--muted)" }}
         title={current || "Choose workspace"}
       >
         <Folder size={12} className="shrink-0" />
@@ -109,7 +109,7 @@ export function WorkspacePicker({
           className="animate-in absolute bottom-full left-0 z-30 mb-1.5 w-[360px] rounded-xl border p-3 shadow-xl"
           style={{ background: "var(--panel)", borderColor: "var(--border)" }}
         >
-          <div className="text-[12px] font-medium">Workspace for this chat</div>
+          <div className="text-[12.5px] font-medium">Workspace for this chat</div>
           <div
             className="mt-1 truncate font-mono text-[10.5px]"
             style={{ color: "var(--faint)" }}
@@ -120,7 +120,7 @@ export function WorkspacePicker({
           <div className="mt-2.5 grid gap-1">
             {current ? (
               <div
-                className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12px]"
+                className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px]"
                 style={{ background: "var(--panel-2)" }}
               >
                 <Check size={12} style={{ color: "var(--accent)" }} />
@@ -132,7 +132,7 @@ export function WorkspacePicker({
                 key={path}
                 type="button"
                 onClick={() => void apply(path)}
-                className="focus-ring flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] transition hover:bg-[var(--panel-2)]"
+                className="focus-ring flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition hover:bg-[var(--panel-2)]"
               >
                 <Folder size={12} style={{ color: "var(--faint)" }} />
                 <span className="min-w-0 flex-1 truncate">{path}</span>

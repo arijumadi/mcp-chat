@@ -159,7 +159,7 @@ function EmptyChat({
             <PanelLeft size={16} />
           </button>
         ) : null}
-        <div className="ml-1 text-[12px]" style={{ color: "var(--faint)" }}>
+        <div className="ml-1 text-[12.5px]" style={{ color: "var(--faint)" }}>
           No conversation open
         </div>
         <div className="ml-auto flex items-center gap-1.5">

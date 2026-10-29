@@ -12,7 +12,7 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - The model can call discovered MCP tools inside a normal turn. Tool calls and reasoning are grouped into a collapsible activity summary with the final answer below; detail cards stream live (`queued → running → ok / error`) and run in parallel (max 4). Any text the model emits before a tool call stays in the stored message for context but is not rendered as an interim note — detail cards show only thoughts and tools.
 - Per-chat MCP server selection with **lazy catalog + call** delivery. The MCP popover only selects which servers are active; there is no direct-schema mode. A compact server/tool/argument catalog goes in the system prompt, and the model calls `mcp_call_tool` directly (`mcp_get_tool_schema` only when it needs full JSON Schema; `mcp_search_tools` only when the catalog is truncated). `mcp_execute` runs up to 8 independent MCP calls in one step (4 in flight), so a multi-tool answer does not need many model round trips. Approval and policy checks still apply to each real target.
 - The model picker sits in the composer footer; the trigger shows only the model name after the final `/`, provider choices show only the provider name, and long model lists are searchable. Export conversation lives in Settings → Export conversation.
-- The composer accepts up to 6 attachments through the native file picker or by dragging files anywhere onto the chat window. Images (PNG/JPEG/GIF/WebP, max 5 MB each) are sent to vision models as native OpenAI/Anthropic image blocks. Text, code, and text-based PDF files are inlined into the user turn (up to 100k characters per file, 200k total); scanned PDFs and other binary files are copied into app data, shown in the transcript, and represented to the model by metadata only. Total attachments are capped at 25 MB. Files are copied and previewed from Rust-owned storage, cleaned up with their conversation, and restored to the composer when a message is reverted.
+- The composer accepts up to 6 attachments through the native file picker, by dragging files anywhere onto the chat window, or by pasting an image from the clipboard. Images (PNG/JPEG/GIF/WebP, max 5 MB each) are sent to vision models as native OpenAI/Anthropic image blocks. Text, code, and text-based PDF files are inlined into the user turn (up to 100k characters per file, 200k total); scanned PDFs and other binary files are copied into app data, shown in the transcript, and represented to the model by metadata only. Total attachments are capped at 25 MB. Files are copied and previewed from Rust-owned storage, cleaned up with their conversation, and restored to the composer when a message is reverted.
 - Live prompt/completion usage in the composer and a step counter, with automatic token-based compaction using ~15k recent-token retention and a 15%/16k buffer. There is **no default step cap**; an optional per-conversation `max_steps` still supports the old **Continue** flow when explicitly configured.
 - The desktop window remembers its size, position and maximized state between launches.
 - A per-turn loop guard stops three identical tool calls with identical results, injects a strategy-change prompt, and forces one text-only step. While a turn is active, **Steer** stops the current turn and starts a fresh one with the new user message.
@@ -108,12 +108,12 @@ Everything below **was run in this repository** on Linux without a GUI/WebKit de
 ```bash
 pnpm lint          # ESLint
 pnpm typecheck     # TypeScript
-pnpm test          # Vitest: 29 tests
+pnpm test          # Vitest: 30 tests
 pnpm build         # Vite production build
 pnpm version:check # package.json, Cargo workspace and Tauri version agree
 pnpm package       # native installer for the current OS
 pnpm fmt:check     # cargo fmt --check
-pnpm core:test     # 68 unit + 32 agent + 6 MCP integration + 1 auth + 1 provider test = 108 Rust tests
+pnpm core:test     # 69 unit + 32 agent + 6 MCP integration + 1 auth + 1 provider test = 109 Rust tests
 pnpm core:clippy   # cargo clippy -p mcp-chat-core --all-targets -- -D warnings
 pnpm mock:clippy   # same for the mock server
 pnpm test:e2e      # Playwright: 5 smoke tests against vite preview with a stubbed IPC bridge

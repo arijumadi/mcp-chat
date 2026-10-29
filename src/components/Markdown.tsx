@@ -86,7 +86,7 @@ const components: Components = {
     );
   },
   img({ alt }) {
-    return <span className="text-[12px] italic">[{alt || "image"}]</span>;
+    return <span className="text-[12.5px] italic">[{alt || "image"}]</span>;
   },
 };
 

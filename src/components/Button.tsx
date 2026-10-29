@@ -28,7 +28,7 @@ export function Button({
       disabled={disabled || loading}
       className={cn(
         "focus-ring inline-flex items-center justify-center gap-1.5 rounded-lg border font-medium transition select-none disabled:cursor-not-allowed disabled:opacity-45",
-        size === "sm" ? "h-8 px-2.5 text-[12.5px]" : "h-9 px-3.5 text-[13px]",
+        size === "sm" ? "h-8 px-2.5 text-[12.5px]" : "h-9 px-3.5 text-[13.5px]",
         variant === "primary" &&
           "border-transparent bg-[var(--accent)] text-[var(--accent-fg)] hover:brightness-95",
         variant === "secondary" &&

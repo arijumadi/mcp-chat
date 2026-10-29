@@ -104,7 +104,7 @@ export function InputRequestModal() {
       ) : null}
 
       {entries.length === 0 ? (
-        <p className="text-[13px]" style={{ color: "var(--muted)" }}>
+        <p className="text-[13.5px]" style={{ color: "var(--muted)" }}>
           The server requested another round trip without a form. You can retry immediately.
         </p>
       ) : null}
@@ -112,7 +112,7 @@ export function InputRequestModal() {
       {forms.map(([key, item]) => (
         <div key={key} className="mb-4">
           {item.params.message ? (
-            <p className="mb-2 text-[13px]">{item.params.message}</p>
+            <p className="mb-2 text-[13.5px]">{item.params.message}</p>
           ) : null}
           <div className="grid gap-3">
             {Object.entries(item.params.requestedSchema?.properties ?? {}).map(
@@ -201,7 +201,7 @@ export function InputRequestModal() {
 
       {urls.map(([key, item]) => (
         <div key={key} className="mb-4">
-          <p className="mb-2 text-[13px]">{item.params.message}</p>
+          <p className="mb-2 text-[13.5px]">{item.params.message}</p>
           {item.params.url ? (
             <Button
               size="sm"
@@ -230,7 +230,7 @@ export function InputRequestModal() {
       ) : null}
 
       {error ? (
-        <p className="mt-3 text-[12px]" style={{ color: "var(--danger)" }}>
+        <p className="mt-3 text-[12.5px]" style={{ color: "var(--danger)" }}>
           {error}
         </p>
       ) : null}
@@ -320,7 +320,7 @@ function QuestionRequest({
               style={{ borderColor: "var(--border)", background: "var(--panel)" }}
             >
               <div
-                className="text-[10px] tracking-[0.06em] uppercase"
+                className="text-[10.5px] tracking-[0.06em] uppercase"
                 style={{ color: "var(--faint)" }}
               >
                 {question.header}
@@ -377,7 +377,7 @@ function QuestionRequest({
         })}
       </div>
       {error ? (
-        <p className="mt-3 text-[12px]" style={{ color: "var(--danger)" }}>
+        <p className="mt-3 text-[12.5px]" style={{ color: "var(--danger)" }}>
           {error}
         </p>
       ) : null}
