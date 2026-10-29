@@ -91,6 +91,7 @@ describe("transcript event reducer", () => {
       server: "Mock",
       tool: "echo",
       args: {},
+      allowAlways: true,
     });
     expect(get().approvals).toHaveLength(1);
     expect(get().status).toBe("waiting_approval");

@@ -51,6 +51,7 @@ pub enum CoreEvent {
         server: String,
         tool: String,
         args: Value,
+        allow_always: bool,
     },
     Usage {
         conversation_id: String,
@@ -115,10 +116,12 @@ mod tests {
             server: "Mock".into(),
             tool: "echo".into(),
             args: json!({"text": "hi"}),
+            allow_always: true,
         };
         let value = serde_json::to_value(approval).unwrap();
         assert_eq!(value["callId"], "call1");
         assert_eq!(value["conversationId"], "c1");
+        assert_eq!(value["allowAlways"], true);
 
         let usage = CoreEvent::Usage {
             conversation_id: "c1".into(),

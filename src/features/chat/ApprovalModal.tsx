@@ -55,14 +55,16 @@ export function ApprovalModal() {
             <Button size="sm" variant="ghost" onClick={() => setRejecting(true)}>
               Reject
             </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => void respond(approval.callId, "always")}
-              title="Adds a saved rule for this tool"
-            >
-              Always allow
-            </Button>
+            {approval.allowAlways ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void respond(approval.callId, "always")}
+                title="Adds a saved rule for this tool"
+              >
+                Always allow
+              </Button>
+            ) : null}
             <Button
               size="sm"
               variant="primary"

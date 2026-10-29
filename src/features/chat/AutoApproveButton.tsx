@@ -63,8 +63,9 @@ export function AutoApproveButton() {
         <p className="text-[13.5px] leading-relaxed" style={{ color: "var(--muted)" }}>
           Built-in tools in this chat will run without asking for approval,
           except dangerous shell commands, patch deletions, and
-          outside-workspace writes. MCP server policies still apply. This
-          setting lasts until Jarvis is closed.
+          outside-workspace writes. Read-only tools may access explicit paths
+          outside the workspace. MCP server policies still apply. This setting
+          lasts until Jarvis is closed.
         </p>
       </Modal>
     </>

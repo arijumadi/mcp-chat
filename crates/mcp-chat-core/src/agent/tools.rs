@@ -62,7 +62,7 @@ pub struct ToolExecRequest {
     pub tool: Option<ToolInfo>,
     pub default_effect: Effect,
     pub auto_approve: bool,
-    /// Set only after the user explicitly approves an outside-workspace write.
+    /// Set only after the user explicitly approves outside-workspace access.
     pub allow_outside_workspace: bool,
     pub disabled: bool,
     pub cancel: CancellationToken,
@@ -275,8 +275,9 @@ pub(crate) fn resolve_in_workspace(workspace: &Path, raw: &str) -> Result<PathBu
     Ok(normalized)
 }
 
-/// Read-only tools may leave the workspace in auto mode. Writes and shell
-/// commands still use the workspace-confined resolver.
+/// Read-only tools may leave the workspace in auto mode or after an explicit
+/// per-call approval. Writes and shell commands still use the workspace-confined
+/// resolver.
 pub(crate) fn resolve_read_path(
     workspace: &Path,
     raw: &str,
@@ -331,6 +332,15 @@ pub(crate) fn path_is_outside(workspace: &Path, raw: &str) -> bool {
         ancestor = path.parent();
     }
     false
+}
+
+fn outside_read_target<'a>(name: &str, args: &'a Value) -> Option<&'a str> {
+    match name {
+        "read" => args.get("filePath"),
+        "grep" | "glob" => args.get("path"),
+        _ => None,
+    }
+    .and_then(Value::as_str)
 }
 
 /// Writes stay confined unless the user approved a specific outside target.
@@ -660,7 +670,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "filePath": {"type": "string", "description": "File path relative to the workspace."},
+                    "filePath": {"type": "string", "description": "Workspace-relative path, or an explicit outside path."},
                     "oldString": {"type": "string", "description": "Exact text to replace. It must occur exactly once unless replaceAll is true."},
                     "newString": {"type": "string", "description": "Replacement text. Use an empty string to delete."},
                     "replaceAll": {"type": "boolean", "description": "Replace every occurrence. Default false."}
@@ -687,7 +697,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "filePath": {"type": "string", "description": "File path relative to the workspace."},
+                    "filePath": {"type": "string", "description": "Workspace-relative path, or an explicit outside path."},
                     "content": {"type": "string", "description": "Complete file content."}
                 },
                 "required": ["filePath", "content"],
@@ -700,7 +710,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "filePath": {"type": "string", "description": "File path relative to the workspace."},
+                    "filePath": {"type": "string", "description": "Workspace-relative path, or an explicit outside path."},
                     "offset": {"type": "integer", "minimum": 1, "description": "First line to return (1-based). Default 1."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 5000, "description": "Maximum lines to return. Default 2000."}
                 },
@@ -715,7 +725,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string", "description": "Rust/PCRE-style regular expression."},
-                    "path": {"type": "string", "description": "Optional file or directory relative to the workspace. Default workspace root."},
+                    "path": {"type": "string", "description": "Optional file or directory, workspace-relative or explicit outside path. Default workspace root."},
                     "include": {"type": "string", "description": "Optional glob limiting files, e.g. **/*.rs."},
                     "caseSensitive": {"type": "boolean", "description": "Default true."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum matching lines. Default 200."}
@@ -731,7 +741,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string", "description": "Glob such as **/*.rs or src/**/*.ts."},
-                    "path": {"type": "string", "description": "Optional directory relative to the workspace."},
+                    "path": {"type": "string", "description": "Optional directory, workspace-relative or explicit outside path."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "description": "Maximum paths. Default 500."}
                 },
                 "required": ["pattern"],
@@ -1138,10 +1148,24 @@ impl ToolExecutor {
         } else {
             false
         };
+        let outside_read = if builtin {
+            if let Some(raw) = outside_read_target(&req.remote_name, &req.args) {
+                match workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await {
+                    Ok(workspace) => path_is_outside(&workspace, raw),
+                    Err(_) => false,
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        let outside_access = outside_write || (outside_read && !req.auto_approve);
         let evaluated = permissions::evaluate(&action, &resource, default, &rules);
-        // Outside writes are always a per-call decision. Auto mode must not
-        // turn them into implicit filesystem writes.
-        let effect = if outside_write {
+        // Outside writes always need a per-call decision. Outside reads need
+        // one too unless this chat is already in auto mode. Auto mode must not
+        // turn writes into implicit filesystem writes.
+        let effect = if outside_access {
             if evaluated == Effect::Deny {
                 Effect::Deny
             } else {
@@ -1164,7 +1188,10 @@ impl ToolExecutor {
                     .await;
             }
             Effect::Ask => {
-                if let Err(message) = self.ask_permission(&req, &action, &resource).await {
+                if let Err(message) = self
+                    .ask_permission(&req, &action, &resource, !outside_access)
+                    .await
+                {
                     let state = if message == "Tool execution interrupted" {
                         "aborted"
                     } else {
@@ -1172,7 +1199,7 @@ impl ToolExecutor {
                     };
                     return self.fail(req, state, message, started, false).await;
                 }
-                if outside_write {
+                if outside_access {
                     req.allow_outside_workspace = true;
                 }
             }
@@ -1304,6 +1331,7 @@ impl ToolExecutor {
         req: &ToolExecRequest,
         action: &str,
         resource: &str,
+        allow_always: bool,
     ) -> std::result::Result<(), String> {
         self.ask_permission_explicit(
             &req.conversation_id,
@@ -1316,6 +1344,7 @@ impl ToolExecutor {
             &req.cancel,
             action,
             resource,
+            allow_always,
         )
         .await
     }
@@ -1333,6 +1362,7 @@ impl ToolExecutor {
         cancel: &CancellationToken,
         action: &str,
         resource: &str,
+        allow_always: bool,
     ) -> std::result::Result<(), String> {
         self.patch_part(part_id, json!({"approval": "pending"}))
             .await;
@@ -1342,6 +1372,7 @@ impl ToolExecutor {
             server: server_name.to_owned(),
             tool: tool_name.to_owned(),
             args: args.clone(),
+            allow_always,
         });
         let receiver = self.approvals.register(call_id);
         let answer = tokio::select! {
@@ -1490,6 +1521,7 @@ impl ToolExecutor {
                         &req.cancel,
                         &action,
                         &resource,
+                        true,
                     )
                     .await
                 {
@@ -1710,6 +1742,7 @@ impl ToolExecutor {
                         &req.cancel,
                         &action,
                         &resource,
+                        true,
                     )
                     .await
                 {
@@ -2123,7 +2156,11 @@ impl ToolExecutor {
             .clamp(1, 5_000) as usize;
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
-        let path = resolve_read_path(&workspace, raw, req.auto_approve)?;
+        let path = resolve_read_path(
+            &workspace,
+            raw,
+            req.auto_approve || req.allow_outside_workspace,
+        )?;
         let content = read_text_file(&path).await?;
         let content = strip_utf8_bom(&content);
         let lines = content.lines().collect::<Vec<_>>();
@@ -2265,7 +2302,7 @@ impl ToolExecutor {
         let search = resolve_read_path(
             &workspace,
             req.args.get("path").and_then(Value::as_str).unwrap_or("."),
-            req.auto_approve,
+            req.auto_approve || req.allow_outside_workspace,
         )?;
         let include = req
             .args
@@ -2368,7 +2405,7 @@ impl ToolExecutor {
         let search = resolve_read_path(
             &workspace,
             req.args.get("path").and_then(Value::as_str).unwrap_or("."),
-            req.auto_approve,
+            req.auto_approve || req.allow_outside_workspace,
         )?;
         let matcher = glob_matcher(&pattern)?;
         let root = workspace.clone();
@@ -3034,6 +3071,30 @@ mod tests {
     }
 
     #[test]
+    fn outside_read_targets_are_recognized() {
+        assert_eq!(
+            outside_read_target("read", &json!({"filePath": "C:\\outside.txt"})),
+            Some("C:\\outside.txt")
+        );
+        assert_eq!(
+            outside_read_target("grep", &json!({"pattern": "x", "path": "..\\outside"})),
+            Some("..\\outside")
+        );
+        assert_eq!(
+            outside_read_target(
+                "glob",
+                &json!({"pattern": "**/*.txt", "path": "..\\outside"})
+            ),
+            Some("..\\outside")
+        );
+        assert_eq!(outside_read_target("read", &json!({})), None);
+        assert_eq!(
+            outside_read_target("write", &json!({"filePath": "x"})),
+            None
+        );
+    }
+
+    #[test]
     fn write_paths_are_detected_outside_the_workspace() {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().canonicalize().unwrap();
@@ -3437,7 +3498,13 @@ mod tests {
                 .await
                 .expect("approval event timed out")
                 .expect("event channel");
-            if let CoreEvent::Approval { call_id, .. } = event {
+            if let CoreEvent::Approval {
+                call_id,
+                allow_always,
+                ..
+            } = event
+            {
+                assert!(!allow_always);
                 break call_id;
             }
         };
@@ -3466,21 +3533,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_only_tools_can_leave_workspace_only_in_auto_mode() {
+    async fn outside_reads_require_explicit_approval_when_auto_is_off() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("outside.txt");
+        let outside_path = outside_file.to_string_lossy().to_string();
+        std::fs::write(&outside_file, "outside content").unwrap();
+        let executor = Arc::new(test_executor(&workspace).await);
+        let approvals = executor.approvals.clone();
+        let mut events = executor.events.subscribe();
+
+        let req = request("read", json!({"filePath": outside_path}));
+        let handle = tokio::spawn(async move { executor.execute(req).await });
+
+        let (call_id, args) = loop {
+            let event = tokio::time::timeout(Duration::from_secs(2), events.recv())
+                .await
+                .expect("approval event timed out")
+                .expect("event channel");
+            if let CoreEvent::Approval {
+                call_id,
+                args,
+                allow_always,
+                ..
+            } = event
+            {
+                assert!(!allow_always);
+                break (call_id, args);
+            }
+        };
+        assert_eq!(args["filePath"].as_str(), Some(outside_path.as_str()));
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(approvals.respond(
+            &call_id,
+            crate::agent::approvals::ApprovalAnswer {
+                decision: ApprovalDecision::Once,
+                feedback: None,
+            }
+        ));
+        let result = handle.await.unwrap();
+        assert!(result.ok, "{}", result.content);
+        assert!(result.content.contains("outside content"));
+    }
+
+    #[tokio::test]
+    async fn read_only_tools_can_leave_workspace_in_auto_mode() {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().canonicalize().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let outside_file = outside.path().join("outside.txt");
         std::fs::write(&outside_file, "outside content").unwrap();
         let executor = test_executor(&workspace).await;
-
-        let denied = executor
-            .run_read(&request(
-                "read",
-                json!({"filePath": outside_file.to_string_lossy()}),
-            ))
-            .await;
-        assert!(denied.is_err());
 
         let mut allowed = request("read", json!({"filePath": outside_file.to_string_lossy()}));
         allowed.auto_approve = true;

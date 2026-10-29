@@ -228,6 +228,7 @@ export interface ApprovalEvent {
   server: string;
   tool: string;
   args: Record<string, unknown>;
+  allowAlways: boolean;
 }
 
 export interface QuestionOption {
