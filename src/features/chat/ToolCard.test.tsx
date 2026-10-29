@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
 import { ToolCard } from "./ToolCard";
 import type { Part } from "@/lib/types";
 
@@ -22,6 +22,8 @@ const part: Part = {
   }),
 };
 
+afterEach(cleanup);
+
 describe("ToolCard", () => {
   it("renders server, tool and result state", () => {
     render(<ToolCard part={part} />);
@@ -29,5 +31,22 @@ describe("ToolCard", () => {
     expect(screen.getByText("Mock MCP")).toBeInTheDocument();
     expect(screen.getByText("ok")).toBeInTheDocument();
     expect(screen.getAllByText(/echo: hi/).length).toBeGreaterThan(0);
+  });
+
+  it("shows a non-zero shell exit as a warning, not a failed call", () => {
+    const shellPart: Part = {
+      ...part,
+      id: "p2",
+      payloadJson: JSON.stringify({
+        ...JSON.parse(part.payloadJson),
+        name: "bash",
+        server: "mcp-chat",
+        exitCode: 1,
+        state: "completed",
+      }),
+    };
+    render(<ToolCard part={shellPart} />);
+    expect(screen.getByText("exit 1")).toBeInTheDocument();
+    expect(screen.queryByText("ok")).not.toBeInTheDocument();
   });
 });

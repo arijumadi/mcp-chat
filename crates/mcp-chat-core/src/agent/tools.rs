@@ -647,15 +647,15 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "bash".into(),
-            description: "Run a shell command in the workspace. Each call is a fresh process: cd and variables do not persist. Defaults to cmd.exe on Windows and sh elsewhere. Use shell=powershell/pwsh for nested Windows quoting, or write a script for long commands. Destructive commands require approval.".into(),
+            description: "Run a shell command in the workspace; each call is a fresh process. Defaults to cmd.exe on Windows and sh elsewhere. With shell=powershell/pwsh, send the script body directly; do not wrap it in another powershell -Command. Non-zero exit codes are command output, not automatically tool failures. Destructive commands require approval.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "The command to execute."},
+                    "command": {"type": "string", "description": "The command to execute for the selected shell. Do not wrap it in another invocation of the same shell."},
                     "shell": {
                         "type": "string",
                         "enum": ["auto", "cmd", "powershell", "pwsh", "sh", "bash"],
-                        "description": "Shell to use. Default auto: cmd.exe on Windows, sh elsewhere. PowerShell commands are passed with -EncodedCommand, so nested quotes are safe."
+                        "description": "Shell to use. Default auto: cmd.exe on Windows, sh elsewhere. PowerShell commands are passed with -EncodedCommand; provide the script body only, not another powershell -Command wrapper."
                     },
                     "cwd": {"type": "string", "description": "Optional working directory relative to the workspace. The process starts here; cd inside the command does not persist."},
                     "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 600000, "description": "Timeout in milliseconds. Default 120000."}
@@ -706,7 +706,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "read".into(),
-            description: "Read a UTF-8 workspace file with line numbers. Use offset and limit for large files.".into(),
+            description: "Read a UTF-8 text file with line numbers. Explicit outside paths need approval unless auto mode is on. Use offset and limit for large files.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -720,7 +720,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "grep".into(),
-            description: "Search workspace files with a regular expression; returns path:line:text.".into(),
+            description: "Search text with a regular expression; returns path:line:text. Explicit outside paths need approval unless auto mode is on.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -736,7 +736,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "glob".into(),
-            description: "Find workspace files by glob pattern; build and dependency directories are skipped.".into(),
+            description: "Find files by glob pattern; build and dependency directories are skipped. Explicit outside paths need approval unless auto mode is on.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1245,6 +1245,14 @@ impl ToolExecutor {
                 ok,
             }) => {
                 let full_text = content.clone();
+                let exit_code = if req.remote_name == "bash" {
+                    structured
+                        .as_ref()
+                        .and_then(|value| value.get("exitCode"))
+                        .and_then(Value::as_i64)
+                } else {
+                    None
+                };
                 let mut full_result_ref = None;
                 let mut truncated = false;
                 let is_pager = req.remote_name == "read_tool_output";
@@ -1286,6 +1294,7 @@ impl ToolExecutor {
                         "resultPreview": preview,
                         "fullResultRef": full_result_ref,
                         "truncated": truncated,
+                        "exitCode": exit_code,
                         "error": if ok { Value::Null } else { Value::String(preview.clone()) }
                     }),
                 )
@@ -2079,9 +2088,8 @@ impl ToolExecutor {
             stderr_raw.into_owned()
         };
         let echoed = echo_suspect(shell, command, &stdout);
-        let exit = output
-            .status
-            .code()
+        let exit_code = output.status.code();
+        let exit = exit_code
             .map(|code| code.to_string())
             .unwrap_or_else(|| "terminated".into());
         let mut content = String::new();
@@ -2110,8 +2118,14 @@ impl ToolExecutor {
         content.push_str(&format!("[exit code {exit}]"));
         Ok(Rendered {
             content,
-            structured: None,
-            ok: output.status.success() && !echoed,
+            structured: Some(json!({
+                "exitCode": exit_code,
+                "success": output.status.success(),
+                "echoed": echoed,
+            })),
+            // A non-zero exit code is command output, not a tool execution
+            // failure. Only quoting/echo and termination are tool failures.
+            ok: exit_code.is_some() && !echoed,
         })
     }
 
@@ -3024,7 +3038,7 @@ mod tests {
             .sum();
         println!("builtin tool schema chars: {chars}");
         assert!(
-            chars < 6_000,
+            chars < 6_500,
             "builtin tool schema grew unexpectedly: {chars} characters"
         );
     }
@@ -3389,6 +3403,21 @@ mod tests {
         assert!(result.content.contains("[stdout]"));
         assert!(result.content.contains("[stderr]"));
         assert!(result.content.contains("[exit code 0]"));
+    }
+
+    #[tokio::test]
+    async fn shell_exit_code_is_output_not_a_tool_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let executor = test_executor(&workspace).await;
+        let command = if cfg!(windows) { "exit /b 1" } else { "exit 1" };
+        let result = executor
+            .run_bash(&request("bash", json!({"command": command})))
+            .await
+            .unwrap();
+        assert!(result.ok);
+        assert!(result.content.contains("[exit code 1]"));
+        assert_eq!(result.structured.as_ref().unwrap()["exitCode"], 1);
     }
 
     #[tokio::test]

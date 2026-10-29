@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   Clock3,
@@ -29,6 +30,8 @@ export function ToolCard({ part }: { part: Part }) {
   const raw = parsePayload(part);
   const payload = raw as unknown as ToolCallPayload;
   const state = payload.state ?? "running";
+  const exitCode = typeof payload.exitCode === "number" ? payload.exitCode : null;
+  const nonzeroExit = state === "completed" && exitCode !== null && exitCode !== 0;
   const metaArgs = (payload.args ?? {}) as Record<string, unknown>;
   const isMetaCall = payload.name === "mcp_call_tool";
   const isBatch = payload.name === "mcp_execute";
@@ -106,7 +109,7 @@ export function ToolCard({ part }: { part: Part }) {
         style={{ borderColor: "var(--border)", background: "var(--panel)" }}
       >
         <div className="flex items-center gap-2 px-3 py-2">
-          <StatusIcon state={state} />
+          <StatusIcon state={state} nonzeroExit={nonzeroExit} />
           <span className="min-w-0 truncate font-medium" title={displayName}>
             {displayName}
           </span>
@@ -133,7 +136,11 @@ export function ToolCard({ part }: { part: Part }) {
                 <Clock3 size={10.5} /> {duration}
               </>
             ) : null}
-            <span>{stateLabel[state] ?? state}</span>
+            {nonzeroExit ? (
+              <span style={{ color: "var(--warn)" }}>exit {exitCode}</span>
+            ) : (
+              <span>{stateLabel[state] ?? state}</span>
+            )}
           </span>
         </div>
 
@@ -283,9 +290,13 @@ export function ToolCard({ part }: { part: Part }) {
   );
 }
 
-function StatusIcon({ state }: { state: string }) {
+function StatusIcon({ state, nonzeroExit }: { state: string; nonzeroExit?: boolean }) {
   if (state === "completed") {
-    return <CheckCircle2 size={14} className="shrink-0" style={{ color: "var(--accent)" }} />;
+    return nonzeroExit ? (
+      <AlertTriangle size={14} className="shrink-0" style={{ color: "var(--warn)" }} />
+    ) : (
+      <CheckCircle2 size={14} className="shrink-0" style={{ color: "var(--accent)" }} />
+    );
   }
   if (state === "error" || state === "aborted") {
     return <XCircle size={14} className="shrink-0" style={{ color: "var(--danger)" }} />;

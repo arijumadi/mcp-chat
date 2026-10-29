@@ -191,6 +191,7 @@ export interface ToolCallPayload {
   resultPreview?: string | null;
   fullResultRef?: string | null;
   truncated?: boolean;
+  exitCode?: number | null;
 }
 
 export interface ToolResultPayload {

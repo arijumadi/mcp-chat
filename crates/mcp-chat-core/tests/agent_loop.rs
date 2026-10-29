@@ -243,6 +243,8 @@ async fn streams_text_and_persists_it() {
         .unwrap_or("");
     assert!(system.contains("You are Jarvis"));
     assert!(system.contains("# Harness rules"));
+    assert!(system.contains("shell=powershell"));
+    assert!(system.contains("non-zero exit code"));
     assert!(system.contains("<env>"));
     assert!(system.contains("Default shell:"));
     assert!(!system.contains("Message sent at"));
