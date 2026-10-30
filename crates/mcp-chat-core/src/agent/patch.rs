@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use tokio::fs;
 
-use crate::agent::tools::{path_is_outside, resolve_write_path};
+use crate::agent::tools::{display_relative, path_is_outside, resolve_write_path};
 use crate::{CoreError, Result};
 
 const MAX_PATCH_BYTES: usize = 1_000_000;
@@ -456,10 +456,7 @@ fn count_lines(text: &str) -> usize {
 }
 
 fn relative(workspace: &Path, path: &Path) -> String {
-    path.strip_prefix(workspace)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
+    display_relative(workspace, path)
 }
 
 async fn commit(changes: &[Change]) -> Result<()> {

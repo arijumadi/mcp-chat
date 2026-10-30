@@ -30,7 +30,7 @@ use crate::{CoreError, Result, now_ms};
 const MODEL_OUTPUT_LIMIT: usize = 12_000;
 const SHELL_OUTPUT_LIMIT: usize = 16_000;
 const READ_OUTPUT_LIMIT: usize = 24_000;
-const PS_PROLOG: &str = "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;";
+const PS_PROLOG: &str = "$ProgressPreference='SilentlyContinue';$env:PYTHONIOENCODING='utf-8';$env:PYTHONUTF8='1';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;";
 const READ_PAGE_CHARS: usize = 24_000;
 const PREVIEW_LIMIT: usize = 4_000;
 #[cfg(windows)]
@@ -192,7 +192,7 @@ pub fn resolve_workspace_path(raw: &str) -> Result<PathBuf> {
             root.display()
         )));
     }
-    Ok(root)
+    Ok(simplify_path(&root))
 }
 
 pub async fn workspace_root(pool: &SqlitePool) -> Result<PathBuf> {
@@ -201,7 +201,7 @@ pub async fn workspace_root(pool: &SqlitePool) -> Result<PathBuf> {
         .filter(|value| !value.trim().is_empty());
     match configured {
         Some(value) => resolve_workspace_path(&value),
-        None => Ok(std::env::current_dir()?.canonicalize()?),
+        None => Ok(simplify_path(&std::env::current_dir()?.canonicalize()?)),
     }
 }
 
@@ -234,6 +234,51 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     output
 }
 
+#[cfg(windows)]
+fn simplify_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+#[cfg(not(windows))]
+fn simplify_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
+#[cfg(windows)]
+fn path_is_within(root: &Path, path: &Path) -> bool {
+    let root = simplify_path(root);
+    let path = simplify_path(path);
+    let mut root_parts = root.components();
+    let mut path_parts = path.components();
+    loop {
+        match (root_parts.next(), path_parts.next()) {
+            (None, _) => return true,
+            (Some(_), None) => return false,
+            (Some(left), Some(right)) => {
+                if !left
+                    .as_os_str()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+                {
+                    return false;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn path_is_within(root: &Path, path: &Path) -> bool {
+    path.starts_with(root)
+}
+
 pub(crate) fn resolve_in_workspace(workspace: &Path, raw: &str) -> Result<PathBuf> {
     if raw.trim().is_empty() {
         return Err(CoreError::invalid("filePath is required"));
@@ -244,15 +289,15 @@ pub(crate) fn resolve_in_workspace(workspace: &Path, raw: &str) -> Result<PathBu
     } else {
         workspace.join(input)
     };
-    let normalized = normalize_lexically(&joined);
-    if !normalized.starts_with(workspace) {
+    let normalized = simplify_path(&normalize_lexically(&joined));
+    if !path_is_within(workspace, &normalized) {
         return Err(CoreError::invalid(
             "Path is outside the selected workspace folder.",
         ));
     }
     if normalized.exists() {
-        let canonical = normalized.canonicalize()?;
-        if !canonical.starts_with(workspace) {
+        let canonical = simplify_path(&normalized.canonicalize()?);
+        if !path_is_within(workspace, &canonical) {
             return Err(CoreError::invalid(
                 "Path resolves outside the selected workspace folder.",
             ));
@@ -262,8 +307,8 @@ pub(crate) fn resolve_in_workspace(workspace: &Path, raw: &str) -> Result<PathBu
     let mut ancestor = normalized.parent();
     while let Some(path) = ancestor {
         if path.exists() {
-            let canonical = path.canonicalize()?;
-            if !canonical.starts_with(workspace) {
+            let canonical = simplify_path(&path.canonicalize()?);
+            if !path_is_within(workspace, &canonical) {
                 return Err(CoreError::invalid(
                     "Path resolves outside the selected workspace folder.",
                 ));
@@ -297,6 +342,7 @@ pub(crate) fn resolve_read_path(
     };
     normalize_lexically(&joined)
         .canonicalize()
+        .map(|path| simplify_path(&path))
         .map_err(|_| CoreError::invalid(format!("Path not found: {raw}")))
 }
 
@@ -311,14 +357,14 @@ pub(crate) fn path_is_outside(workspace: &Path, raw: &str) -> bool {
     } else {
         workspace.join(input)
     };
-    let normalized = normalize_lexically(&joined);
-    if !normalized.starts_with(workspace) {
+    let normalized = simplify_path(&normalize_lexically(&joined));
+    if !path_is_within(workspace, &normalized) {
         return true;
     }
     if normalized.exists() {
         return normalized
             .canonicalize()
-            .map(|path| !path.starts_with(workspace))
+            .map(|path| !path_is_within(workspace, &path))
             .unwrap_or(true);
     }
     let mut ancestor = normalized.parent();
@@ -326,7 +372,7 @@ pub(crate) fn path_is_outside(workspace: &Path, raw: &str) -> bool {
         if path.exists() {
             return path
                 .canonicalize()
-                .map(|path| !path.starts_with(workspace))
+                .map(|path| !path_is_within(workspace, &path))
                 .unwrap_or(true);
         }
         ancestor = path.parent();
@@ -361,9 +407,9 @@ pub(crate) fn resolve_write_path(
     } else {
         workspace.join(input)
     };
-    let normalized = normalize_lexically(&joined);
+    let normalized = simplify_path(&normalize_lexically(&joined));
     if normalized.exists() {
-        Ok(normalized.canonicalize()?)
+        Ok(simplify_path(&normalized.canonicalize()?))
     } else {
         Ok(normalized)
     }
@@ -392,11 +438,16 @@ async fn read_text_file(path: &Path) -> Result<String> {
     String::from_utf8(bytes).map_err(|_| CoreError::invalid("File is not valid UTF-8."))
 }
 
-fn display_relative(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
+pub(crate) fn display_relative(root: &Path, path: &Path) -> String {
+    let root = simplify_path(root);
+    let path = simplify_path(path);
+    if path_is_within(&root, &path) {
+        let root_len = root.components().count();
+        let relative: PathBuf = path.components().skip(root_len).collect();
+        relative.to_string_lossy().replace('\\', "/")
+    } else {
+        path.to_string_lossy().replace('\\', "/")
+    }
 }
 
 async fn skill_listing(dir: &Path, name: &str, relative: &str) -> Result<String> {
@@ -655,7 +706,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
                     "shell": {
                         "type": "string",
                         "enum": ["auto", "cmd", "powershell", "pwsh", "sh", "bash"],
-                        "description": "Shell to use. Default auto: cmd.exe on Windows, sh elsewhere. PowerShell commands are passed with -EncodedCommand; provide the script body only, not another powershell -Command wrapper."
+                        "description": "Shell to use. Default auto: powershell on Windows, sh elsewhere; use cmd for legacy .bat/.cmd. PowerShell commands are passed with -EncodedCommand; provide the script body only, not another powershell -Command wrapper."
                     },
                     "cwd": {"type": "string", "description": "Optional working directory relative to the workspace. The process starts here; cd inside the command does not persist."},
                     "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 600000, "description": "Timeout in milliseconds. Default 120000."}
@@ -1959,7 +2010,7 @@ impl ToolExecutor {
         let shell = match requested_shell {
             "auto" => {
                 if cfg!(windows) {
-                    "cmd"
+                    "powershell"
                 } else {
                     "sh"
                 }
@@ -3025,6 +3076,15 @@ mod tests {
     }
 
     #[test]
+    fn absolute_paths_inside_the_workspace_are_accepted() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let target = workspace.join("notes").join("inside.txt");
+        let resolved = resolve_in_workspace(&workspace, target.to_str().unwrap()).unwrap();
+        assert_eq!(resolved, target);
+    }
+
+    #[test]
     fn builtin_tool_schema_stays_compact() {
         let chars: usize = builtin_tool_defs()
             .iter()
@@ -3211,8 +3271,8 @@ mod tests {
 
     #[test]
     fn wrapped_powershell_prolog_is_filtered_from_stderr() {
-        let wrapped = "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$OutputEncodin\ng=[Console]::OutputEncoding;\nreal error";
-        assert_eq!(clean_powershell_stderr(wrapped), "real error");
+        let wrapped = format!("{}\nreal error", PS_PROLOG.replace(';', ";\n"));
+        assert_eq!(clean_powershell_stderr(&wrapped), "real error");
     }
 
     #[test]
@@ -3410,9 +3470,16 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().canonicalize().unwrap();
         let executor = test_executor(&workspace).await;
-        let command = if cfg!(windows) { "exit /b 1" } else { "exit 1" };
+        let (shell, command) = if cfg!(windows) {
+            ("cmd", "exit /b 1")
+        } else {
+            ("sh", "exit 1")
+        };
         let result = executor
-            .run_bash(&request("bash", json!({"command": command})))
+            .run_bash(&request(
+                "bash",
+                json!({"command": command, "shell": shell}),
+            ))
             .await
             .unwrap();
         assert!(result.ok);

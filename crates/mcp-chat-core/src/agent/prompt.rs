@@ -94,7 +94,7 @@ pub async fn runtime_context(
 
 fn environment_block(workspace: &Path) -> String {
     let git = workspace.join(".git").exists();
-    let shell = if cfg!(windows) { "cmd" } else { "sh" };
+    let shell = if cfg!(windows) { "powershell" } else { "sh" };
     format!(
         "<env>\n  Working directory: {}\n  Workspace root folder: {}\n  Is directory a git repo: {}\n  Platform: {}\n  Default shell: {shell}\n  Shell state: each bash call is a fresh process; cd and variables do not persist.\n</env>",
         workspace.display(),
