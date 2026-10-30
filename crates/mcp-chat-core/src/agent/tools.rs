@@ -517,9 +517,16 @@ fn skip_dir(entry: &walkdir::DirEntry) -> bool {
     )
 }
 
+#[derive(Clone)]
+struct IgnoreRule {
+    negated: bool,
+    matcher: globset::GlobMatcher,
+}
+
 #[derive(Clone, Default)]
 struct IgnoreRules {
-    matchers: Vec<globset::GlobMatcher>,
+    rules: Vec<IgnoreRule>,
+    has_negation: bool,
 }
 
 impl IgnoreRules {
@@ -527,36 +534,64 @@ impl IgnoreRules {
         let Ok(text) = std::fs::read_to_string(workspace.join(".jarvisignore")) else {
             return Self::default();
         };
-        let mut matchers = Vec::new();
+        let mut rules = Vec::new();
+        let mut has_negation = false;
         for line in text.lines() {
             let line = line.trim();
-            if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+            if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let pattern = line.trim_start_matches('/').trim_end_matches('/');
+            let negated = line.starts_with('!');
+            let raw = line.trim_start_matches('!');
+            let anchored = raw.starts_with('/');
+            let pattern = raw.trim_start_matches('/').trim_end_matches('/');
             if pattern.is_empty() {
                 continue;
             }
+            has_negation |= negated;
             let mut patterns = vec![pattern.to_owned()];
             patterns.push(format!("{pattern}/**"));
-            if !pattern.contains('/') {
+            if !anchored && !pattern.contains('/') {
                 patterns.push(format!("**/{pattern}"));
                 patterns.push(format!("**/{pattern}/**"));
             }
             for pattern in patterns {
                 if let Ok(glob) = GlobBuilder::new(&pattern).literal_separator(true).build() {
-                    matchers.push(glob.compile_matcher());
+                    rules.push(IgnoreRule {
+                        negated,
+                        matcher: glob.compile_matcher(),
+                    });
                 }
             }
         }
-        Self { matchers }
+        Self {
+            rules,
+            has_negation,
+        }
     }
 
     fn matches(&self, relative: &str) -> bool {
         let relative = relative.trim_start_matches('/');
-        self.matchers
-            .iter()
-            .any(|matcher| matcher.is_match(relative))
+        let mut candidates = vec![relative.to_owned()];
+        let mut path = relative;
+        while let Some((parent, _)) = path.rsplit_once('/') {
+            candidates.push(parent.to_owned());
+            path = parent;
+        }
+        let mut ignored = false;
+        for rule in &self.rules {
+            if candidates
+                .iter()
+                .any(|candidate| rule.matcher.is_match(candidate))
+            {
+                ignored = !rule.negated;
+            }
+        }
+        ignored
+    }
+
+    fn has_negation(&self) -> bool {
+        self.has_negation
     }
 }
 
@@ -735,6 +770,12 @@ fn normalize_shell_text(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn powershell_script(command: &str) -> String {
+    format!(
+        "{PS_PROLOG}\n$ErrorActionPreference = 'Stop'\ntry {{\n{command}\nif ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\nif (-not $?) {{ exit 1 }}\nexit 0\n}} catch {{\n[Console]::Error.WriteLine($_.Exception.Message)\nexit 1\n}}"
+    )
 }
 
 fn shell_echoed(command: &str, stdout: &str) -> bool {
@@ -2206,9 +2247,7 @@ impl ToolExecutor {
             "powershell" | "pwsh" => {
                 // -EncodedCommand takes UTF-16LE/base64, so neither Rust nor
                 // PowerShell has to guess how nested quotes should be escaped.
-                let prepared = format!(
-                    "{PS_PROLOG}\n$ErrorActionPreference = 'Stop'\ntry {{\n{command}\nif ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\nif (-not $?) {{ exit 1 }}\nexit 0\n}} catch {{\nWrite-Error $_\nexit 1\n}}"
-                );
+                let prepared = powershell_script(command);
                 let encoded = base64::engine::general_purpose::STANDARD.encode(
                     prepared
                         .encode_utf16()
@@ -2657,7 +2696,7 @@ impl ToolExecutor {
                     }
                     if entry.file_type().is_dir() {
                         let relative = display_relative(&filter_root, entry.path());
-                        return !filter_ignore.matches(&relative);
+                        return !filter_ignore.matches(&relative) || filter_ignore.has_negation();
                     }
                     true
                 })
@@ -3593,6 +3632,15 @@ mod tests {
     }
 
     #[test]
+    fn powershell_wrapper_keeps_stderr_clean() {
+        let wrapped = powershell_script("Get-ChildItem nofile.txt");
+        assert!(wrapped.contains("$LASTEXITCODE"));
+        assert!(wrapped.contains("[Console]::Error.WriteLine"));
+        assert!(!wrapped.contains("Write-Error"));
+        assert!(wrapped.contains("Get-ChildItem nofile.txt"));
+    }
+
+    #[test]
     fn echo_detection_is_limited_to_cmd() {
         assert!(echo_suspect("cmd", "cmd /C dir", "cmd /C dir"));
         assert!(!echo_suspect("powershell", "1+1", "1+1"));
@@ -3906,11 +3954,17 @@ mod tests {
         let workspace = root.path().canonicalize().unwrap();
         std::fs::create_dir_all(workspace.join("hidden")).unwrap();
         std::fs::create_dir_all(workspace.join("visible")).unwrap();
-        std::fs::write(workspace.join(".jarvisignore"), "hidden/\n*.secret\n").unwrap();
+        std::fs::write(
+            workspace.join(".jarvisignore"),
+            "hidden/\n*.secret\nqa_neg_*.txt\n!qa_neg_keep.txt\n",
+        )
+        .unwrap();
         std::fs::write(workspace.join("hidden").join("a.txt"), "needle hidden\n").unwrap();
         std::fs::write(workspace.join("visible").join("b.txt"), "needle visible\n").unwrap();
         std::fs::write(workspace.join("root.secret"), "needle secret\n").unwrap();
         std::fs::write(workspace.join("root.bin"), [0u8, 1, 2, 3]).unwrap();
+        std::fs::write(workspace.join("qa_neg_drop.txt"), "needle drop\n").unwrap();
+        std::fs::write(workspace.join("qa_neg_keep.txt"), "needle keep\n").unwrap();
         let executor = test_executor(&workspace).await;
 
         let result = executor
@@ -3919,6 +3973,8 @@ mod tests {
             .unwrap();
         assert!(result.content.contains("visible/b.txt"));
         assert!(!result.content.contains("hidden/a.txt"));
+        assert!(result.content.contains("qa_neg_keep.txt"));
+        assert!(!result.content.contains("qa_neg_drop.txt"));
 
         let result = executor
             .run_grep(&request("grep", json!({"pattern": "needle"})))
@@ -3927,6 +3983,8 @@ mod tests {
         assert!(result.content.contains("visible/b.txt"));
         assert!(!result.content.contains("hidden/a.txt"));
         assert!(!result.content.contains("root.bin"));
+        assert!(result.content.contains("qa_neg_keep.txt"));
+        assert!(!result.content.contains("qa_neg_drop.txt"));
 
         let result = executor
             .run_glob(&request(

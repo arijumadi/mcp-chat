@@ -15,7 +15,7 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - The composer accepts up to 6 attachments through the native file picker, by dragging files anywhere onto the chat window, or by pasting an image from the clipboard. Images (PNG/JPEG/GIF/WebP, max 5 MB each) are sent to vision models as native OpenAI/Anthropic image blocks. Text, code, and text-based PDF files are inlined into the user turn (up to 100k characters per file, 200k total); scanned PDFs and other binary files are copied into app data, shown in the transcript, and represented to the model by metadata only. Total attachments are capped at 25 MB. Files are copied and previewed from Rust-owned storage, cleaned up with their conversation, and restored to the composer when a message is reverted.
 - Live prompt/completion usage in the composer and a step counter, with automatic token-based compaction using a structured handoff summary, ~15k recent-token retention and a 15%/16k buffer; the compactor reuses the normal system/tool prefix where provider caching applies.
 - The transcript loads the latest 80 messages first and lazy-loads older pages when you scroll up; full history and compaction remain in SQLite.
-- Workspace hygiene: `.jarvisignore` filters `glob`/`grep`, default `grep` skips non-text extensions, and `.mcp-chat/artifacts` + `.mcp-chat/tmp` are excluded from searches. `bash` supports `maxLines` with optional `tail`, while `read_tool_output` supports line-based paging. There is **no default step cap**; an optional per-conversation `max_steps` still supports the old **Continue** flow when explicitly configured.
+- Workspace hygiene: `.jarvisignore` filters `glob`/`grep`, including last-match-wins negation, default `grep` skips non-text extensions, and `.mcp-chat/artifacts` + `.mcp-chat/tmp` are excluded from searches. `bash` supports `maxLines` with optional `tail`, while `read_tool_output` supports line-based paging. There is **no default step cap**; an optional per-conversation `max_steps` still supports the old **Continue** flow when explicitly configured.
 - The desktop window remembers its size, position and maximized state between launches.
 - A per-turn loop guard stops three identical tool calls with identical results, injects a strategy-change prompt, and forces one text-only step. While a turn is active, **Steer** stops the current turn and starts a fresh one with the new user message.
 - Tool activity collapses to **Used N tools** with failed-call count and duration when relevant; thought counts appear only on thought-only turns. While reasoning is streaming, the summary shows **Thinking…**, and a running tool shows its name.
@@ -115,7 +115,7 @@ pnpm build         # Vite production build
 pnpm version:check # package.json, Cargo workspace and Tauri version agree
 pnpm package       # native installer for the current OS
 pnpm fmt:check     # cargo fmt --check
-pnpm core:test     # 82 unit + 32 agent + 6 MCP integration + 1 auth + 1 provider test = 122 Rust tests
+pnpm core:test     # 83 unit + 32 agent + 6 MCP integration + 1 auth + 1 provider test = 123 Rust tests
 pnpm core:clippy   # cargo clippy -p mcp-chat-core --all-targets -- -D warnings
 pnpm mock:clippy   # same for the mock server
 pnpm test:e2e      # Playwright: 6 smoke + 6 visual-regression tests against vite preview
