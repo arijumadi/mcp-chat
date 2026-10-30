@@ -40,7 +40,7 @@ Not in this batch: OAuth 2.1/DCR (M6). Static bearer tokens and an `X-API-Key` h
 
 Use the **Tools** button in the chat header only to choose which MCP servers this conversation may use. Tool delivery is always **lazy catalog + call**: the model gets a compact catalog of servers, tool names, short descriptions and argument summaries, plus `mcp_call_tool`, `mcp_get_tool_schema` and `mcp_execute`. It calls one target directly, or batches up to 8 independent targets in a single `mcp_execute` call; it only falls back to `mcp_search_tools` if the catalog was truncated. This avoids the old search→schema→call loop. Approvals and server policy still apply to every real target.
 
-The composer shows live prompt/completion usage. Compaction is automatic using the thresholds in **Settings → Context management** (keep the most recent ~15k tokens, 15%-of-window buffer with a 16k floor); there is no manual compact button.
+The composer shows live prompt/completion usage. Compaction is automatic using the thresholds in **Settings → Context management** (keep the most recent ~15k tokens, 15%-of-window buffer with a 16k floor); there is no manual compact button. During summarization the transcript shows **Compacting context…**, and if UI event delivery falls behind it reloads the active transcript instead of leaving a half-streamed message stuck.
 
 ## Quickstart
 

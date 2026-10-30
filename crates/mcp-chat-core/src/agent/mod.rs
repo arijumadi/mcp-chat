@@ -54,7 +54,7 @@ impl ChatEngine {
         output_dir: PathBuf,
         attachments_dir: PathBuf,
     ) -> Arc<Self> {
-        let (events, _) = broadcast::channel(2048);
+        let (events, _) = broadcast::channel(8192);
         let approvals = Arc::new(ApprovalRegistry::default());
         let inputs = Arc::new(InputRegistry::default());
         let executor = Arc::new(ToolExecutor {

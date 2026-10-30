@@ -315,7 +315,12 @@ async fn drive(
         let threshold = context_window.saturating_sub(buffer).max(1);
 
         if estimate > threshold {
-            match compact(
+            let _ = engine.events.send(CoreEvent::Status {
+                conversation_id: conversation_id.to_owned(),
+                status: TurnStatus::Compacting,
+                message: None,
+            });
+            let compact_result = compact(
                 &engine,
                 &conversation,
                 &resolved,
@@ -323,8 +328,13 @@ async fn drive(
                 system.as_deref(),
                 &tool_defs,
             )
-            .await
-            {
+            .await;
+            let _ = engine.events.send(CoreEvent::Status {
+                conversation_id: conversation_id.to_owned(),
+                status: TurnStatus::Thinking,
+                message: None,
+            });
+            match compact_result {
                 Ok(()) => {
                     compacted_once = true;
                     let history =
@@ -402,7 +412,12 @@ async fn drive(
             let step_error = StepError::from_core(&error);
             if step_error.context_overflow && !compacted_once {
                 compacted_once = true;
-                if let Ok(()) = compact(
+                let _ = engine.events.send(CoreEvent::Status {
+                    conversation_id: conversation_id.to_owned(),
+                    status: TurnStatus::Compacting,
+                    message: None,
+                });
+                let compact_result = compact(
                     &engine,
                     &conversation,
                     &resolved,
@@ -410,8 +425,13 @@ async fn drive(
                     system.as_deref(),
                     &tool_defs,
                 )
-                .await
-                {
+                .await;
+                let _ = engine.events.send(CoreEvent::Status {
+                    conversation_id: conversation_id.to_owned(),
+                    status: TurnStatus::Thinking,
+                    message: None,
+                });
+                if compact_result.is_ok() {
                     continue;
                 }
             }

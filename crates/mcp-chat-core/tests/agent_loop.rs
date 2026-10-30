@@ -457,8 +457,16 @@ async fn interrupted_stream_continues_with_partial_history() {
 #[tokio::test]
 async fn context_overflow_compacts_and_retries() {
     let h = Harness::new("mock-overflow", None, 10).await;
-    h.send_and_wait("overflow now", ApprovalDecision::Once, None, "ari")
+    let events = h
+        .send_and_wait("overflow now", ApprovalDecision::Once, None, "ari")
         .await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        CoreEvent::Status {
+            status: TurnStatus::Compacting,
+            ..
+        }
+    )));
     let history = h.history().await;
     let summary = history
         .iter()

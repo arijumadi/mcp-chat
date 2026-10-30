@@ -283,6 +283,7 @@ export interface InputSchemaProperty {
 export type TurnStatus =
   | "thinking"
   | "streaming"
+  | "compacting"
   | "waiting_approval"
   | "running_tool"
   | "idle"
@@ -332,6 +333,7 @@ export type CoreEvent =
       maxSteps: number;
     }
   | { type: "conversation_updated"; conversationId: string }
+  | { type: "resync"; reason: string }
   | { type: "error"; conversationId?: string | null; message: string };
 
 export interface AppInfo {

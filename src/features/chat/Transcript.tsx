@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, Loader2 } from "lucide-react";
 import { useApp } from "@/app/store";
 import { MessageItem } from "./MessageItem";
 import { AssistantTurn } from "./AssistantTurn";
@@ -96,6 +96,7 @@ export function Transcript() {
   const hasStreamingAssistant = windowed.some(
     (message) => message.role === "assistant" && message.status === "streaming",
   );
+  const showCompacting = status === "compacting";
   const showThinking =
     (status === "thinking" || status === "streaming") && !hasStreamingAssistant;
 
@@ -165,7 +166,15 @@ export function Transcript() {
               />
             ));
           })}
-          {showThinking ? (
+          {showCompacting ? (
+            <div
+              className="flex items-center gap-2 py-2 text-[13.5px]"
+              style={{ color: "var(--muted)" }}
+            >
+              <Loader2 size={14} className="animate-spin" style={{ color: "var(--warn)" }} />
+              <span>Compacting context…</span>
+            </div>
+          ) : showThinking ? (
             <div className="flex items-center gap-2 py-2 text-[13.5px]" style={{ color: "var(--muted)" }}>
               <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
               <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-[var(--accent)] [animation-delay:150ms]" />

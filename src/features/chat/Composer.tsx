@@ -12,7 +12,13 @@ import { WorkspacePicker } from "./WorkspacePicker";
 import { AutoApproveButton } from "./AutoApproveButton";
 import { AttachmentGrid } from "./Attachments";
 
-const ACTIVE: string[] = ["thinking", "streaming", "waiting_approval", "running_tool"];
+const ACTIVE: string[] = [
+  "thinking",
+  "streaming",
+  "compacting",
+  "waiting_approval",
+  "running_tool",
+];
 
 export function Composer({ conversation }: { conversation: Conversation }) {
   const value = useApp((state) => state.draft);

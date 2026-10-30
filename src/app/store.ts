@@ -143,7 +143,7 @@ export const useApp = create<AppStore>()((set, get) => ({
     if (get().booted || initializing) return;
     initializing = true;
     if (!unsubscribe) {
-      unsubscribe = await subscribe((event) => applyCoreEvent(event, set, get));
+      unsubscribe = await subscribe((event) => handleCoreEvent(event, set, get));
     }
     try {
       const [appInfo, providers, servers, settings, conversations] = await Promise.all([
@@ -928,10 +928,75 @@ export function applyCoreEvent(
       void get().refreshConversations();
       break;
     }
+    case "resync": {
+      const id = get().activeId;
+      void (async () => {
+        const active = id
+          ? await call<boolean>("is_generating", { conversationId: id }).catch(() => false)
+          : false;
+        if (get().activeId !== id) return;
+        await get().reloadActive();
+        if (get().activeId !== id) return;
+        set({
+          status: active ? "thinking" : "idle",
+          streamingMessageId: active ? get().streamingMessageId : null,
+        });
+      })();
+      get().toast(event.reason, "info");
+      break;
+    }
     case "error": {
       get().toast(event.message, "error");
       break;
     }
+  }
+}
+
+type StoreSet = (
+  partial: Partial<AppStore> | ((state: AppStore) => Partial<AppStore>),
+) => void;
+type DeltaEvent = Extract<CoreEvent, { type: "delta" }>;
+
+let pendingDeltas: DeltaEvent[] = [];
+let deltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushPendingDeltas(set: StoreSet, get: () => AppStore) {
+  if (deltaFlushTimer != null) {
+    clearTimeout(deltaFlushTimer);
+    deltaFlushTimer = null;
+  }
+  const batch = pendingDeltas;
+  pendingDeltas = [];
+  const merged: DeltaEvent[] = [];
+  for (const event of batch) {
+    const last = merged[merged.length - 1];
+    if (
+      last &&
+      last.conversationId === event.conversationId &&
+      last.messageId === event.messageId &&
+      last.partId === event.partId &&
+      last.deltaType === event.deltaType
+    ) {
+      merged[merged.length - 1] = { ...last, text: last.text + event.text };
+    } else {
+      merged.push(event);
+    }
+  }
+  for (const event of merged) applyCoreEvent(event, set, get);
+}
+
+function handleCoreEvent(event: CoreEvent, set: StoreSet, get: () => AppStore) {
+  if (event.type !== "delta") {
+    flushPendingDeltas(set, get);
+    applyCoreEvent(event, set, get);
+    return;
+  }
+  pendingDeltas.push(event);
+  if (deltaFlushTimer == null) {
+    deltaFlushTimer = window.setTimeout(() => {
+      deltaFlushTimer = null;
+      flushPendingDeltas(set, get);
+    }, 16);
   }
 }
 

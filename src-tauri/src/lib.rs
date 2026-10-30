@@ -4,7 +4,6 @@ mod state;
 
 use std::sync::Arc;
 
-use serde_json::json;
 use tauri::{Emitter, Manager};
 use tracing_subscriber::EnvFilter;
 
@@ -178,11 +177,11 @@ async fn forward_events(app: tauri::AppHandle, engine: Arc<ChatEngine>) {
             Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
                 let _ = app.emit(
                     "chat://status",
-                    json!({
-                        "type": "error",
-                        "conversationId": null,
-                        "message": format!("The UI could not keep up with {count} events. Reload the conversation.")
-                    }),
+                    &CoreEvent::Resync {
+                        reason: format!(
+                            "The UI could not keep up with {count} events; reloading the active conversation."
+                        ),
+                    },
                 );
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,

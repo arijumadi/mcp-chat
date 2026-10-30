@@ -25,9 +25,13 @@ export function MessageItem({
   const regenerate = useApp((state) => state.regenerate);
   const revertMessage = useApp((state) => state.revertMessage);
   const status = useApp((state) => state.status);
-  const busy = ["thinking", "streaming", "waiting_approval", "running_tool"].includes(
-    status,
-  );
+  const busy = [
+    "thinking",
+    "streaming",
+    "compacting",
+    "waiting_approval",
+    "running_tool",
+  ].includes(status);
   const copyRoot = useRef<HTMLDivElement>(null);
   const [confirmRevert, setConfirmRevert] = useState(false);
   if (message.role === "tool") return null;

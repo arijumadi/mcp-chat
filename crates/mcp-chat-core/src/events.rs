@@ -76,6 +76,9 @@ pub enum CoreEvent {
         conversation_id: Option<String>,
         message: String,
     },
+    Resync {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +86,7 @@ pub enum CoreEvent {
 pub enum TurnStatus {
     Thinking,
     Streaming,
+    Compacting,
     WaitingApproval,
     RunningTool,
     Idle,
