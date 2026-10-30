@@ -259,6 +259,23 @@ pub async fn get_messages(
 }
 
 #[tauri::command]
+pub async fn get_messages_page(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    before: Option<String>,
+    limit: Option<u32>,
+) -> CmdResult<mcp_chat_core::models::MessagePage> {
+    messages::list_page_for_conversation(
+        &state.db.pool,
+        &conversation_id,
+        before.as_deref(),
+        limit.unwrap_or(80) as usize,
+    )
+    .await
+    .map_err(cmd_err)
+}
+
+#[tauri::command]
 pub async fn send_message(
     state: State<'_, AppState>,
     conversation_id: String,

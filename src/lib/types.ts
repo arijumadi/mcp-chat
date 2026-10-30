@@ -52,6 +52,11 @@ export interface MessageWithParts extends Message {
   parts: Part[];
 }
 
+export interface MessagePage {
+  messages: MessageWithParts[];
+  hasMore: boolean;
+}
+
 export interface Attachment {
   id: string;
   name: string;

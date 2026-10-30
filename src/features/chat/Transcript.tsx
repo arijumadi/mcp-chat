@@ -4,16 +4,18 @@ import { useApp } from "@/app/store";
 import { MessageItem } from "./MessageItem";
 import { AssistantTurn } from "./AssistantTurn";
 
-const MESSAGE_WINDOW = 80;
-
 export function Transcript() {
   const messages = useApp((state) => state.messages);
+  const messageHasMore = useApp((state) => state.messageHasMore);
+  const loadingOlder = useApp((state) => state.loadingOlder);
+  const loadOlderMessages = useApp((state) => state.loadOlderMessages);
   const status = useApp((state) => state.status);
   const activeId = useApp((state) => state.activeId);
   const container = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
+  const loadingEarlier = useRef(false);
+  const lastScrollTop = useRef(-1);
   const [showJump, setShowJump] = useState(false);
-  const [messageLimit, setMessageLimit] = useState(MESSAGE_WINDOW);
   const previousConversation = useRef<string | null>(null);
 
   const visible = messages.filter(
@@ -22,12 +24,6 @@ export function Transcript() {
       message.status !== "synthetic" &&
       (message.parts.length > 0 || message.status === "streaming"),
   );
-
-  const windowed = useMemo(
-    () => visible.slice(Math.max(0, visible.length - messageLimit)),
-    [visible, messageLimit],
-  );
-  const hiddenMessages = Math.max(0, visible.length - windowed.length);
 
   const lastAssistant = [...visible]
     .reverse()
@@ -46,7 +42,7 @@ export function Transcript() {
         buffer = [];
       }
     };
-    for (const message of windowed) {
+    for (const message of visible) {
       if (message.role === "user") {
         flush();
         result.push({ kind: "user", message });
@@ -59,7 +55,7 @@ export function Transcript() {
     }
     flush();
     return result;
-  }, [windowed]);
+  }, [visible]);
 
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
     const element = container.current;
@@ -72,7 +68,8 @@ export function Transcript() {
   useEffect(() => {
     if (previousConversation.current !== activeId) {
       previousConversation.current = activeId;
-      setMessageLimit(MESSAGE_WINDOW);
+      lastScrollTop.current = -1;
+      loadingEarlier.current = false;
       atBottom.current = true;
       requestAnimationFrame(() => scrollToBottom("auto"));
     }
@@ -84,16 +81,37 @@ export function Transcript() {
     }
   }, [messages, status]);
 
+  const loadEarlier = () => {
+    if (!messageHasMore || loadingOlder || loadingEarlier.current) return;
+    const element = container.current;
+    if (!element) return;
+    const before = element.scrollHeight;
+    loadingEarlier.current = true;
+    void loadOlderMessages().finally(() => {
+      requestAnimationFrame(() => {
+        if (element) {
+          element.scrollTop += element.scrollHeight - before;
+        }
+        loadingEarlier.current = false;
+      });
+    });
+  };
+
   const onScroll = () => {
     const element = container.current;
     if (!element) return;
     const distance =
       element.scrollHeight - element.scrollTop - element.clientHeight;
+    const previousTop = lastScrollTop.current;
+    lastScrollTop.current = element.scrollTop;
     atBottom.current = distance < 90;
     setShowJump(!atBottom.current);
+    if (previousTop >= 0 && element.scrollTop < previousTop && element.scrollTop < 120) {
+      loadEarlier();
+    }
   };
 
-  const hasStreamingAssistant = windowed.some(
+  const hasStreamingAssistant = visible.some(
     (message) => message.role === "assistant" && message.status === "streaming",
   );
   const showCompacting = status === "compacting";
@@ -108,25 +126,26 @@ export function Transcript() {
         className="h-full overflow-y-auto"
       >
         <div className="mx-auto w-full max-w-[760px] px-6 pt-8 pb-10">
-          {hiddenMessages > 0 ? (
+          {messageHasMore || loadingOlder ? (
             <div className="mb-4 flex justify-center">
-              <button
-                type="button"
-                onClick={() => {
-                  const element = container.current;
-                  const before = element?.scrollHeight ?? 0;
-                  setMessageLimit((limit) => limit + MESSAGE_WINDOW);
-                  requestAnimationFrame(() => {
-                    if (element) {
-                      element.scrollTop += element.scrollHeight - before;
-                    }
-                  });
-                }}
-                className="focus-ring rounded-full border px-3 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)]"
-                style={{ borderColor: "var(--border)", color: "var(--muted)" }}
-              >
-                Show earlier messages ({hiddenMessages})
-              </button>
+              {loadingOlder ? (
+                <span
+                  className="flex items-center gap-1.5 text-[11.5px]"
+                  style={{ color: "var(--muted)" }}
+                >
+                  <Loader2 size={12} className="animate-spin" />
+                  Loading earlier messages…
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={loadEarlier}
+                  className="focus-ring rounded-full border px-3 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)]"
+                  style={{ borderColor: "var(--border)", color: "var(--muted)" }}
+                >
+                  Load earlier messages
+                </button>
+              )}
             </div>
           ) : null}
           {rows.map((row) => {

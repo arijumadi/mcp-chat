@@ -7,6 +7,7 @@ import type {
   Conversation,
   CoreEvent,
   InputRequestEvent,
+  MessagePage,
   MessageWithParts,
   Part,
   ProviderView,
@@ -39,6 +40,8 @@ export interface AppStore {
   conversationHasMore: boolean;
   activeId: string | null;
   messages: MessageWithParts[];
+  messageHasMore: boolean;
+  loadingOlder: boolean;
   pendingAttachments: Attachment[];
   draft: string;
   providers: ProviderView[];
@@ -99,8 +102,11 @@ export interface AppStore {
   ) => void;
   dismissToast: (id: string) => void;
   setTheme: (theme: Theme) => Promise<void>;
+  loadOlderMessages: () => Promise<void>;
   reloadActive: () => Promise<void>;
 }
+
+const MESSAGE_PAGE_SIZE = 80;
 
 let unsubscribe: (() => void) | null = null;
 let initializing = false;
@@ -119,6 +125,8 @@ export const useApp = create<AppStore>()((set, get) => ({
   conversationHasMore: false,
   activeId: null,
   messages: [],
+  messageHasMore: false,
+  loadingOlder: false,
   pendingAttachments: [],
   draft: "",
   providers: [],
@@ -237,6 +245,9 @@ export const useApp = create<AppStore>()((set, get) => ({
     discardStaged(get().pendingAttachments);
     set({
       activeId: id,
+      messages: [],
+      messageHasMore: false,
+      loadingOlder: false,
       view: "chat",
       status: "idle",
       approvals: [],
@@ -272,6 +283,8 @@ export const useApp = create<AppStore>()((set, get) => ({
         conversations: [conversation, ...state.conversations],
         activeId: conversation.id,
         messages: [],
+        messageHasMore: false,
+        loadingOlder: false,
         pendingAttachments: [],
         draft: seed,
         view: "chat",
@@ -654,6 +667,8 @@ export const useApp = create<AppStore>()((set, get) => ({
         set({
           activeId: null,
           messages: [],
+          messageHasMore: false,
+          loadingOlder: false,
           pendingAttachments: [],
           draft: "",
           status: "idle",
@@ -751,14 +766,43 @@ export const useApp = create<AppStore>()((set, get) => ({
     }
   },
 
+  async loadOlderMessages() {
+    const id = get().activeId;
+    if (!id || !get().messageHasMore || get().loadingOlder) return;
+    const oldest = get().messages[0]?.id;
+    if (!oldest) return;
+    set({ loadingOlder: true });
+    try {
+      const page = await call<MessagePage>("get_messages_page", {
+        conversationId: id,
+        before: oldest,
+        limit: MESSAGE_PAGE_SIZE,
+      });
+      if (get().activeId !== id) return;
+      const known = new Set(get().messages.map((message) => message.id));
+      const older = page.messages.filter((message) => !known.has(message.id));
+      set((state) => ({
+        messages: [...older, ...state.messages],
+        messageHasMore: page.hasMore,
+      }));
+    } catch (error) {
+      get().toast(String(error), "error");
+    } finally {
+      if (get().activeId === id) set({ loadingOlder: false });
+    }
+  },
+
   async reloadActive() {
     const id = get().activeId;
     if (!id) return;
     try {
-      const messages = await call<MessageWithParts[]>("get_messages", {
+      const page = await call<MessagePage>("get_messages_page", {
         conversationId: id,
+        limit: MESSAGE_PAGE_SIZE,
       });
-      if (get().activeId === id) set({ messages });
+      if (get().activeId === id) {
+        set({ messages: page.messages, messageHasMore: page.hasMore });
+      }
     } catch (error) {
       get().toast(String(error), "error");
     }

@@ -90,6 +90,7 @@ pub fn run() {
             commands::chat::set_conversation_workspace,
             commands::chat::set_system_prompt,
             commands::chat::get_messages,
+            commands::chat::get_messages_page,
             commands::chat::send_message,
             commands::chat::steer_message,
             commands::chat::regenerate,

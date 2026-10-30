@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use serde_json::Value;
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
-use crate::models::{Message, MessageWithParts, Part, PartPayload};
+use crate::models::{Message, MessagePage, MessageWithParts, Part, PartPayload};
 use crate::{CoreError, Result, new_id, now_ms};
 
 pub async fn create(
@@ -186,6 +186,92 @@ pub async fn list_for_conversation(
             MessageWithParts { message, parts }
         })
         .collect())
+}
+
+pub async fn list_page_for_conversation(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    before: Option<&str>,
+    limit: usize,
+) -> Result<MessagePage> {
+    let limit = limit.clamp(1, 500);
+    let cursor = match before {
+        Some(id) => {
+            let message = get(pool, id).await?;
+            if message.conversation_id != conversation_id {
+                return Err(CoreError::invalid(
+                    "message does not belong to conversation",
+                ));
+            }
+            Some(message)
+        }
+        None => None,
+    };
+
+    let mut messages = if let Some(cursor) = &cursor {
+        sqlx::query_as::<_, Message>(
+            r#"SELECT * FROM messages
+               WHERE conversation_id = ?1
+                 AND (created_at < ?2 OR (created_at = ?2 AND id < ?3))
+               ORDER BY created_at DESC, id DESC
+               LIMIT ?4"#,
+        )
+        .bind(conversation_id)
+        .bind(cursor.created_at)
+        .bind(&cursor.id)
+        .bind((limit + 1) as i64)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, Message>(
+            r#"SELECT * FROM messages
+               WHERE conversation_id = ?1
+               ORDER BY created_at DESC, id DESC
+               LIMIT ?2"#,
+        )
+        .bind(conversation_id)
+        .bind((limit + 1) as i64)
+        .fetch_all(pool)
+        .await?
+    };
+
+    let has_more = messages.len() > limit;
+    messages.truncate(limit);
+    messages.reverse();
+    if messages.is_empty() {
+        return Ok(MessagePage {
+            messages: Vec::new(),
+            has_more: false,
+        });
+    }
+
+    let ids: Vec<&str> = messages.iter().map(|message| message.id.as_str()).collect();
+    let mut query = QueryBuilder::<Sqlite>::new("SELECT * FROM parts WHERE message_id IN (");
+    let mut separated = query.separated(", ");
+    for id in ids {
+        separated.push_bind(id);
+    }
+    separated.push_unseparated(") ORDER BY idx ASC");
+    let parts = query.build_query_as::<Part>().fetch_all(pool).await?;
+
+    let mut by_message: HashMap<String, Vec<Part>> = HashMap::new();
+    for part in parts {
+        by_message
+            .entry(part.message_id.clone())
+            .or_default()
+            .push(part);
+    }
+
+    Ok(MessagePage {
+        messages: messages
+            .into_iter()
+            .map(|message| {
+                let parts = by_message.remove(&message.id).unwrap_or_default();
+                MessageWithParts { message, parts }
+            })
+            .collect(),
+        has_more,
+    })
 }
 
 pub async fn delete_message(pool: &SqlitePool, message_id: &str) -> Result<()> {
@@ -384,5 +470,62 @@ mod tests {
         let payload = parts[0].payload();
         assert_eq!(payload["state"], "aborted");
         assert_eq!(get(&db.pool, &msg.id).await.unwrap().status, "interrupted");
+    }
+
+    #[tokio::test]
+    async fn pages_messages_with_a_stable_cursor_and_parts() {
+        let db = Db::open_memory().await.unwrap();
+        let conv = conversations::create(&db.pool, "Paged", None, None)
+            .await
+            .unwrap();
+        for index in 0..5 {
+            let message = create(&db.pool, &conv.id, "assistant", "completed")
+                .await
+                .unwrap();
+            append_part(
+                &db.pool,
+                &message.id,
+                "text",
+                &PartPayload::Text {
+                    text: format!("message {index}"),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let first = list_page_for_conversation(&db.pool, &conv.id, None, 2)
+            .await
+            .unwrap();
+        assert_eq!(first.messages.len(), 2);
+        assert!(first.has_more);
+        assert!(
+            first
+                .messages
+                .iter()
+                .all(|message| !message.parts.is_empty())
+        );
+
+        let cursor = first.messages[0].message.id.clone();
+        let second = list_page_for_conversation(&db.pool, &conv.id, Some(&cursor), 2)
+            .await
+            .unwrap();
+        assert_eq!(second.messages.len(), 2);
+        assert!(second.has_more);
+        assert!(first.messages.iter().all(|message| {
+            second
+                .messages
+                .iter()
+                .all(|item| item.message.id != message.message.id)
+        }));
+
+        let cursor = second.messages[0].message.id.clone();
+        let third = list_page_for_conversation(&db.pool, &conv.id, Some(&cursor), 2)
+            .await
+            .unwrap();
+        assert_eq!(third.messages.len(), 1);
+        assert!(!third.has_more);
+        let total = first.messages.len() + second.messages.len() + third.messages.len();
+        assert_eq!(total, 5);
     }
 }

@@ -294,6 +294,15 @@ export function installMock(): void {
         autoApprove.delete(String(args.conversationId));
         return null;
       }
+      case "get_messages_page": {
+        const all = messages.get(String(args.conversationId)) ?? [];
+        const before = typeof args.before === "string" ? args.before : null;
+        let end = before ? all.findIndex((message) => message.id === before) : all.length;
+        if (end < 0) end = all.length;
+        const limit = Math.min(500, Math.max(1, Number(args.limit ?? 80)));
+        const start = Math.max(0, end - limit);
+        return { messages: all.slice(start, end), hasMore: start > 0 };
+      }
       case "get_messages":
         return messages.get(String(args.conversationId)) ?? [];
       case "get_conversation_tools": {
