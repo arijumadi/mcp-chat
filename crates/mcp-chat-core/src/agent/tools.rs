@@ -698,7 +698,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "bash".into(),
-            description: "Run a shell command in the workspace; each call is a fresh process. Defaults to cmd.exe on Windows and sh elsewhere. With shell=powershell/pwsh, send the script body directly; do not wrap it in another powershell -Command. Non-zero exit codes are command output, not automatically tool failures. Destructive commands require approval.".into(),
+            description: "Run a shell command in the workspace; each call is a fresh process. Defaults to powershell on Windows and sh elsewhere; cmd.exe remains available with shell=cmd. With shell=powershell/pwsh, send the script body directly; do not wrap it in another powershell -Command. Non-zero exit codes are command output, not automatically tool failures. Destructive commands require approval.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -712,6 +712,20 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
                     "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 600000, "description": "Timeout in milliseconds. Default 120000."}
                 },
                 "required": ["command"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            name: "python".into(),
+            description: "Run Python code directly without shell quoting. Code is sent through stdin to python; use for data processing, spreadsheet work, and verification scripts. The process starts in the workspace and has a timeout. Approve it like a shell command.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Complete Python source to execute."},
+                    "cwd": {"type": "string", "description": "Optional working directory, workspace-relative or an explicit inside-workspace path."},
+                    "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 600000, "description": "Timeout in milliseconds. Default 120000."}
+                },
+                "required": ["code"],
                 "additionalProperties": false
             }),
         },
@@ -876,6 +890,7 @@ pub fn is_builtin_tool(name: &str) -> bool {
         name,
         "read_tool_output"
             | "bash"
+            | "python"
             | "edit"
             | "apply_patch"
             | "write"
@@ -984,7 +999,7 @@ fn auto_effective_effect(req: &ToolExecRequest, effect: Effect) -> Effect {
 
 pub fn builtin_default_effect(name: &str) -> Effect {
     match name {
-        "bash" | "edit" | "apply_patch" | "write" => Effect::Ask,
+        "bash" | "python" | "edit" | "apply_patch" | "write" => Effect::Ask,
         _ => Effect::Allow,
     }
 }
@@ -1030,7 +1045,7 @@ fn skill_description(path: &Path) -> String {
             if let Some(value) = line.strip_prefix("description:") {
                 let value = value.trim().trim_matches('"').trim_matches('\'');
                 if !value.is_empty() {
-                    return truncate_chars(value, 200).0;
+                    return truncate_chars(value, 1024).0;
                 }
             }
         }
@@ -1040,7 +1055,7 @@ fn skill_description(path: &Path) -> String {
         if line.is_empty() || line.starts_with('#') || line.starts_with("---") {
             continue;
         }
-        return truncate_chars(line, 200).0;
+        return truncate_chars(line, 1024).0;
     }
     String::new()
 }
@@ -1296,7 +1311,7 @@ impl ToolExecutor {
                 ok,
             }) => {
                 let full_text = content.clone();
-                let exit_code = if req.remote_name == "bash" {
+                let exit_code = if matches!(req.remote_name.as_str(), "bash" | "python") {
                     structured
                         .as_ref()
                         .and_then(|value| value.get("exitCode"))
@@ -1312,7 +1327,7 @@ impl ToolExecutor {
                 // would hide next_offset and create a new call_id on every page.
                 let output_limit = if is_pager {
                     usize::MAX
-                } else if req.remote_name == "bash" {
+                } else if matches!(req.remote_name.as_str(), "bash" | "python") {
                     SHELL_OUTPUT_LIMIT
                 } else if req.remote_name == "read" {
                     READ_OUTPUT_LIMIT
@@ -1976,6 +1991,7 @@ impl ToolExecutor {
                 })
             }
             "bash" => self.run_bash(req).await,
+            "python" => self.run_python(req).await,
             "read" => self.run_read(req).await,
             "write" => self.run_write(req).await,
             "edit" => self.run_edit(req).await,
@@ -2177,6 +2193,100 @@ impl ToolExecutor {
             // A non-zero exit code is command output, not a tool execution
             // failure. Only quoting/echo and termination are tool failures.
             ok: exit_code.is_some() && !echoed,
+        })
+    }
+
+    async fn run_python(&self, req: &ToolExecRequest) -> Result<Rendered> {
+        let code = req
+            .args
+            .get("code")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CoreError::invalid("code is required"))?;
+        let timeout_ms = req
+            .args
+            .get("timeoutMs")
+            .and_then(Value::as_u64)
+            .unwrap_or(120_000)
+            .clamp(1_000, 600_000);
+        let workspace =
+            workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
+        let cwd = match req.args.get("cwd").and_then(Value::as_str) {
+            Some(raw) if !raw.trim().is_empty() => resolve_in_workspace(&workspace, raw)?,
+            _ => workspace.clone(),
+        };
+        if !cwd.is_dir() {
+            return Err(CoreError::invalid(format!(
+                "cwd is not a directory: {}",
+                cwd.display()
+            )));
+        }
+
+        let executable = if cfg!(windows) { "python" } else { "python3" };
+        let mut process = Command::new(executable);
+        process
+            .args(["-u", "-"])
+            .current_dir(&cwd)
+            .env("PYTHONIOENCODING", "utf-8")
+            .env("PYTHONUTF8", "1")
+            .kill_on_drop(true)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        #[cfg(windows)]
+        process.creation_flags(CREATE_NO_WINDOW);
+
+        let mut child = process.spawn().map_err(|error| {
+            CoreError::Message(format!(
+                "Python could not be started ({executable}). Install Python 3 or use shell=bash/powershell. {error}"
+            ))
+        })?;
+        if let Some(mut stdin) = child.stdin.take() {
+            tokio::io::AsyncWriteExt::write_all(&mut stdin, code.as_bytes()).await?;
+        }
+        let output =
+            match tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait_with_output())
+                .await
+            {
+                Ok(Ok(output)) => output,
+                Ok(Err(error)) => {
+                    return Err(CoreError::Message(format!(
+                        "Python process failed: {error}"
+                    )));
+                }
+                Err(_) => {
+                    return Err(CoreError::Message(format!(
+                        "Python timed out after {timeout_ms} ms."
+                    )));
+                }
+            };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let exit_code = output.status.code();
+        let exit = exit_code
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "terminated".into());
+        let mut content = format!("[python]\n[cwd] {}\n[stdout]\n", cwd.display());
+        if stdout.trim().is_empty() {
+            content.push_str("(empty)\n");
+        } else {
+            content.push_str(stdout.trim_end());
+            content.push('\n');
+        }
+        content.push_str("[stderr]\n");
+        if stderr.trim().is_empty() {
+            content.push_str("(empty)\n");
+        } else {
+            content.push_str(stderr.trim_end());
+            content.push('\n');
+        }
+        content.push_str(&format!("[exit code {exit}]"));
+        Ok(Rendered {
+            content,
+            structured: Some(json!({
+                "exitCode": exit_code,
+                "success": output.status.success(),
+            })),
+            ok: exit_code.is_some(),
         })
     }
 
@@ -3098,7 +3208,7 @@ mod tests {
             .sum();
         println!("builtin tool schema chars: {chars}");
         assert!(
-            chars < 6_500,
+            chars < 7_200,
             "builtin tool schema grew unexpectedly: {chars} characters"
         );
     }
@@ -3463,6 +3573,43 @@ mod tests {
         assert!(result.content.contains("[stdout]"));
         assert!(result.content.contains("[stderr]"));
         assert!(result.content.contains("[exit code 0]"));
+    }
+
+    #[tokio::test]
+    async fn python_runs_multiline_code_without_shell_quoting() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let executor = test_executor(&workspace).await;
+        let result = executor
+            .run_python(&request(
+                "python",
+                json!({
+                    "code": "state = 'python-ok'\nprint(state)\nprint('unicode: ✓')\n"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert!(result.ok, "{}", result.content);
+        assert!(result.content.contains("python-ok"));
+        assert!(result.content.contains("unicode: ✓"));
+        assert!(result.content.contains("[exit code 0]"));
+    }
+
+    #[tokio::test]
+    async fn python_nonzero_exit_is_output_not_a_tool_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let executor = test_executor(&workspace).await;
+        let result = executor
+            .run_python(&request(
+                "python",
+                json!({"code": "import sys\nprint('bad')\nsys.exit(1)\n"}),
+            ))
+            .await
+            .unwrap();
+        assert!(result.ok, "{}", result.content);
+        assert!(result.content.contains("[exit code 1]"));
+        assert_eq!(result.structured.as_ref().unwrap()["exitCode"], 1);
     }
 
     #[tokio::test]
