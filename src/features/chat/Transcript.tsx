@@ -12,9 +12,10 @@ export function Transcript() {
   const status = useApp((state) => state.status);
   const activeId = useApp((state) => state.activeId);
   const container = useRef<HTMLDivElement>(null);
-  const atBottom = useRef(true);
+  const followBottom = useRef(true);
   const loadingEarlier = useRef(false);
   const lastScrollTop = useRef(-1);
+  const scrollFrame = useRef<number | null>(null);
   const [showJump, setShowJump] = useState(false);
   const previousConversation = useRef<string | null>(null);
 
@@ -57,12 +58,29 @@ export function Transcript() {
     return result;
   }, [visible]);
 
+  const cancelScheduledScroll = () => {
+    if (scrollFrame.current !== null) {
+      cancelAnimationFrame(scrollFrame.current);
+      scrollFrame.current = null;
+    }
+  };
+
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
     const element = container.current;
     if (!element) return;
+    cancelScheduledScroll();
     element.scrollTo({ top: element.scrollHeight, behavior });
-    atBottom.current = true;
+    followBottom.current = true;
     setShowJump(false);
+  };
+
+  const scheduleScrollToBottom = () => {
+    if (!followBottom.current) return;
+    cancelScheduledScroll();
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = null;
+      if (followBottom.current) scrollToBottom("auto");
+    });
   };
 
   useEffect(() => {
@@ -70,15 +88,17 @@ export function Transcript() {
       previousConversation.current = activeId;
       lastScrollTop.current = -1;
       loadingEarlier.current = false;
-      atBottom.current = true;
+      followBottom.current = true;
       requestAnimationFrame(() => scrollToBottom("auto"));
     }
+    // The scroll helpers intentionally read live refs from this render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
 
   useEffect(() => {
-    if (atBottom.current) {
-      requestAnimationFrame(() => scrollToBottom("auto"));
-    }
+    scheduleScrollToBottom();
+    // Deltas arrive through messages; status changes are used for the loader.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, status]);
 
   const loadEarlier = () => {
@@ -103,11 +123,25 @@ export function Transcript() {
     const distance =
       element.scrollHeight - element.scrollTop - element.clientHeight;
     const previousTop = lastScrollTop.current;
+    const scrolledUp = previousTop >= 0 && element.scrollTop < previousTop - 2;
     lastScrollTop.current = element.scrollTop;
-    atBottom.current = distance < 90;
-    setShowJump(!atBottom.current);
-    if (previousTop >= 0 && element.scrollTop < previousTop && element.scrollTop < 120) {
+    if (scrolledUp) {
+      cancelScheduledScroll();
+      followBottom.current = false;
+    } else if (distance < 12) {
+      followBottom.current = true;
+    }
+    setShowJump(!followBottom.current);
+    if (element.scrollTop < 120 && scrolledUp) {
       loadEarlier();
+    }
+  };
+
+  const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (event.deltaY < 0) {
+      cancelScheduledScroll();
+      followBottom.current = false;
+      setShowJump(true);
     }
   };
 
@@ -123,6 +157,7 @@ export function Transcript() {
       <div
         ref={container}
         onScroll={onScroll}
+        onWheel={onWheel}
         className="h-full overflow-y-auto"
       >
         <div className="mx-auto w-full max-w-[760px] px-6 pt-8 pb-10">
