@@ -504,7 +504,97 @@ fn skip_dir(entry: &walkdir::DirEntry) -> bool {
     let name = entry.file_name().to_string_lossy();
     !matches!(
         name.as_ref(),
-        ".git" | "node_modules" | "target" | "dist" | "build" | ".venv" | "venv" | ".next"
+        ".git"
+            | "node_modules"
+            | "target"
+            | "dist"
+            | "build"
+            | ".venv"
+            | "venv"
+            | ".next"
+            | ".mcp-chat"
+            | ".jarvis"
+    )
+}
+
+#[derive(Clone, Default)]
+struct IgnoreRules {
+    matchers: Vec<globset::GlobMatcher>,
+}
+
+impl IgnoreRules {
+    fn load(workspace: &Path) -> Self {
+        let Ok(text) = std::fs::read_to_string(workspace.join(".jarvisignore")) else {
+            return Self::default();
+        };
+        let mut matchers = Vec::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+                continue;
+            }
+            let pattern = line.trim_start_matches('/').trim_end_matches('/');
+            if pattern.is_empty() {
+                continue;
+            }
+            let mut patterns = vec![pattern.to_owned()];
+            patterns.push(format!("{pattern}/**"));
+            if !pattern.contains('/') {
+                patterns.push(format!("**/{pattern}"));
+                patterns.push(format!("**/{pattern}/**"));
+            }
+            for pattern in patterns {
+                if let Ok(glob) = GlobBuilder::new(&pattern).literal_separator(true).build() {
+                    matchers.push(glob.compile_matcher());
+                }
+            }
+        }
+        Self { matchers }
+    }
+
+    fn matches(&self, relative: &str) -> bool {
+        let relative = relative.trim_start_matches('/');
+        self.matchers
+            .iter()
+            .any(|matcher| matcher.is_match(relative))
+    }
+}
+
+fn is_text_extension(path: &Path) -> bool {
+    let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "txt"
+            | "md"
+            | "markdown"
+            | "rst"
+            | "py"
+            | "rs"
+            | "js"
+            | "jsx"
+            | "ts"
+            | "tsx"
+            | "json"
+            | "jsonc"
+            | "toml"
+            | "yaml"
+            | "yml"
+            | "csv"
+            | "tsv"
+            | "html"
+            | "htm"
+            | "css"
+            | "scss"
+            | "sql"
+            | "sh"
+            | "bash"
+            | "ps1"
+            | "cmd"
+            | "bat"
+            | "xml"
+            | "log"
     )
 }
 
@@ -658,6 +748,24 @@ fn echo_suspect(shell: &str, command: &str, stdout: &str) -> bool {
     shell == "cmd" && shell_echoed(command, stdout)
 }
 
+fn clip_lines(text: &str, max_lines: usize, tail: bool) -> (String, usize, bool) {
+    let total = if text.is_empty() {
+        0
+    } else {
+        text.lines().count()
+    };
+    if max_lines == 0 || total <= max_lines {
+        return (text.to_owned(), total, false);
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let selected = if tail {
+        &lines[total - max_lines..]
+    } else {
+        &lines[..max_lines]
+    };
+    (selected.join("\n"), total, true)
+}
+
 fn line_prefix(content: &str, start_line: usize) -> String {
     let mut output = String::new();
     for (index, line) in content.lines().enumerate() {
@@ -685,12 +793,14 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: "read_tool_output".into(),
-            description: "Read a truncated tool result by call_id, optionally from a character offset. Pages align to line starts when the output has newlines.".into(),
+            description: "Read a truncated tool result by call_id. Use offset for character paging, or line + maxLines for line-based paging.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "call_id": {"type": "string", "description": "The tool call id whose spilled output should be read."},
-                    "offset": {"type": "integer", "minimum": 0, "description": "Character offset to start from. Default 0. Page ends align to line boundaries when possible."}
+                    "offset": {"type": "integer", "minimum": 0, "description": "Character offset to start from. Default 0. Page ends align to line boundaries when possible."},
+                    "line": {"type": "integer", "minimum": 1, "description": "Optional 1-based line to start from. Takes precedence over offset."},
+                    "maxLines": {"type": "integer", "minimum": 1, "maximum": 5000, "description": "Maximum lines when using line-based paging. Default 200."}
                 },
                 "required": ["call_id"],
                 "additionalProperties": false
@@ -709,6 +819,8 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
                         "description": "Shell to use. Default auto: powershell on Windows, sh elsewhere; use cmd for legacy .bat/.cmd. PowerShell commands are passed with -EncodedCommand; provide the script body only, not another powershell -Command wrapper."
                     },
                     "cwd": {"type": "string", "description": "Optional working directory relative to the workspace. The process starts here; cd inside the command does not persist."},
+                    "maxLines": {"type": "integer", "minimum": 1, "maximum": 5000, "description": "Optional maximum lines of stdout/stderr to return."},
+                    "tail": {"type": "boolean", "description": "Keep the last maxLines instead of the first. Default false."},
                     "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 600000, "description": "Timeout in milliseconds. Default 120000."}
                 },
                 "required": ["command"],
@@ -807,6 +919,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
                 "properties": {
                     "pattern": {"type": "string", "description": "Glob such as **/*.rs or src/**/*.ts."},
                     "path": {"type": "string", "description": "Optional directory, workspace-relative or explicit outside path."},
+                    "recursive": {"type": "boolean", "description": "Search subdirectories. Default true."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "description": "Maximum paths. Default 500."}
                 },
                 "required": ["pattern"],
@@ -1983,7 +2096,16 @@ impl ToolExecutor {
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| CoreError::invalid("call_id is required"))?;
                 let offset = req.args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                let content = read_spilled(&self.output_dir, call_id, offset).await?;
+                let content = if let Some(line) = req.args.get("line").and_then(Value::as_u64) {
+                    let max_lines = req
+                        .args
+                        .get("maxLines")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(200) as usize;
+                    read_spilled_lines(&self.output_dir, call_id, line as usize, max_lines).await?
+                } else {
+                    read_spilled(&self.output_dir, call_id, offset).await?
+                };
                 Ok(Rendered {
                     content,
                     structured: None,
@@ -2018,6 +2140,16 @@ impl ToolExecutor {
             .and_then(Value::as_u64)
             .unwrap_or(120_000)
             .clamp(1_000, 600_000);
+        let max_lines = req
+            .args
+            .get("maxLines")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        let tail = req
+            .args
+            .get("tail")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let requested_shell = req
             .args
             .get("shell")
@@ -2074,7 +2206,9 @@ impl ToolExecutor {
             "powershell" | "pwsh" => {
                 // -EncodedCommand takes UTF-16LE/base64, so neither Rust nor
                 // PowerShell has to guess how nested quotes should be escaped.
-                let prepared = format!("{PS_PROLOG}\n{command}");
+                let prepared = format!(
+                    "{PS_PROLOG}\n$ErrorActionPreference = 'Stop'\ntry {{\n{command}\nif ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\nif (-not $?) {{ exit 1 }}\nexit 0\n}} catch {{\nWrite-Error $_\nexit 1\n}}"
+                );
                 let encoded = base64::engine::general_purpose::STANDARD.encode(
                     prepared
                         .encode_utf16()
@@ -2154,6 +2288,8 @@ impl ToolExecutor {
         } else {
             stderr_raw.into_owned()
         };
+        let (stdout, stdout_total, stdout_clipped) = clip_lines(&stdout, max_lines, tail);
+        let (stderr, stderr_total, stderr_clipped) = clip_lines(&stderr, max_lines, tail);
         let echoed = echo_suspect(shell, command, &stdout);
         let exit_code = output.status.code();
         let exit = exit_code
@@ -2175,12 +2311,26 @@ impl ToolExecutor {
             content.push_str(stdout.trim_end());
             content.push('\n');
         }
+        if stdout_clipped {
+            content.push_str(&format!(
+                "... ({} lines total, showing {} {max_lines})\n",
+                stdout_total,
+                if tail { "last" } else { "first" }
+            ));
+        }
         content.push_str("[stderr]\n");
         if stderr.trim().is_empty() {
             content.push_str("(empty)\n");
         } else {
             content.push_str(stderr.trim_end());
             content.push('\n');
+        }
+        if stderr_clipped {
+            content.push_str(&format!(
+                "... ({} lines total, showing {} {max_lines})\n",
+                stderr_total,
+                if tail { "last" } else { "first" }
+            ));
         }
         content.push_str(&format!("[exit code {exit}]"));
         Ok(Rendered {
@@ -2486,18 +2636,31 @@ impl ToolExecutor {
             .filter(|value| !value.trim().is_empty())
             .map(glob_matcher)
             .transpose()?;
+        let has_include = include.is_some();
         let regex = RegexBuilder::new(&pattern)
             .case_insensitive(!case_sensitive)
             .build()
             .map_err(|error| CoreError::invalid(format!("Invalid regular expression: {error}")))?;
         let root = workspace.clone();
         let found = tokio::task::spawn_blocking(move || -> Result<String> {
+            let ignore = IgnoreRules::load(&root);
+            let filter_root = root.clone();
+            let filter_ignore = ignore.clone();
             let mut hits = Vec::new();
             let mut truncated = false;
             'files: for entry in WalkDir::new(&search)
                 .follow_links(false)
                 .into_iter()
-                .filter_entry(skip_dir)
+                .filter_entry(move |entry| {
+                    if !skip_dir(entry) {
+                        return false;
+                    }
+                    if entry.file_type().is_dir() {
+                        let relative = display_relative(&filter_root, entry.path());
+                        return !filter_ignore.matches(&relative);
+                    }
+                    true
+                })
             {
                 let entry = match entry {
                     Ok(entry) => entry,
@@ -2508,6 +2671,12 @@ impl ToolExecutor {
                 }
                 let path = entry.path();
                 let relative = display_relative(&root, path);
+                if ignore.matches(&relative) {
+                    continue;
+                }
+                if !has_include && !is_text_extension(path) {
+                    continue;
+                }
                 if let Some(include) = &include {
                     if !include.is_match(&relative) {
                         continue;
@@ -2575,6 +2744,11 @@ impl ToolExecutor {
             .and_then(Value::as_u64)
             .unwrap_or(500)
             .clamp(1, 2_000) as usize;
+        let recursive = req
+            .args
+            .get("recursive")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let search = resolve_read_path(
@@ -2585,12 +2759,24 @@ impl ToolExecutor {
         let matcher = glob_matcher(&pattern)?;
         let root = workspace.clone();
         let found = tokio::task::spawn_blocking(move || -> Result<String> {
+            let ignore = IgnoreRules::load(&root);
+            let filter_root = root.clone();
+            let filter_ignore = ignore.clone();
+            let mut walker = WalkDir::new(&search).follow_links(false);
+            if !recursive {
+                walker = walker.max_depth(1);
+            }
             let mut paths = Vec::new();
-            'walk: for entry in WalkDir::new(&search)
-                .follow_links(false)
-                .into_iter()
-                .filter_entry(skip_dir)
-            {
+            'walk: for entry in walker.into_iter().filter_entry(move |entry| {
+                if !skip_dir(entry) {
+                    return false;
+                }
+                if entry.file_type().is_dir() {
+                    let relative = display_relative(&filter_root, entry.path());
+                    return !filter_ignore.matches(&relative);
+                }
+                true
+            }) {
                 let entry = match entry {
                     Ok(entry) => entry,
                     Err(_) => continue,
@@ -2599,6 +2785,9 @@ impl ToolExecutor {
                     continue;
                 }
                 let relative = display_relative(&root, entry.path());
+                if ignore.matches(&relative) {
+                    continue;
+                }
                 if matcher.is_match(&relative) {
                     paths.push(relative);
                     if paths.len() >= limit {
@@ -3088,7 +3277,7 @@ fn page_text(content: &str, offset: usize) -> (usize, String, usize, usize) {
     (start, chunk, next, total)
 }
 
-pub async fn read_spilled(dir: &Path, call_id: &str, offset: usize) -> Result<String> {
+async fn read_spilled_content(dir: &Path, call_id: &str) -> Result<String> {
     if call_id.is_empty()
         || call_id.len() > 128
         || !call_id
@@ -3102,7 +3291,7 @@ pub async fn read_spilled(dir: &Path, call_id: &str, offset: usize) -> Result<St
         CoreError::Message(format!("No spilled output exists for call_id {call_id:?}."))
     })?;
     let body: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({"content": raw}));
-    let content = body
+    Ok(body
         .get("content")
         .and_then(Value::as_str)
         .map(str::to_owned)
@@ -3110,7 +3299,11 @@ pub async fn read_spilled(dir: &Path, call_id: &str, offset: usize) -> Result<St
             body.get("structured")
                 .map(|value| serde_json::to_string_pretty(value).unwrap_or_default())
         })
-        .unwrap_or_default();
+        .unwrap_or_default())
+}
+
+pub async fn read_spilled(dir: &Path, call_id: &str, offset: usize) -> Result<String> {
+    let content = read_spilled_content(dir, call_id).await?;
     let (start, chunk, next, total) = page_text(&content, offset);
     if chunk.is_empty() {
         return Ok(json!({
@@ -3128,6 +3321,47 @@ pub async fn read_spilled(dir: &Path, call_id: &str, offset: usize) -> Result<St
         "next_offset": next,
         "total": total,
         "truncated": next < total
+    })
+    .to_string())
+}
+
+pub async fn read_spilled_lines(
+    dir: &Path,
+    call_id: &str,
+    start_line: usize,
+    max_lines: usize,
+) -> Result<String> {
+    let content = read_spilled_content(dir, call_id).await?;
+    let total_lines = if content.is_empty() {
+        0
+    } else {
+        content.lines().count()
+    };
+    let start = start_line.max(1) - 1;
+    if start >= total_lines {
+        return Ok(json!({
+            "content": "",
+            "line": total_lines + 1,
+            "next_line": total_lines + 1,
+            "total_lines": total_lines,
+            "message": "Line is at or beyond the end of this output."
+        })
+        .to_string());
+    }
+    let max_lines = max_lines.clamp(1, 5_000);
+    let end = (start + max_lines).min(total_lines);
+    let chunk = content
+        .lines()
+        .skip(start)
+        .take(end - start)
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(json!({
+        "content": chunk,
+        "line": start + 1,
+        "next_line": if end < total_lines { end + 1 } else { total_lines },
+        "total_lines": total_lines,
+        "truncated": end < total_lines
     })
     .to_string())
 }
@@ -3208,7 +3442,7 @@ mod tests {
             .sum();
         println!("builtin tool schema chars: {chars}");
         assert!(
-            chars < 7_200,
+            chars < 7_800,
             "builtin tool schema grew unexpectedly: {chars} characters"
         );
     }
@@ -3391,6 +3625,16 @@ mod tests {
         assert_eq!(normalize_shell_text("\"echo hi\""), "echo hi");
         assert!(shell_echoed("cmd /C dir", "cmd /C dir\r\n"));
         assert!(!shell_echoed("cmd /C dir", "Volume in drive C"));
+    }
+
+    #[test]
+    fn line_clipping_supports_head_and_tail() {
+        let text = "a\nb\nc\nd\n";
+        assert_eq!(clip_lines(text, 2, false).0, "a\nb");
+        assert_eq!(clip_lines(text, 2, true).0, "c\nd");
+        assert_eq!(clip_lines(text, 0, true).0, text);
+        assert_eq!(clip_lines(text, 2, true).1, 4);
+        assert!(clip_lines(text, 2, true).2);
     }
 
     #[test]
@@ -3632,6 +3876,66 @@ mod tests {
         assert!(result.ok);
         assert!(result.content.contains("[exit code 1]"));
         assert_eq!(result.structured.as_ref().unwrap()["exitCode"], 1);
+    }
+
+    #[tokio::test]
+    async fn read_tool_output_supports_line_paging() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("call.json"),
+            json!({"content": "a\nb\nc\nd"}).to_string(),
+        )
+        .unwrap();
+        let page = read_spilled_lines(dir.path(), "call", 2, 2).await.unwrap();
+        let page: Value = serde_json::from_str(&page).unwrap();
+        assert_eq!(page["line"], 2);
+        assert_eq!(page["content"], "b\nc");
+        assert_eq!(page["next_line"], 4);
+        assert_eq!(page["total_lines"], 4);
+        assert_eq!(page["truncated"], true);
+
+        let last = read_spilled_lines(dir.path(), "call", 4, 2).await.unwrap();
+        let last: Value = serde_json::from_str(&last).unwrap();
+        assert_eq!(last["content"], "d");
+        assert_eq!(last["truncated"], false);
+    }
+
+    #[tokio::test]
+    async fn search_tools_honor_jarvisignore_and_skip_binary_files() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::create_dir_all(workspace.join("hidden")).unwrap();
+        std::fs::create_dir_all(workspace.join("visible")).unwrap();
+        std::fs::write(workspace.join(".jarvisignore"), "hidden/\n*.secret\n").unwrap();
+        std::fs::write(workspace.join("hidden").join("a.txt"), "needle hidden\n").unwrap();
+        std::fs::write(workspace.join("visible").join("b.txt"), "needle visible\n").unwrap();
+        std::fs::write(workspace.join("root.secret"), "needle secret\n").unwrap();
+        std::fs::write(workspace.join("root.bin"), [0u8, 1, 2, 3]).unwrap();
+        let executor = test_executor(&workspace).await;
+
+        let result = executor
+            .run_glob(&request("glob", json!({"pattern": "**/*.txt"})))
+            .await
+            .unwrap();
+        assert!(result.content.contains("visible/b.txt"));
+        assert!(!result.content.contains("hidden/a.txt"));
+
+        let result = executor
+            .run_grep(&request("grep", json!({"pattern": "needle"})))
+            .await
+            .unwrap();
+        assert!(result.content.contains("visible/b.txt"));
+        assert!(!result.content.contains("hidden/a.txt"));
+        assert!(!result.content.contains("root.bin"));
+
+        let result = executor
+            .run_glob(&request(
+                "glob",
+                json!({"pattern": "*.txt", "recursive": false}),
+            ))
+            .await
+            .unwrap();
+        assert!(!result.content.contains("visible/b.txt"));
     }
 
     #[tokio::test]

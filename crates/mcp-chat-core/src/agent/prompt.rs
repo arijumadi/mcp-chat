@@ -71,7 +71,11 @@ pub async fn runtime_context(
     conversation_id: &str,
 ) -> Result<String> {
     let workspace = workspace_root_for_conversation(pool, conversation_id).await?;
-    let mut parts = vec![environment_block(&workspace)];
+    let artifacts = workspace.join(".mcp-chat").join("artifacts");
+    let scratch = workspace.join(".mcp-chat").join("tmp");
+    let _ = tokio::fs::create_dir_all(&artifacts).await;
+    let _ = tokio::fs::create_dir_all(&scratch).await;
+    let mut parts = vec![environment_block(&workspace, &artifacts, &scratch)];
     if let Some(instructions) = agents_block(&workspace, output_dir) {
         parts.push(instructions);
     }
@@ -93,15 +97,17 @@ pub async fn runtime_context(
     Ok(parts.join("\n\n"))
 }
 
-fn environment_block(workspace: &Path) -> String {
+fn environment_block(workspace: &Path, artifacts: &Path, scratch: &Path) -> String {
     let git = workspace.join(".git").exists();
     let shell = if cfg!(windows) { "powershell" } else { "sh" };
     format!(
-        "<env>\n  Working directory: {}\n  Workspace root folder: {}\n  Is directory a git repo: {}\n  Platform: {}\n  Default shell: {shell}\n  Shell state: each bash call is a fresh process; cd and variables do not persist.\n</env>",
+        "<env>\n  Working directory: {}\n  Workspace root folder: {}\n  Is directory a git repo: {}\n  Platform: {}\n  Default shell: {shell}\n  Shell state: each bash call is a fresh process; cd and variables do not persist.\n  Artifacts directory: {}\n  Scratch directory: {}\n  Both artifact/scratch directories are excluded from glob/grep.\n</env>",
         workspace.display(),
         workspace.display(),
         if git { "yes" } else { "no" },
-        std::env::consts::OS
+        std::env::consts::OS,
+        artifacts.display(),
+        scratch.display(),
     )
 }
 
