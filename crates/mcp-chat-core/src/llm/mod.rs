@@ -76,7 +76,8 @@ pub async fn complete(
     mut req: ChatRequest,
     cancel: CancellationToken,
 ) -> Result<String> {
-    req.tools.clear();
+    // Keep the caller's tool catalog so prefix caching can reuse the same
+    // tools block; disallow calls instead of removing the definitions.
     req.tool_choice = ToolChoice::None;
     let provider = provider_for(kind);
     let mut stream = provider.stream(req, cancel).await?;

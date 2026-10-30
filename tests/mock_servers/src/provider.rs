@@ -249,6 +249,14 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
         })
         .unwrap_or("");
     let tools_done = has_tool_result(&messages);
+    let compaction_request = system.contains("conversation compactor")
+        || messages
+            .as_array()
+            .and_then(|items| items.last())
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .map(|content| content.contains("Compaction task"))
+            .unwrap_or(false);
 
     match scenario.as_str() {
         "text" => text_response("Hello from the mock provider."),
@@ -470,7 +478,7 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
             text_response("Continued after interruption.")
         }
         "overflow" => {
-            if system.contains("conversation compactor") {
+            if compaction_request {
                 return text_response("Summary of earlier messages.");
             }
             let count = bump(&state, "overflow-main");

@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::ChatEngine;
-use crate::agent::context::{build_messages, estimate_tokens, transcript_for_summary};
+use crate::agent::context::{build_messages, estimate_tokens};
 use crate::agent::permissions::Effect;
 use crate::agent::tools::{
     MCP_SEARCH_TOOLS, ToolExecRequest, builtin_default_effect, builtin_tool_defs,
@@ -24,12 +24,31 @@ use crate::agent::types::{
 use crate::db::repo::{conversations, messages, settings};
 use crate::events::{CoreEvent, TurnStatus};
 use crate::llm::{
-    self, ChatMessage, ChatRequest, ChatRole, ContentBlock, Delta, FinishReason, ToolChoice,
-    ToolDef,
+    self, ChatMessage, ChatRequest, ChatRole, Delta, FinishReason, ToolChoice, ToolDef,
 };
 use crate::mcp::tools::ToolRegistry;
 use crate::models::{PartPayload, ProviderKind};
 use crate::{CoreError, Result, now_ms};
+
+const COMPACTION_INSTRUCTION: &str = r#"Compaction task: create a handoff summary of the older conversation above. The newest messages are retained verbatim and are not part of this request.
+
+Return only Markdown with exactly these sections. If a section has no content, write "(none)".
+
+## Objective
+## Requirements and constraints
+## Decisions
+## Completed
+## Active
+## Blockers
+## Next move
+## Relevant files and commands
+
+Rules:
+- Preserve exact file paths, identifiers, commands, errors, and user constraints.
+- Do not invent details; mark uncertainty instead.
+- If the system prompt contains a summary of earlier conversation, merge it: keep still-true facts, remove stale facts, and add new facts.
+- Write in the same language as the conversation.
+- Do not answer the conversation, call tools, or add commentary."#;
 
 struct Resolved {
     kind: ProviderKind,
@@ -296,7 +315,16 @@ async fn drive(
         let threshold = context_window.saturating_sub(buffer).max(1);
 
         if estimate > threshold {
-            match compact(&engine, &conversation, &resolved, &cancel).await {
+            match compact(
+                &engine,
+                &conversation,
+                &resolved,
+                &cancel,
+                system.as_deref(),
+                &tool_defs,
+            )
+            .await
+            {
                 Ok(()) => {
                     compacted_once = true;
                     let history =
@@ -374,7 +402,16 @@ async fn drive(
             let step_error = StepError::from_core(&error);
             if step_error.context_overflow && !compacted_once {
                 compacted_once = true;
-                if let Ok(()) = compact(&engine, &conversation, &resolved, &cancel).await {
+                if let Ok(()) = compact(
+                    &engine,
+                    &conversation,
+                    &resolved,
+                    &cancel,
+                    system.as_deref(),
+                    &tool_defs,
+                )
+                .await
+                {
                     continue;
                 }
             }
@@ -1348,6 +1385,8 @@ async fn compact(
     conversation: &crate::models::Conversation,
     resolved: &Resolved,
     cancel: &CancellationToken,
+    system: Option<&str>,
+    tool_defs: &[ToolDef],
 ) -> Result<()> {
     let history = messages::list_for_conversation(&engine.db.pool, &conversation.id).await?;
     if history.len() < 4 {
@@ -1381,25 +1420,22 @@ async fn compact(
         return Err(CoreError::Message("Not enough history to compact.".into()));
     }
     let boundary = &history[keep_start - 1];
-    let transcript = transcript_for_summary(&history[..keep_start]);
-    if transcript.trim().is_empty() {
+    // Keep the normal system prompt, tool definitions, and older messages as
+    // the request prefix so providers with prefix caching can reuse it. The
+    // compaction instruction is appended after that prefix.
+    let (mut older_messages, _) = build_messages(&history[..keep_start]).await;
+    if older_messages.is_empty() {
         return Err(CoreError::Message("Nothing to summarize.".into()));
     }
+    older_messages.push(ChatMessage::text(ChatRole::User, COMPACTION_INSTRUCTION));
     let request = ChatRequest {
         kind: resolved.kind,
         base_url: resolved.base_url.clone(),
         api_key: resolved.api_key.clone(),
         model: resolved.model.clone(),
-        system: Some(
-            "You are a precise conversation compactor. Preserve decisions, facts, user preferences, file paths, tool results and open tasks. Be compact but complete. Do not add commentary.".into(),
-        ),
-        messages: vec![ChatMessage {
-            role: ChatRole::User,
-            content: vec![ContentBlock::Text(format!(
-                "Summarize this conversation transcript:\n\n{transcript}"
-            ))],
-        }],
-        tools: Vec::new(),
+        system: system.map(str::to_owned),
+        messages: older_messages,
+        tools: tool_defs.to_vec(),
         tool_choice: ToolChoice::None,
         max_tokens: resolved.max_tokens.min(2048),
         temperature: None,
@@ -1545,5 +1581,31 @@ pub async fn compact_now(engine: Arc<ChatEngine>, conversation_id: &str) -> Resu
         max_tokens,
         system,
     };
-    compact(&engine, &conversation, &resolved, &CancellationToken::new()).await
+    let (registry, _, tool_defs, _, tool_mode) = load_tools(&engine, &conversation).await;
+    let lazy_note = if tool_mode == "lazy" {
+        lazy_tool_note(&registry)
+    } else {
+        None
+    };
+    let runtime_note =
+        crate::agent::prompt::runtime_context(&engine.db.pool, &engine.output_dir, conversation_id)
+            .await
+            .unwrap_or_default();
+    let history = messages::list_for_conversation(&engine.db.pool, conversation_id).await?;
+    let (_, summary) = build_messages(&history).await;
+    let system = crate::agent::prompt::compose_system(
+        resolved.system.clone(),
+        &runtime_note,
+        lazy_note.as_deref(),
+        summary.as_deref(),
+    );
+    compact(
+        &engine,
+        &conversation,
+        &resolved,
+        &CancellationToken::new(),
+        system.as_deref(),
+        &tool_defs,
+    )
+    .await
 }

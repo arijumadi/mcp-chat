@@ -473,6 +473,36 @@ async fn context_overflow_compacts_and_retries() {
             .unwrap()
             .contains("Summary")
     );
+
+    let requests = h.provider.requests();
+    assert!(
+        requests.len() >= 3,
+        "expected normal, compaction, retry requests"
+    );
+    let normal = &requests[0];
+    let compact = &requests[1];
+    assert_eq!(
+        normal["tools"], compact["tools"],
+        "compactor must reuse the normal tool catalog for prefix caching"
+    );
+    let normal_messages = normal["messages"].as_array().unwrap();
+    let compact_messages = compact["messages"].as_array().unwrap();
+    assert_eq!(normal_messages[0], compact_messages[0]);
+    for (normal_message, compact_message) in normal_messages
+        .iter()
+        .zip(compact_messages.iter())
+        .take(compact_messages.len().saturating_sub(1))
+    {
+        assert_eq!(normal_message, compact_message);
+    }
+    let instruction = compact_messages
+        .last()
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or("");
+    assert!(instruction.contains("Compaction task:"));
+    assert!(instruction.contains("## Objective"));
+    assert!(instruction.contains("## Next move"));
+    assert!(instruction.contains("merge it"));
     assert!(h.assistant_text().await.contains("After compaction."));
 }
 
