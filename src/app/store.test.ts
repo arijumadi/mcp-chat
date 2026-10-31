@@ -83,6 +83,36 @@ describe("transcript event reducer", () => {
     expect(payload.resultPreview).toBe("echo: hi");
   });
 
+  it("shows a compaction summary as a system row without reloading", () => {
+    apply({
+      type: "message_start",
+      conversationId: "c1",
+      messageId: "summary1",
+      role: "system",
+    });
+    apply({
+      type: "part",
+      conversationId: "c1",
+      messageId: "summary1",
+      partId: "part1",
+      kind: "summary",
+      payload: { text: "Earlier work", coversUntil: "m4" },
+    });
+    apply({
+      type: "message_end",
+      conversationId: "c1",
+      messageId: "summary1",
+      status: "completed",
+      error: null,
+    });
+    const message = get().messages[0]!;
+    expect(message.role).toBe("system");
+    expect(message.status).toBe("completed");
+    expect(message.parts[0]!.kind).toBe("summary");
+    expect(parsePayload(message.parts[0]!).text).toBe("Earlier work");
+    expect(get().streamingMessageId).toBeNull();
+  });
+
   it("queues approvals and clears them when the turn ends", () => {
     apply({
       type: "approval",

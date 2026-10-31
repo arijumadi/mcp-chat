@@ -1072,6 +1072,7 @@ async fn ensure_message(
             let _ = engine.events.send(CoreEvent::MessageStart {
                 conversation_id: conversation_id.to_owned(),
                 message_id: message.id.clone(),
+                role: None,
             });
             let _ = engine.events.send(CoreEvent::Status {
                 conversation_id: conversation_id.to_owned(),
@@ -1361,6 +1362,7 @@ async fn fail_turn(
                     let _ = engine.events.send(CoreEvent::MessageStart {
                         conversation_id: conversation_id.to_owned(),
                         message_id: message.id.clone(),
+                        role: None,
                     });
                     message.id
                 }
@@ -1468,7 +1470,7 @@ async fn compact(
     }
     let message =
         messages::create(&engine.db.pool, &conversation.id, "system", "completed").await?;
-    messages::append_part(
+    let part = messages::append_part(
         &engine.db.pool,
         &message.id,
         "summary",
@@ -1478,6 +1480,25 @@ async fn compact(
         },
     )
     .await?;
+    let _ = engine.events.send(CoreEvent::MessageStart {
+        conversation_id: conversation.id.clone(),
+        message_id: message.id.clone(),
+        role: Some("system".into()),
+    });
+    let payload = part.payload();
+    let _ = engine.events.send(CoreEvent::Part {
+        conversation_id: conversation.id.clone(),
+        message_id: message.id.clone(),
+        part_id: part.id,
+        kind: "summary".into(),
+        payload,
+    });
+    let _ = engine.events.send(CoreEvent::MessageEnd {
+        conversation_id: conversation.id.clone(),
+        message_id: message.id.clone(),
+        status: "completed".into(),
+        error: None,
+    });
     conversations::touch(&engine.db.pool, &conversation.id).await?;
     let _ = engine.events.send(CoreEvent::ConversationUpdated {
         conversation_id: conversation.id.clone(),

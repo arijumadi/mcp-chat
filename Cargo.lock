@@ -2769,7 +2769,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mcp-chat"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "arboard",
  "mcp-chat-core",
@@ -2791,7 +2791,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-chat-core"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2823,7 +2823,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-mock"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "axum",
  "bytes",

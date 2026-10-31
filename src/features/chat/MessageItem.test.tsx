@@ -15,7 +15,7 @@ function part(id: string, kind: string, payload: unknown): Part {
   };
 }
 
-function message(role: "user" | "assistant", parts: Part[]): MessageWithParts {
+function message(role: "user" | "assistant" | "system", parts: Part[]): MessageWithParts {
   return {
     id: "m1",
     conversationId: "c1",
@@ -92,6 +92,16 @@ describe("MessageItem", () => {
     render(<MessageItem message={item} canRetry={false} />);
     expect(screen.getByText("notes.txt")).toBeInTheDocument();
     expect(screen.getByTestId("user-message")).toBeInTheDocument();
+  });
+
+  it("renders a compaction summary in a system message", () => {
+    useApp.setState({ status: "idle" });
+    const item = message("system", [
+      part("summary", "summary", { text: "Earlier work", coversUntil: "m4" }),
+    ]);
+    render(<MessageItem message={item} canRetry={false} />);
+    expect(screen.getByText("Earlier conversation summary")).toBeInTheDocument();
+    expect(screen.getByText("Earlier work")).toBeInTheDocument();
   });
 
   it("copies only text from an assistant response", async () => {

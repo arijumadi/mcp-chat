@@ -304,7 +304,12 @@ export type TurnStatus =
 
 export type CoreEvent =
   | { type: "status"; conversationId: string; status: TurnStatus; message?: string | null }
-  | { type: "message_start"; conversationId: string; messageId: string }
+  | {
+      type: "message_start";
+      conversationId: string;
+      messageId: string;
+      role?: string;
+    }
   | {
       type: "delta";
       conversationId: string;

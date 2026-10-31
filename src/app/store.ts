@@ -916,20 +916,21 @@ export function applyCoreEvent(
       break;
     }
     case "message_start": {
+      const system = event.role === "system";
       set((state) => {
         if (state.messages.some((message) => message.id === event.messageId)) {
-          return { streamingMessageId: event.messageId };
+          return system ? {} : { streamingMessageId: event.messageId };
         }
         return {
-          streamingMessageId: event.messageId,
+          ...(system ? {} : { streamingMessageId: event.messageId }),
           messages: [
             ...state.messages,
             {
               id: event.messageId,
               conversationId: event.conversationId,
-              role: "assistant",
+              role: system ? "system" : "assistant",
               createdAt: Date.now(),
-              status: "streaming",
+              status: system ? "completed" : "streaming",
               error: null,
               parts: [],
             },

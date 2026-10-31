@@ -17,6 +17,9 @@ pub enum CoreEvent {
     MessageStart {
         conversation_id: String,
         message_id: String,
+        /// `assistant` for normal turns, `system` for compaction summaries.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
     },
     Delta {
         conversation_id: String,
@@ -113,6 +116,14 @@ mod tests {
         assert_eq!(value["messageId"], "m1");
         assert_eq!(value["partId"], "p1");
         assert_eq!(value["deltaType"], "text");
+
+        let start = CoreEvent::MessageStart {
+            conversation_id: "c1".into(),
+            message_id: "m1".into(),
+            role: Some("system".into()),
+        };
+        let value = serde_json::to_value(start).unwrap();
+        assert_eq!(value["role"], "system");
 
         let approval = CoreEvent::Approval {
             conversation_id: "c1".into(),

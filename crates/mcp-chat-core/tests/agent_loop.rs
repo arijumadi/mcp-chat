@@ -467,6 +467,17 @@ async fn context_overflow_compacts_and_retries() {
             ..
         }
     )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        CoreEvent::MessageStart {
+            role: Some(role),
+            ..
+        } if role == "system"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        CoreEvent::Part { kind, .. } if kind == "summary"
+    )));
     let history = h.history().await;
     let summary = history
         .iter()
