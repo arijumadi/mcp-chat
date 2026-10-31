@@ -73,6 +73,7 @@ export interface AppStore {
   steerMessage: (text: string) => Promise<void>;
   stageAttachments: (paths: string[]) => Promise<void>;
   stageImageFile: (file: File) => Promise<void>;
+  stageClipboardImage: () => Promise<void>;
   removeAttachment: (id: string) => Promise<void>;
   setDraft: (text: string) => void;
   stop: () => Promise<void>;
@@ -250,8 +251,6 @@ export const useApp = create<AppStore>()((set, get) => ({
       loadingOlder: false,
       view: "chat",
       status: "idle",
-      approvals: [],
-      inputRequests: [],
       usage: null,
       step: null,
       limitReached: false,
@@ -260,6 +259,29 @@ export const useApp = create<AppStore>()((set, get) => ({
       pendingAttachments: [],
     });
     await get().reloadActive();
+    const generating = await call<boolean>("is_generating", { conversationId: id }).catch(
+      () => false,
+    );
+    if (get().activeId !== id) return;
+    const pendingApproval =
+      generating && get().approvals.some((item) => item.conversationId === id);
+    const pendingInput =
+      generating && get().inputRequests.some((item) => item.conversationId === id);
+    set({
+      status: pendingApproval
+        ? "waiting_approval"
+        : pendingInput
+          ? "running_tool"
+          : generating
+            ? "thinking"
+            : "idle",
+      ...(generating
+        ? {}
+        : {
+            approvals: get().approvals.filter((item) => item.conversationId !== id),
+            inputRequests: get().inputRequests.filter((item) => item.conversationId !== id),
+          }),
+    });
     const autoApprove = await call<boolean>("get_auto_approve", {
       conversationId: id,
     }).catch(() => false);
@@ -289,8 +311,6 @@ export const useApp = create<AppStore>()((set, get) => ({
         draft: seed,
         view: "chat",
         status: "idle",
-        approvals: [],
-        inputRequests: [],
         usage: null,
         step: null,
         limitReached: false,
@@ -352,8 +372,12 @@ export const useApp = create<AppStore>()((set, get) => ({
       messages: [...state.messages, optimistic],
       draft: "",
       status: "thinking",
-      approvals: [],
-      inputRequests: [],
+      approvals: state.approvals.filter(
+        (item) => item.conversationId !== conversationId,
+      ),
+      inputRequests: state.inputRequests.filter(
+        (item) => item.conversationId !== conversationId,
+      ),
       usage: null,
       step: null,
       limitReached: false,
@@ -417,8 +441,12 @@ export const useApp = create<AppStore>()((set, get) => ({
           messages,
           status: "thinking",
           streamingMessageId: null,
-          approvals: [],
-          inputRequests: [],
+          approvals: state.approvals.filter(
+            (item) => item.conversationId !== conversationId,
+          ),
+          inputRequests: state.inputRequests.filter(
+            (item) => item.conversationId !== conversationId,
+          ),
           usage: null,
           step: null,
           limitReached: false,
@@ -489,6 +517,21 @@ export const useApp = create<AppStore>()((set, get) => ({
     }
   },
 
+  async stageClipboardImage() {
+    if (get().pendingAttachments.length >= 6) {
+      get().toast("You can attach up to 6 files per message.", "error");
+      return;
+    }
+    try {
+      const staged = await call<Attachment>("read_clipboard_image");
+      set((state) => ({
+        pendingAttachments: [...state.pendingAttachments, staged].slice(0, 6),
+      }));
+    } catch (error) {
+      get().toast(String(error), "error");
+    }
+  },
+
   async removeAttachment(id) {
     set((state) => ({
       pendingAttachments: state.pendingAttachments.filter(
@@ -520,13 +563,17 @@ export const useApp = create<AppStore>()((set, get) => ({
     const conversationId = get().activeId;
     if (!conversationId) return;
     try {
-      set({
+      set((state) => ({
         status: "thinking",
-        approvals: [],
-        inputRequests: [],
+        approvals: state.approvals.filter(
+          (item) => item.conversationId !== conversationId,
+        ),
+        inputRequests: state.inputRequests.filter(
+          (item) => item.conversationId !== conversationId,
+        ),
         step: null,
         limitReached: false,
-      });
+      }));
       await call("regenerate", { conversationId });
       await get().reloadActive();
     } catch (error) {
@@ -549,16 +596,20 @@ export const useApp = create<AppStore>()((set, get) => ({
       await get().reloadActive();
       if (get().activeId !== conversationId) return;
       discardStaged(get().pendingAttachments);
-      set({
+      set((state) => ({
         draft: result.text,
         pendingAttachments: result.attachments,
         status: "idle",
         usage: null,
         step: null,
         limitReached: false,
-        approvals: [],
-        inputRequests: [],
-      });
+        approvals: state.approvals.filter(
+          (item) => item.conversationId !== conversationId,
+        ),
+        inputRequests: state.inputRequests.filter(
+          (item) => item.conversationId !== conversationId,
+        ),
+      }));
       requestAnimationFrame(() => {
         document
           .querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')
@@ -574,13 +625,17 @@ export const useApp = create<AppStore>()((set, get) => ({
     const conversationId = get().activeId;
     if (!conversationId) return;
     try {
-      set({
+      set((state) => ({
         status: "thinking",
-        approvals: [],
-        inputRequests: [],
+        approvals: state.approvals.filter(
+          (item) => item.conversationId !== conversationId,
+        ),
+        inputRequests: state.inputRequests.filter(
+          (item) => item.conversationId !== conversationId,
+        ),
         step: null,
         limitReached: false,
-      });
+      }));
       await call("continue_turn", { conversationId });
     } catch (error) {
       set({ status: "error" });
@@ -816,7 +871,32 @@ export function applyCoreEvent(
 ) {
   const active = get().activeId;
   if ("conversationId" in event && event.conversationId && event.conversationId !== active) {
-    if (event.type === "conversation_updated") void get().refreshConversations();
+    const conversationId = event.conversationId;
+    if (event.type === "approval") {
+      set((state) => ({
+        approvals: state.approvals.some((item) => item.callId === event.callId)
+          ? state.approvals
+          : [...state.approvals, event],
+      }));
+    } else if (event.type === "input_request") {
+      set((state) => ({
+        inputRequests: state.inputRequests.some((item) => item.callId === event.callId)
+          ? state.inputRequests
+          : [...state.inputRequests, event],
+      }));
+    } else if (
+      event.type === "status" &&
+      (event.status === "idle" || event.status === "error")
+    ) {
+      set((state) => ({
+        approvals: state.approvals.filter((item) => item.conversationId !== conversationId),
+        inputRequests: state.inputRequests.filter(
+          (item) => item.conversationId !== conversationId,
+        ),
+      }));
+    } else if (event.type === "conversation_updated") {
+      void get().refreshConversations();
+    }
     return;
   }
   switch (event.type) {
@@ -824,8 +904,12 @@ export function applyCoreEvent(
       const patch: Partial<AppStore> = { status: event.status };
       if (event.status === "idle" || event.status === "error") {
         patch.streamingMessageId = null;
-        patch.approvals = [];
-        patch.inputRequests = [];
+        patch.approvals = get().approvals.filter(
+          (item) => item.conversationId !== event.conversationId,
+        );
+        patch.inputRequests = get().inputRequests.filter(
+          (item) => item.conversationId !== event.conversationId,
+        );
       }
       set(patch);
       if (event.message && event.status === "error") get().toast(event.message, "error");
@@ -981,10 +1065,30 @@ export function applyCoreEvent(
         if (get().activeId !== id) return;
         await get().reloadActive();
         if (get().activeId !== id) return;
-        set({
-          status: active ? "thinking" : "idle",
-          streamingMessageId: active ? get().streamingMessageId : null,
-        });
+        const pendingApproval =
+          active && get().approvals.some((item) => item.conversationId === id);
+        const pendingInput =
+          active && get().inputRequests.some((item) => item.conversationId === id);
+        set((state) => ({
+          status: pendingApproval
+            ? "waiting_approval"
+            : pendingInput
+              ? "running_tool"
+              : active
+                ? "thinking"
+                : "idle",
+          streamingMessageId: active ? state.streamingMessageId : null,
+          ...(active
+            ? {}
+            : {
+                approvals: state.approvals.filter(
+                  (item) => item.conversationId !== id,
+                ),
+                inputRequests: state.inputRequests.filter(
+                  (item) => item.conversationId !== id,
+                ),
+              }),
+        }));
       })();
       get().toast(event.reason, "info");
       break;

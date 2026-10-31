@@ -29,7 +29,7 @@ describe("InputRequestModal", () => {
         ],
       },
     };
-    useApp.setState({ inputRequests: [request], respondInput });
+    useApp.setState({ activeId: "c1", inputRequests: [request], respondInput });
     render(<InputRequestModal />);
 
     expect(screen.getByText("The model needs input")).toBeInTheDocument();

@@ -37,6 +37,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const pendingAttachments = useApp((state) => state.pendingAttachments);
   const stageAttachments = useApp((state) => state.stageAttachments);
   const stageImageFile = useApp((state) => state.stageImageFile);
+  const stageClipboardImage = useApp((state) => state.stageClipboardImage);
   const removeAttachment = useApp((state) => state.removeAttachment);
   const [attaching, setAttaching] = useState(false);
   const [steering, setSteering] = useState(false);
@@ -155,11 +156,24 @@ export function Composer({ conversation }: { conversation: Conversation }) {
     const image = Array.from(event.clipboardData?.items ?? []).find(
       (item) => item.kind === "file" && item.type.startsWith("image/"),
     );
-    if (!image) return;
-    const file = image.getAsFile();
-    if (!file) return;
+    const file = image?.getAsFile();
+    if (file) {
+      event.preventDefault();
+      void stageImageFile(file);
+      return;
+    }
+    if (window.__MCP_CHAT_MOCK__ || !("__TAURI_INTERNALS__" in window)) return;
+
+    // WebKitGTK does not expose clipboard images through clipboardData on
+    // Linux. When an image item is present without a blob, or the clipboard
+    // has no text at all, ask the native clipboard reader for an image.
+    if (!image) {
+      const plain = event.clipboardData?.getData("text/plain") ?? "";
+      const html = event.clipboardData?.getData("text/html") ?? "";
+      if (plain.trim() || html.trim()) return;
+    }
     event.preventDefault();
-    void stageImageFile(file);
+    void stageClipboardImage().finally(() => ref.current?.focus());
   };
 
   const chooseFiles = async () => {

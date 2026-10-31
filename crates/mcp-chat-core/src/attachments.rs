@@ -445,10 +445,18 @@ pub async fn stage_image(root: &Path, data: &str, name: Option<&str>) -> Result<
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(payload.trim())
         .map_err(|_| invalid("Clipboard image is not valid base64."))?;
+    stage_image_bytes(root, &bytes, name).await
+}
+
+pub async fn stage_image_bytes(
+    root: &Path,
+    bytes: &[u8],
+    name: Option<&str>,
+) -> Result<Attachment> {
     if bytes.len() as u64 > MAX_IMAGE_BYTES {
         return Err(invalid("Clipboard image is larger than 5 MB."));
     }
-    let mime = image_mime(&bytes).ok_or_else(|| {
+    let mime = image_mime(bytes).ok_or_else(|| {
         invalid("Clipboard data is not a supported PNG, JPEG, GIF or WebP image.")
     })?;
     let extension = match mime {
@@ -467,7 +475,7 @@ pub async fn stage_image(root: &Path, data: &str, name: Option<&str>) -> Result<
     let dir = root.join("pending").join(&id);
     fs::create_dir_all(&dir).await?;
     let path = dir.join(&name);
-    if let Err(error) = fs::write(&path, &bytes).await {
+    if let Err(error) = fs::write(&path, bytes).await {
         let _ = fs::remove_dir_all(&dir).await;
         return Err(error.into());
     }

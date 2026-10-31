@@ -100,6 +100,80 @@ describe("transcript event reducer", () => {
     expect(get().status).toBe("idle");
   });
 
+  it("keeps approvals for an inactive chat until that turn ends", () => {
+    apply({
+      type: "approval",
+      conversationId: "c2",
+      callId: "call2",
+      server: "Mock",
+      tool: "echo",
+      args: {},
+      allowAlways: true,
+    });
+    expect(get().approvals).toHaveLength(1);
+    expect(get().status).toBe("idle");
+    apply({ type: "status", conversationId: "c2", status: "idle" });
+    expect(get().approvals).toHaveLength(0);
+  });
+
+  it("restores a pending approval when switching back to a generating chat", async () => {
+    const approval = {
+      type: "approval" as const,
+      conversationId: "c2",
+      callId: "call2",
+      server: "Mock",
+      tool: "echo",
+      args: {},
+      allowAlways: true,
+    };
+    useApp.setState({ approvals: [approval] });
+    window.__MCP_CHAT_MOCK__ = {
+      invoke: async <T,>(command: string) => {
+        if (command === "get_messages_page") {
+          return { messages: [], hasMore: false } as T;
+        }
+        if (command === "is_generating") return true as T;
+        if (command === "get_auto_approve") return false as T;
+        return [] as unknown as T;
+      },
+      subscribe: () => () => undefined,
+    };
+    await get().openConversation("c2");
+    expect(get().activeId).toBe("c2");
+    expect(get().status).toBe("waiting_approval");
+    expect(get().approvals).toHaveLength(1);
+  });
+
+  it("drops stale approvals when the chat is no longer generating", async () => {
+    useApp.setState({
+      approvals: [
+        {
+          type: "approval",
+          conversationId: "c2",
+          callId: "call2",
+          server: "Mock",
+          tool: "echo",
+          args: {},
+          allowAlways: true,
+        },
+      ],
+    });
+    window.__MCP_CHAT_MOCK__ = {
+      invoke: async <T,>(command: string) => {
+        if (command === "get_messages_page") {
+          return { messages: [], hasMore: false } as T;
+        }
+        if (command === "is_generating") return false as T;
+        if (command === "get_auto_approve") return false as T;
+        return [] as unknown as T;
+      },
+      subscribe: () => () => undefined,
+    };
+    await get().openConversation("c2");
+    expect(get().status).toBe("idle");
+    expect(get().approvals).toHaveLength(0);
+  });
+
   it("ignores events from another conversation", () => {
     apply({
       type: "delta",

@@ -9,9 +9,10 @@ import type { InputRequestEvent, QuestionPrompt } from "@/lib/types";
 
 export function InputRequestModal() {
   const requests = useApp((state) => state.inputRequests);
+  const activeId = useApp((state) => state.activeId);
   const respond = useApp((state) => state.respondInput);
   const toast = useApp((state) => state.toast);
-  const request = requests[0];
+  const request = requests.find((item) => item.conversationId === activeId);
   const [values, setValues] = useState<Record<string, Record<string, unknown>>>({});
   const [error, setError] = useState<string | null>(null);
 

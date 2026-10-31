@@ -8,10 +8,12 @@ import { inputClass } from "@/components/ui";
 
 export function ApprovalModal() {
   const approvals = useApp((state) => state.approvals);
+  const activeId = useApp((state) => state.activeId);
   const respond = useApp((state) => state.respondApproval);
   const [feedback, setFeedback] = useState("");
   const [rejecting, setRejecting] = useState(false);
-  const approval = approvals[0];
+  const pending = approvals.filter((item) => item.conversationId === activeId);
+  const approval = pending[0];
 
   useEffect(() => {
     setFeedback("");
@@ -33,7 +35,7 @@ export function ApprovalModal() {
       subtitle={
         <>
           {approval.server} wants to run <code className="font-mono">{approval.tool}</code>
-          {approvals.length > 1 ? ` · 1 of ${approvals.length} pending` : ""}
+          {pending.length > 1 ? ` · 1 of ${pending.length} pending` : ""}
         </>
       }
       footer={

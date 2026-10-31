@@ -79,6 +79,7 @@ pub fn run() {
             commands::chat::list_conversations,
             commands::attachments::stage_attachments,
             commands::attachments::stage_attachment_bytes,
+            commands::attachments::read_clipboard_image,
             commands::attachments::discard_staged_attachments,
             commands::chat::search_conversations,
             commands::chat::get_conversation,
