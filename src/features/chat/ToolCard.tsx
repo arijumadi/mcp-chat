@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -8,7 +9,7 @@ import {
   Loader2,
   XCircle,
 } from "lucide-react";
-import type { Part, ToolCallPayload } from "@/lib/types";
+import type { Part, ToolCallPayload, ToolImage } from "@/lib/types";
 import { parsePayload } from "@/app/store";
 import { formatDuration, formatJson } from "@/lib/format";
 import { call } from "@/lib/ipc";
@@ -32,6 +33,7 @@ export function ToolCard({ part }: { part: Part }) {
   const state = payload.state ?? "running";
   const exitCode = typeof payload.exitCode === "number" ? payload.exitCode : null;
   const nonzeroExit = state === "completed" && exitCode !== null && exitCode !== 0;
+  const image = (payload.image ?? null) as ToolImage | null;
   const metaArgs = (payload.args ?? {}) as Record<string, unknown>;
   const isMetaCall = payload.name === "mcp_call_tool";
   const isBatch = payload.name === "mcp_execute";
@@ -143,6 +145,23 @@ export function ToolCard({ part }: { part: Part }) {
             )}
           </span>
         </div>
+
+        {image && image.path ? (
+          <div className="px-3 pb-2">
+            {imageUrl(image.path) ? (
+              <img
+                src={imageUrl(image.path)}
+                alt={image.name}
+                className="max-h-56 max-w-full rounded-md border object-contain"
+                style={{ borderColor: "var(--border)" }}
+              />
+            ) : (
+              <div className="text-[11.5px]" style={{ color: "var(--muted)" }}>
+                Image: {image.name} ({image.mime})
+              </div>
+            )}
+          </div>
+        ) : null}
 
         {state === "running" && typeof raw.progress === "number" ? (
           <div className="px-3 pb-2">
@@ -288,6 +307,15 @@ export function ToolCard({ part }: { part: Part }) {
       </Modal>
     </>
   );
+}
+
+function imageUrl(path: string): string {
+  if (!path || window.__MCP_CHAT_MOCK__ || !("__TAURI_INTERNALS__" in window)) return "";
+  try {
+    return convertFileSrc(path);
+  } catch {
+    return "";
+  }
 }
 
 function StatusIcon({ state, nonzeroExit }: { state: string; nonzeroExit?: boolean }) {

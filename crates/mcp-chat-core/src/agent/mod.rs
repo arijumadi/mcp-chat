@@ -64,6 +64,7 @@ impl ChatEngine {
             inputs: inputs.clone(),
             events: events.clone(),
             output_dir: output_dir.clone(),
+            attachments_dir: attachments_dir.clone(),
             limiter: Arc::new(Semaphore::new(4)),
         });
         Arc::new(Self {

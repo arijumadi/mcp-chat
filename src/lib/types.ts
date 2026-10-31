@@ -182,6 +182,13 @@ export interface ReasoningPayload {
   text: string;
 }
 
+export interface ToolImage {
+  name: string;
+  mime: string;
+  path: string;
+  size: number;
+}
+
 export interface ToolCallPayload {
   callId: string;
   name: string;
@@ -197,6 +204,7 @@ export interface ToolCallPayload {
   fullResultRef?: string | null;
   truncated?: boolean;
   exitCode?: number | null;
+  image?: ToolImage | null;
 }
 
 export interface ToolResultPayload {

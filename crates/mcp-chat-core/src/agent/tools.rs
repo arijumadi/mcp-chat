@@ -9,6 +9,7 @@ use globset::GlobBuilder;
 use regex::RegexBuilder;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::{Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
@@ -44,6 +45,7 @@ pub struct ToolExecutor {
     pub inputs: Arc<InputRegistry>,
     pub events: broadcast::Sender<CoreEvent>,
     pub output_dir: PathBuf,
+    pub attachments_dir: PathBuf,
     pub limiter: Arc<Semaphore>,
 }
 
@@ -924,7 +926,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "read".into(),
-            description: "Read a UTF-8 text file with line numbers. Explicit outside paths need approval unless auto mode is on. Use offset and limit for large files.".into(),
+            description: "Read a text file with line numbers, or an image file as a visual attachment. Explicit outside paths need approval unless auto mode is on. Use offset and limit for large text files.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1473,6 +1475,10 @@ impl ToolExecutor {
                 } else {
                     None
                 };
+                let image = structured
+                    .as_ref()
+                    .and_then(|value| value.get("image"))
+                    .cloned();
                 let mut full_result_ref = None;
                 let mut truncated = false;
                 let is_pager = req.remote_name == "read_tool_output";
@@ -1515,6 +1521,7 @@ impl ToolExecutor {
                         "fullResultRef": full_result_ref,
                         "truncated": truncated,
                         "exitCode": exit_code,
+                        "image": image,
                         "error": if ok { Value::Null } else { Value::String(preview.clone()) }
                     }),
                 )
@@ -2525,11 +2532,26 @@ impl ToolExecutor {
             raw,
             req.auto_approve || req.allow_outside_workspace,
         )?;
+        let relative = display_relative(&workspace, &path);
+        let mut head = [0_u8; 32];
+        let mut file = tokio::fs::File::open(&path).await?;
+        let read = file.read(&mut head).await?;
+        if let Some(mime) = crate::attachments::image_mime(&head[..read]) {
+            let attachment =
+                crate::attachments::store_read_image(&self.attachments_dir, &path).await?;
+            return Ok(Rendered {
+                content: format!(
+                    "Image loaded: {} ({}, {} bytes)",
+                    relative, mime, attachment.size
+                ),
+                structured: Some(json!({"image": attachment})),
+                ok: true,
+            });
+        }
         let content = read_text_file(&path).await?;
         let content = strip_utf8_bom(&content);
         let lines = content.lines().collect::<Vec<_>>();
         let total = lines.len();
-        let relative = display_relative(&workspace, &path);
         if total == 0 {
             return Ok(Rendered {
                 content: format!("{relative} is empty."),
@@ -3751,6 +3773,7 @@ mod tests {
             inputs: Arc::new(InputRegistry::default()),
             events,
             output_dir: workspace.join("tool-output"),
+            attachments_dir: workspace.join("attachments"),
             limiter: Arc::new(Semaphore::new(4)),
         }
     }
@@ -3902,6 +3925,33 @@ mod tests {
         assert!(result.ok, "{}", result.content);
         assert!(result.content.contains("[exit code 1]"));
         assert_eq!(result.structured.as_ref().unwrap()["exitCode"], 1);
+    }
+
+    #[tokio::test]
+    async fn read_stages_images_as_visual_tool_results() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let image = workspace.join("pixel.png");
+        std::fs::write(&image, b"\x89PNG\r\n\x1a\npixel-bytes").unwrap();
+        let executor = test_executor(&workspace).await;
+        let result = executor
+            .run_read(&request(
+                "read",
+                json!({"filePath": image.to_string_lossy()}),
+            ))
+            .await
+            .unwrap();
+        assert!(result.ok);
+        assert!(result.content.contains("Image loaded"));
+        let image = result
+            .structured
+            .as_ref()
+            .and_then(|value| value.get("image"))
+            .expect("image metadata");
+        assert_eq!(image["mime"], "image/png");
+        let path = image["path"].as_str().unwrap();
+        assert!(std::path::Path::new(path).is_file());
+        assert!(path.contains("read-images"));
     }
 
     #[tokio::test]

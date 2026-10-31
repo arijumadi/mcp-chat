@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use base64::Engine;
+use serde_json::Value;
 use tokio::fs;
 
 use crate::llm::{ChatMessage, ChatRole, ContentBlock, ToolDef};
@@ -54,6 +55,20 @@ pub fn latest_summary(history: &[MessageWithParts]) -> Option<(String, String)> 
 
 /// Convert persisted parts into the canonical provider history. Every tool call
 /// gets a matching tool result, even if the app crashed before it settled.
+async fn flush_tool_images(messages: &mut Vec<ChatMessage>, pending: &mut Vec<ContentBlock>) {
+    if pending.is_empty() {
+        return;
+    }
+    let mut blocks = vec![ContentBlock::Text(
+        "[Image returned by the read tool]".to_owned(),
+    )];
+    blocks.append(pending);
+    messages.push(ChatMessage {
+        role: ChatRole::User,
+        content: blocks,
+    });
+}
+
 pub async fn build_messages(history: &[MessageWithParts]) -> (Vec<ChatMessage>, Option<String>) {
     let summary = latest_summary(history);
     let mut start = 0;
@@ -89,6 +104,7 @@ pub async fn build_messages(history: &[MessageWithParts]) -> (Vec<ChatMessage>, 
     }
 
     let mut messages = Vec::new();
+    let mut pending_tool_images: Vec<ContentBlock> = Vec::new();
     let mut synthesized: HashSet<String> = HashSet::new();
 
     for message in history.iter().skip(start) {
@@ -97,6 +113,7 @@ pub async fn build_messages(history: &[MessageWithParts]) -> (Vec<ChatMessage>, 
         }
         match message.message.role.as_str() {
             "user" => {
+                flush_tool_images(&mut messages, &mut pending_tool_images).await;
                 let text = text_parts(&message.parts);
                 let attachments: Vec<&Part> = message
                     .parts
@@ -183,12 +200,14 @@ pub async fn build_messages(history: &[MessageWithParts]) -> (Vec<ChatMessage>, 
                 });
             }
             "system" => {
+                flush_tool_images(&mut messages, &mut pending_tool_images).await;
                 let text = text_parts(&message.parts);
                 if !text.trim().is_empty() {
                     messages.push(ChatMessage::text(ChatRole::System, text));
                 }
             }
             "assistant" => {
+                flush_tool_images(&mut messages, &mut pending_tool_images).await;
                 let mut blocks = Vec::new();
                 let mut calls = Vec::new();
                 for part in &message.parts {
@@ -290,11 +309,40 @@ pub async fn build_messages(history: &[MessageWithParts]) -> (Vec<ChatMessage>, 
                         content: blocks,
                     });
                 }
+                for part in &message.parts {
+                    if part.kind != "tool_result" {
+                        continue;
+                    }
+                    let payload = part.payload();
+                    let Some(image) = payload
+                        .get("structured")
+                        .and_then(|value| value.get("image"))
+                    else {
+                        continue;
+                    };
+                    let Some(path) = image.get("path").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let mime = image
+                        .get("mime")
+                        .and_then(Value::as_str)
+                        .unwrap_or("image/png");
+                    match fs::read(path).await {
+                        Ok(bytes) => pending_tool_images.push(ContentBlock::Image {
+                            media_type: mime.to_owned(),
+                            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                        }),
+                        Err(_) => pending_tool_images.push(ContentBlock::Text(format!(
+                            "[Tool image could not be read: {path}]"
+                        ))),
+                    }
+                }
             }
             _ => {}
         }
     }
 
+    flush_tool_images(&mut messages, &mut pending_tool_images).await;
     (messages, summary_text)
 }
 
@@ -482,6 +530,55 @@ mod tests {
         );
         assert!(matches!(
             &messages[0].content[1],
+            ContentBlock::Image { media_type, data } if media_type == "image/png" && data == "aW1hZ2UtYnl0ZXM="
+        ));
+    }
+
+    #[tokio::test]
+    async fn tool_images_become_a_user_image_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("pixel.png");
+        tokio::fs::write(&image, b"image-bytes").await.unwrap();
+        let history = vec![MessageWithParts {
+            message: Message {
+                id: "tool-message".into(),
+                conversation_id: "c1".into(),
+                role: "tool".into(),
+                created_at: 0,
+                status: "completed".into(),
+                error: None,
+            },
+            parts: vec![Part {
+                id: "result".into(),
+                message_id: "tool-message".into(),
+                idx: 0,
+                kind: "tool_result".into(),
+                payload_json: json!({
+                    "callId": "call-1",
+                    "name": "read",
+                    "server": "mcp-chat",
+                    "ok": true,
+                    "content": "Image loaded",
+                    "structured": {
+                        "image": {
+                            "name": "pixel.png",
+                            "mime": "image/png",
+                            "path": image.to_string_lossy(),
+                            "size": 11
+                        }
+                    },
+                    "fullResultRef": null,
+                    "truncated": false
+                })
+                .to_string(),
+            }],
+        }];
+        let (messages, _) = build_messages(&history).await;
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(messages[0].role, ChatRole::Tool));
+        assert!(matches!(messages[1].role, ChatRole::User));
+        assert!(matches!(
+            &messages[1].content[1],
             ContentBlock::Image { media_type, data } if media_type == "image/png" && data == "aW1hZ2UtYnl0ZXM="
         ));
     }

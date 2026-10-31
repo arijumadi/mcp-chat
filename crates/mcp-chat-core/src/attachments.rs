@@ -117,7 +117,7 @@ fn ext(path: &Path) -> String {
         .to_ascii_lowercase()
 }
 
-fn image_mime(head: &[u8]) -> Option<&'static str> {
+pub(crate) fn image_mime(head: &[u8]) -> Option<&'static str> {
     if head.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
     } else if head.starts_with(b"\xff\xd8\xff") {
@@ -414,6 +414,28 @@ pub async fn stage(root: &Path, paths: &[String]) -> Result<Vec<Attachment>> {
 }
 
 /// Stage a clipboard image (data URL or raw base64) without a filesystem path.
+/// Copy an image read by the agent into persistent attachment storage. Unlike
+/// a composer pending attachment, this copy is not swept after 24 hours
+/// because the tool result may be replayed from conversation history later.
+pub async fn store_read_image(root: &Path, source: &Path) -> Result<Attachment> {
+    let mut staged = stage(root, &[source.to_string_lossy().into_owned()]).await?;
+    let mut attachment = staged.remove(0);
+    let pending_dir = root.join("pending").join(&attachment.id);
+    let images = root.join("read-images");
+    fs::create_dir_all(&images).await?;
+    let destination = images.join(&attachment.id);
+    if let Err(error) = fs::rename(&pending_dir, &destination).await {
+        let _ = fs::remove_dir_all(&pending_dir).await;
+        return Err(error.into());
+    }
+    let _ = fs::remove_file(destination.join(META_FILE)).await;
+    attachment.path = destination
+        .join(&attachment.name)
+        .to_string_lossy()
+        .into_owned();
+    Ok(attachment)
+}
+
 pub async fn stage_image(root: &Path, data: &str, name: Option<&str>) -> Result<Attachment> {
     let payload = data
         .split_once(',')
