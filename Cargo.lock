@@ -2769,7 +2769,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mcp-chat"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "arboard",
  "mcp-chat-core",
@@ -2791,7 +2791,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-chat-core"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2809,6 +2809,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "similar",
  "sqlx",
  "tempfile",
  "thiserror 2.0.21",
@@ -2823,7 +2824,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-mock"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "axum",
  "bytes",
@@ -4471,6 +4472,12 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "siphasher"

@@ -243,6 +243,7 @@ export interface ApprovalEvent {
   tool: string;
   args: Record<string, unknown>;
   allowAlways: boolean;
+  diff?: string | null;
 }
 
 export interface QuestionOption {

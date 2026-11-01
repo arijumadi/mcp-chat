@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use tokio::fs;
 
+use crate::agent::diff;
 use crate::agent::tools::{display_relative, path_is_outside, resolve_write_path};
 use crate::{CoreError, Result};
 
@@ -33,6 +34,8 @@ struct Hunk {
     new: Vec<String>,
     additions: usize,
     deletions: usize,
+    context: Option<String>,
+    end_of_file: bool,
 }
 
 #[derive(Debug)]
@@ -44,6 +47,50 @@ struct Change {
 
 pub struct PatchResult {
     lines: Vec<String>,
+}
+
+pub struct PatchPlan {
+    changes: Vec<Change>,
+    results: Vec<String>,
+}
+
+impl PatchPlan {
+    pub fn target_paths(&self) -> Vec<PathBuf> {
+        self.changes
+            .iter()
+            .map(|change| change.path.clone())
+            .collect()
+    }
+
+    pub async fn commit(&self) -> Result<()> {
+        commit(&self.changes).await
+    }
+
+    pub fn result(&self) -> PatchResult {
+        PatchResult {
+            lines: self.results.clone(),
+        }
+    }
+
+    pub fn diff(&self, workspace: &Path) -> String {
+        let mut out = String::new();
+        for change in &self.changes {
+            let before = change.old.as_deref().unwrap_or("");
+            let after = change.new.as_deref().unwrap_or("");
+            if before == after {
+                continue;
+            }
+            let part = diff::file_diff(&relative(workspace, &change.path), before, after);
+            if part.is_empty() {
+                continue;
+            }
+            out.push_str(&part);
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        diff::cap(out)
+    }
 }
 
 impl PatchResult {
@@ -84,6 +131,66 @@ pub async fn apply_with_scope(
     patch_text: &str,
     allow_outside: bool,
 ) -> Result<PatchResult> {
+    let plan = prepare_with_scope(workspace, patch_text, allow_outside).await?;
+    plan.commit().await?;
+    Ok(plan.result())
+}
+
+pub async fn preview_with_scope(
+    workspace: &Path,
+    patch_text: &str,
+    allow_outside: bool,
+) -> Result<String> {
+    let plan = prepare_with_scope(workspace, patch_text, allow_outside).await?;
+    Ok(plan.diff(workspace))
+}
+
+/// Resolve and deduplicate every path a patch will touch, without reading or
+/// writing files. Callers use this to hold file locks across prepare + commit.
+pub fn target_paths(
+    workspace: &Path,
+    patch_text: &str,
+    allow_outside: bool,
+) -> Result<Vec<PathBuf>> {
+    if patch_text.len() > MAX_PATCH_BYTES {
+        return Err(CoreError::invalid(format!(
+            "Patch is too large ({} bytes); limit is {} bytes.",
+            patch_text.len(),
+            MAX_PATCH_BYTES
+        )));
+    }
+    let operations = parse(patch_text)?;
+    if operations.len() > MAX_PATCH_FILES {
+        return Err(CoreError::invalid(format!(
+            "Patch touches too many files ({}); limit is {}.",
+            operations.len(),
+            MAX_PATCH_FILES
+        )));
+    }
+    let mut paths = Vec::new();
+    for operation in operations {
+        match operation {
+            Operation::Add { path, .. } | Operation::Delete { path } => {
+                paths.push(resolve_write_path(workspace, &path, allow_outside)?);
+            }
+            Operation::Update { path, move_to, .. } => {
+                paths.push(resolve_write_path(workspace, &path, allow_outside)?);
+                if let Some(destination) = move_to {
+                    paths.push(resolve_write_path(workspace, &destination, allow_outside)?);
+                }
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+async fn prepare_with_scope(
+    workspace: &Path,
+    patch_text: &str,
+    allow_outside: bool,
+) -> Result<PatchPlan> {
     if patch_text.len() > MAX_PATCH_BYTES {
         return Err(CoreError::invalid(format!(
             "Patch is too large ({} bytes); limit is {} bytes.",
@@ -190,8 +297,7 @@ pub async fn apply_with_scope(
         }
     }
 
-    commit(&changes).await?;
-    Ok(PatchResult { lines: results })
+    Ok(PatchPlan { changes, results })
 }
 
 async fn ensure_new_path(path: &Path, seen: &mut HashSet<String>) -> Result<()> {
@@ -286,6 +392,9 @@ fn parse(patch_text: &str) -> Result<Vec<Operation>> {
                     continue;
                 }
                 if line.trim() == "*** End of File" {
+                    if let Some(hunk) = current.as_mut() {
+                        hunk.end_of_file = true;
+                    }
                     index += 1;
                     continue;
                 }
@@ -296,11 +405,19 @@ fn parse(patch_text: &str) -> Result<Vec<Operation>> {
                     if let Some(hunk) = current.take() {
                         hunks.push(hunk);
                     }
+                    let context = line
+                        .trim()
+                        .strip_prefix("@@")
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned);
                     current = Some(Hunk {
                         old: Vec::new(),
                         new: Vec::new(),
                         additions: 0,
                         deletions: 0,
+                        context,
+                        end_of_file: false,
                     });
                     index += 1;
                     continue;
@@ -323,6 +440,8 @@ fn parse(patch_text: &str) -> Result<Vec<Operation>> {
                     new: Vec::new(),
                     additions: 0,
                     deletions: 0,
+                    context: None,
+                    end_of_file: false,
                 });
                 match prefix {
                     " " => {
@@ -393,21 +512,50 @@ fn apply_hunks(content: &str, hunks: &[Hunk]) -> Result<(String, usize, usize)> 
     let mut additions = 0usize;
     let mut deletions = 0usize;
     for (hunk_index, hunk) in hunks.iter().enumerate() {
-        let old_len = hunk.old.len();
-        let found = if old_len == 0 {
-            Some(cursor.min(lines.len()))
+        if let Some(context) = &hunk.context {
+            let found = seek_lines(&lines, std::slice::from_ref(context), cursor, false)
+                .ok_or_else(|| {
+                    CoreError::invalid(format!(
+                        "Patch hunk {} context did not match the current file: {context}",
+                        hunk_index + 1
+                    ))
+                })?;
+            cursor = found + 1;
+        }
+
+        let mut old = hunk.old.clone();
+        let mut new = hunk.new.clone();
+        let mut found = if old.is_empty() {
+            Some(if hunk.end_of_file {
+                lines.len()
+            } else {
+                cursor.min(lines.len())
+            })
         } else {
-            (cursor..=lines.len().saturating_sub(old_len))
-                .find(|start| lines[*start..*start + old_len] == hunk.old[..])
+            seek_lines(&lines, &old, cursor, hunk.end_of_file)
         };
+        if found.is_none() && old.last().is_some_and(String::is_empty) {
+            old.pop();
+            if new.last().is_some_and(String::is_empty) {
+                new.pop();
+            }
+            if !old.is_empty() {
+                found = seek_lines(&lines, &old, cursor, hunk.end_of_file);
+            }
+        }
         let Some(start) = found else {
+            let detail = if old.iter().all(String::is_empty) {
+                "an expected blank line".to_owned()
+            } else {
+                format!("expected lines were not found:\n{}", hunk.old.join("\n"))
+            };
             return Err(CoreError::invalid(format!(
-                "Patch hunk {} did not match the current file.",
+                "Patch hunk {} did not match the current file ({detail}).",
                 hunk_index + 1
             )));
         };
-        lines.splice(start..start + old_len, hunk.new.clone());
-        cursor = start + hunk.new.len();
+        lines.splice(start..start + old.len(), new.clone());
+        cursor = start + new.len();
         additions += hunk.additions;
         deletions += hunk.deletions;
     }
@@ -417,6 +565,67 @@ fn apply_hunks(content: &str, hunks: &[Hunk]) -> Result<(String, usize, usize)> 
         result.push_str(newline);
     }
     Ok((result, additions, deletions))
+}
+
+fn seek_lines(
+    lines: &[String],
+    pattern: &[String],
+    start: usize,
+    end_of_file: bool,
+) -> Option<usize> {
+    if pattern.is_empty() {
+        return None;
+    }
+    let comparisons: [fn(&str, &str) -> bool; 4] = [exact, rstrip, trim, normalized];
+    if end_of_file {
+        let offset = lines.len().checked_sub(pattern.len())?;
+        if offset < start {
+            return None;
+        }
+        for compare in comparisons {
+            if line_matches(lines, pattern, offset, compare) {
+                return Some(offset);
+            }
+        }
+        return None;
+    }
+    for compare in comparisons {
+        for offset in start..=lines.len().saturating_sub(pattern.len()) {
+            if line_matches(lines, pattern, offset, compare) {
+                return Some(offset);
+            }
+        }
+    }
+    None
+}
+
+fn line_matches(
+    lines: &[String],
+    pattern: &[String],
+    offset: usize,
+    compare: fn(&str, &str) -> bool,
+) -> bool {
+    pattern
+        .iter()
+        .enumerate()
+        .all(|(index, value)| compare(&lines[offset + index], value))
+}
+
+fn exact(left: &str, right: &str) -> bool {
+    left == right
+}
+
+fn rstrip(left: &str, right: &str) -> bool {
+    left.trim_end() == right.trim_end()
+}
+
+fn trim(left: &str, right: &str) -> bool {
+    left.trim() == right.trim()
+}
+
+fn normalized(left: &str, right: &str) -> bool {
+    crate::agent::edit::normalize_for_match(left.trim())
+        == crate::agent::edit::normalize_for_match(right.trim())
 }
 
 async fn read_text(path: &Path) -> Result<String> {
@@ -548,6 +757,51 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(workspace.join("file.txt")).unwrap(),
             "a\nB\nc\nd\nE\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn uses_context_and_end_of_file_anchors() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(
+            workspace.join("file.txt"),
+            "function first()\nold\nfunction second()\nold\n",
+        )
+        .unwrap();
+        let text = patch("*** Update File: file.txt\n@@ function second()\n-old\n+new");
+        apply(&workspace, &text).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("file.txt")).unwrap(),
+            "function first()\nold\nfunction second()\nnew\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn end_of_file_anchor_updates_the_last_match() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("file.txt"), "block\nmiddle\nblock\n").unwrap();
+        let text = patch("*** Update File: file.txt\n@@\n-block\n+last\n*** End of File");
+        apply(&workspace, &text).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("file.txt")).unwrap(),
+            "block\nmiddle\nlast\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn preview_returns_a_diff_without_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("file.txt"), "old\n").unwrap();
+        let text = patch("*** Update File: file.txt\n@@\n-old\n+new");
+        let diff = preview_with_scope(&workspace, &text, false).await.unwrap();
+        assert!(diff.contains("-old"));
+        assert!(diff.contains("+new"));
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("file.txt")).unwrap(),
+            "old\n"
         );
     }
 

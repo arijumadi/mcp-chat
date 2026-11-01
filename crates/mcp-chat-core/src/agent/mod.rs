@@ -1,5 +1,8 @@
 pub mod approvals;
 pub mod context;
+pub mod diff;
+pub mod edit;
+pub mod file_locks;
 pub mod patch;
 pub mod permissions;
 pub mod prompt;
@@ -66,6 +69,7 @@ impl ChatEngine {
             output_dir: output_dir.clone(),
             attachments_dir: attachments_dir.clone(),
             limiter: Arc::new(Semaphore::new(4)),
+            file_locks: crate::agent::file_locks::FileLocks::default(),
         });
         Arc::new(Self {
             db,

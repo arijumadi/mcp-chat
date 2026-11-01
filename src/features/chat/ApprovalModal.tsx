@@ -79,8 +79,21 @@ export function ApprovalModal() {
       }
     >
       <p className="mb-3 text-[12.5px]" style={{ color: "var(--muted)" }}>
-        The model asked to execute this tool. Review the arguments before allowing it.
+        The model asked to execute this tool. Review the changes and arguments before allowing it.
       </p>
+      {approval.diff ? (
+        <div className="mb-3">
+          <div className="mb-1 text-[11.5px] font-medium" style={{ color: "var(--muted)" }}>
+            Changes
+          </div>
+          <pre
+            className="max-h-[38vh] overflow-auto rounded-lg border p-3 font-mono text-[11.5px] leading-relaxed"
+            style={{ borderColor: "var(--border)", background: "var(--code)" }}
+          >
+            {approval.diff}
+          </pre>
+        </div>
+      ) : null}
       <div className="mb-1 text-[11.5px] font-medium" style={{ color: "var(--muted)" }}>
         Arguments
       </div>

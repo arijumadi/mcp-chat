@@ -55,6 +55,8 @@ pub enum CoreEvent {
         tool: String,
         args: Value,
         allow_always: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diff: Option<String>,
     },
     Usage {
         conversation_id: String,
@@ -132,6 +134,7 @@ mod tests {
             tool: "echo".into(),
             args: json!({"text": "hi"}),
             allow_always: true,
+            diff: None,
         };
         let value = serde_json::to_value(approval).unwrap();
         assert_eq!(value["callId"], "call1");

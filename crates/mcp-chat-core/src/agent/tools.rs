@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use walkdir::WalkDir;
 
 use crate::agent::approvals::{ApprovalDecision, ApprovalRegistry, InputAnswer, InputRegistry};
+use crate::agent::file_locks::FileLocks;
 use crate::agent::permissions::{self, Effect};
 use crate::db::Db;
 use crate::db::repo::{conversations, messages, permissions as rules_repo, settings};
@@ -47,6 +48,7 @@ pub struct ToolExecutor {
     pub output_dir: PathBuf,
     pub attachments_dir: PathBuf,
     pub limiter: Arc<Semaphore>,
+    pub file_locks: FileLocks,
 }
 
 pub struct ToolExecRequest {
@@ -886,12 +888,12 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "edit".into(),
-            description: "Replace an exact string in an existing file. oldString must match once unless replaceAll is true. Outside-workspace targets require explicit approval.".into(),
+            description: "Replace exact text in an existing file. Matching tolerates CRLF/LF, typographic punctuation, and trailing whitespace. oldString must match once unless replaceAll is true. Outside-workspace targets need approval.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "filePath": {"type": "string", "description": "Workspace-relative path, or an explicit outside path."},
-                    "oldString": {"type": "string", "description": "Exact text to replace. It must occur exactly once unless replaceAll is true."},
+                    "oldString": {"type": "string", "description": "Text to replace. It must occur exactly once unless replaceAll is true."},
                     "newString": {"type": "string", "description": "Replacement text. Use an empty string to delete."},
                     "replaceAll": {"type": "boolean", "description": "Replace every occurrence. Default false."}
                 },
@@ -901,7 +903,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "apply_patch".into(),
-            description: "Apply a multi-file text patch. Format: `*** Begin Patch`, then `*** Add File: path`, `*** Update File: path`, `*** Delete File: path`, and `*** End Patch`. Update hunks start with `@@`; context/removed/added lines start with space/-/+. Add File lines start with +. Optional `*** Move to: path` inside an update. Paths are workspace-relative or explicitly approved outside paths. Ask before writing.".into(),
+            description: "Apply a multi-file patch: `*** Begin Patch`, Add/Update/Delete File markers, and `*** End Patch`. Update hunks start with `@@` (optional context anchor); `*** End of File` anchors EOF. Context/removed/added lines use space/-/+; Add lines use +. Optional `*** Move to: path`. Paths are workspace-relative or approved outside paths.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1585,6 +1587,68 @@ impl ToolExecutor {
         .await
     }
 
+    /// Build a read-only diff for built-in file mutations. Outside-workspace
+    /// paths are deliberately skipped: their contents must not be read before
+    /// the user grants the separate outside-write approval.
+    async fn approval_diff(
+        &self,
+        conversation_id: &str,
+        server_id: &str,
+        tool_name: &str,
+        args: &Value,
+    ) -> Option<String> {
+        if !server_id.is_empty() {
+            return None;
+        }
+        let workspace = workspace_root_for_conversation(&self.db.pool, conversation_id)
+            .await
+            .ok()?;
+        match tool_name {
+            "edit" => {
+                let raw = args.get("filePath").and_then(Value::as_str)?;
+                let old = args.get("oldString").and_then(Value::as_str)?;
+                let new = args.get("newString").and_then(Value::as_str)?;
+                let replace_all = args
+                    .get("replaceAll")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let path = resolve_write_path(&workspace, raw, false).ok()?;
+                let content = read_text_file(&path).await.ok()?;
+                let outcome = crate::agent::edit::apply(&content, old, new, replace_all).ok()?;
+                Some(crate::agent::diff::file_diff(
+                    &display_relative(&workspace, &path),
+                    &content,
+                    &outcome.content,
+                ))
+                .filter(|diff| !diff.is_empty())
+            }
+            "apply_patch" => {
+                let patch = args.get("patchText").and_then(Value::as_str)?;
+                crate::agent::patch::preview_with_scope(&workspace, patch, false)
+                    .await
+                    .ok()
+                    .filter(|diff| !diff.is_empty())
+            }
+            "write" => {
+                let raw = args.get("filePath").and_then(Value::as_str)?;
+                let content = args.get("content").and_then(Value::as_str)?;
+                let path = resolve_write_path(&workspace, raw, false).ok()?;
+                let previous = if path.exists() {
+                    read_text_file(&path).await.ok()?
+                } else {
+                    String::new()
+                };
+                let diff = crate::agent::diff::file_diff(
+                    &display_relative(&workspace, &path),
+                    &previous,
+                    content,
+                );
+                (!diff.is_empty()).then_some(diff)
+            }
+            _ => None,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn ask_permission_explicit(
         &self,
@@ -1602,6 +1666,9 @@ impl ToolExecutor {
     ) -> std::result::Result<(), String> {
         self.patch_part(part_id, json!({"approval": "pending"}))
             .await;
+        let diff = self
+            .approval_diff(conversation_id, server_id, tool_name, args)
+            .await;
         let _ = self.events.send(CoreEvent::Approval {
             conversation_id: conversation_id.to_owned(),
             call_id: call_id.to_owned(),
@@ -1609,6 +1676,7 @@ impl ToolExecutor {
             tool: tool_name.to_owned(),
             args: args.clone(),
             allow_always,
+            diff,
         });
         let receiver = self.approvals.register(call_id);
         let answer = tokio::select! {
@@ -2494,6 +2562,9 @@ impl ToolExecutor {
             .ok_or_else(|| CoreError::invalid("patchText is required"))?;
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
+        let paths =
+            crate::agent::patch::target_paths(&workspace, patch_text, req.allow_outside_workspace)?;
+        let _guards = self.file_locks.acquire(paths).await;
         let result = crate::agent::patch::apply_with_scope(
             &workspace,
             patch_text,
@@ -2595,6 +2666,7 @@ impl ToolExecutor {
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let path = resolve_write_path(&workspace, raw, req.allow_outside_workspace)?;
+        let _guard = self.file_locks.acquire(vec![path.clone()]).await;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -2634,33 +2706,24 @@ impl ToolExecutor {
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let path = resolve_write_path(&workspace, raw, req.allow_outside_workspace)?;
+        let _guard = self.file_locks.acquire(vec![path.clone()]).await;
         let content = read_text_file(&path).await?;
-        let count = content.matches(old).count();
-        if count == 0 {
-            return Err(CoreError::invalid(format!(
-                "oldString was not found in {}.",
-                display_relative(&workspace, &path)
-            )));
-        }
-        if count > 1 && !replace_all {
-            return Err(CoreError::invalid(format!(
-                "oldString occurs {count} times in {}; set replaceAll to true or use a more specific string.",
-                display_relative(&workspace, &path)
-            )));
-        }
-        let updated = if replace_all {
-            content.replace(old, new)
-        } else {
-            content.replacen(old, new, 1)
-        };
-        if updated.len() as u64 > MAX_TEXT_BYTES {
+        let relative = display_relative(&workspace, &path);
+        let outcome = crate::agent::edit::apply(&content, old, new, replace_all)
+            .map_err(|error| CoreError::invalid(format!("{relative}: {}", error.user_message())))?;
+        if outcome.content.len() as u64 > MAX_TEXT_BYTES {
             return Err(CoreError::invalid("Edited file is too large."));
         }
-        tokio::fs::write(&path, updated).await?;
-        let relative = display_relative(&workspace, &path);
+        tokio::fs::write(&path, &outcome.content).await?;
         Ok(Rendered {
-            content: format!("Edited {relative}: replaced {count} occurrence(s)."),
-            structured: Some(json!({"path": relative, "replacements": count})),
+            content: format!(
+                "Edited {relative}: replaced {} occurrence(s).",
+                outcome.replacements
+            ),
+            structured: Some(json!({
+                "path": relative,
+                "replacements": outcome.replacements
+            })),
             ok: true,
         })
     }
@@ -3775,6 +3838,7 @@ mod tests {
             output_dir: workspace.join("tool-output"),
             attachments_dir: workspace.join("attachments"),
             limiter: Arc::new(Semaphore::new(4)),
+            file_locks: FileLocks::default(),
         }
     }
 
@@ -3865,6 +3929,80 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(workspace.join("notes/a.txt")).unwrap(),
             "hello there"
+        );
+    }
+
+    #[tokio::test]
+    async fn builtin_edit_matches_lf_text_in_a_crlf_file() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("windows.txt"), "one\r\ntwo\r\n").unwrap();
+        let executor = test_executor(&workspace).await;
+        let result = executor
+            .run_edit(&request(
+                "edit",
+                json!({
+                    "filePath": "windows.txt",
+                    "oldString": "one\ntwo",
+                    "newString": "ONE\nTWO"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert!(result.content.contains("replaced 1"));
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("windows.txt")).unwrap(),
+            "ONE\r\nTWO\r\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn builtin_edit_rejects_a_noop() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("noop.txt"), "same\n").unwrap();
+        let executor = test_executor(&workspace).await;
+        let error = match executor
+            .run_edit(&request(
+                "edit",
+                json!({
+                    "filePath": "noop.txt",
+                    "oldString": "same",
+                    "newString": "same"
+                }),
+            ))
+            .await
+        {
+            Ok(_) => panic!("no-op edit should fail"),
+            Err(error) => error,
+        };
+        assert!(error.user_message().contains("identical"));
+    }
+
+    #[tokio::test]
+    async fn approval_diff_shows_an_edit_without_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("preview.txt"), "old\n").unwrap();
+        let executor = test_executor(&workspace).await;
+        let diff = executor
+            .approval_diff(
+                "test-conversation",
+                "",
+                "edit",
+                &json!({
+                    "filePath": "preview.txt",
+                    "oldString": "old",
+                    "newString": "new"
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(diff.contains("-old"));
+        assert!(diff.contains("+new"));
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("preview.txt")).unwrap(),
+            "old\n"
         );
     }
 
