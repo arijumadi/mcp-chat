@@ -655,8 +655,9 @@ pub async fn context_status(
 pub async fn compact_conversation(
     state: State<'_, AppState>,
     conversation_id: String,
+    focus: Option<String>,
 ) -> CmdResult<()> {
-    runner::compact_now(state.engine.clone(), &conversation_id)
+    runner::compact_now(state.engine.clone(), &conversation_id, focus.as_deref())
         .await
         .map_err(cmd_err)
 }

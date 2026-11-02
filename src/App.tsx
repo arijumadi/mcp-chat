@@ -5,6 +5,7 @@ import { QuickSwitcher } from "@/components/QuickSwitcher";
 import { Toasts } from "@/components/Toasts";
 import { ChatView } from "@/features/chat/ChatView";
 import { ApprovalModal } from "@/features/chat/ApprovalModal";
+import { CompactDialog } from "@/features/chat/CompactDialog";
 import { InputRequestModal } from "@/features/chat/InputRequestModal";
 const SettingsView = lazy(() =>
   import("@/features/settings/SettingsView").then((module) => ({
@@ -61,6 +62,7 @@ export default function App() {
       </main>
       <QuickSwitcher open={quickOpen} onClose={() => setQuickOpen(false)} />
       <ApprovalModal />
+      <CompactDialog />
       <InputRequestModal />
       <Toasts />
     </div>

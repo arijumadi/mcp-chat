@@ -19,6 +19,15 @@ import type {
 } from "@/lib/types";
 
 export type View = "chat" | "settings" | "servers";
+
+/** Statuses in which a turn (or a compaction) owns the conversation. */
+export const BUSY_STATUSES: readonly TurnStatus[] = [
+  "thinking",
+  "streaming",
+  "compacting",
+  "waiting_approval",
+  "running_tool",
+];
 export type Theme = "system" | "light" | "dark";
 
 export interface ToastAction {
@@ -58,6 +67,8 @@ export interface AppStore {
   step: { current: number; max: number } | null;
   limitReached: boolean;
   autoApprove: boolean;
+  /** Open when set. `focus` is the optional text for the summarizer. */
+  compactDialog: { focus: string } | null;
   toasts: Toast[];
   searchHits: SearchHit[];
   searching: boolean;
@@ -77,6 +88,10 @@ export interface AppStore {
   removeAttachment: (id: string) => Promise<void>;
   setDraft: (text: string) => void;
   stop: () => Promise<void>;
+  /** Ask to compact the active conversation. Opens a confirmation first. */
+  openCompact: (focus?: string) => void;
+  closeCompact: () => void;
+  compactConversation: (focus?: string) => Promise<void>;
   regenerate: () => Promise<void>;
   continueTurn: () => Promise<void>;
   setAutoApprove: (enabled: boolean) => Promise<void>;
@@ -144,6 +159,7 @@ export const useApp = create<AppStore>()((set, get) => ({
   step: null,
   limitReached: false,
   autoApprove: false,
+  compactDialog: null,
   toasts: [],
   searchHits: [],
   searching: false,
@@ -554,6 +570,40 @@ export const useApp = create<AppStore>()((set, get) => ({
     if (!conversationId) return;
     try {
       await call("stop_generation", { conversationId });
+    } catch (error) {
+      get().toast(String(error), "error");
+    }
+  },
+
+  openCompact(focus = "") {
+    const state = get();
+    if (!state.activeId || state.view !== "chat") {
+      state.toast("Open a conversation to compact it.", "info");
+      return;
+    }
+    if (BUSY_STATUSES.includes(state.status)) {
+      state.toast("Stop the current turn before compacting.", "info");
+      return;
+    }
+    set({ compactDialog: { focus } });
+  },
+
+  closeCompact() {
+    set({ compactDialog: null });
+  },
+
+  async compactConversation(focus = "") {
+    const conversationId = get().activeId;
+    set({ compactDialog: null });
+    if (!conversationId) return;
+    try {
+      // Progress arrives as status events (Compacting, then Idle) and the
+      // summary as a system row, exactly like an automatic compaction.
+      await call("compact_conversation", {
+        conversationId,
+        focus: focus.trim() === "" ? null : focus.trim(),
+      });
+      get().toast("Conversation compacted.", "info");
     } catch (error) {
       get().toast(String(error), "error");
     }

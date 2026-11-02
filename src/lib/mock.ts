@@ -451,8 +451,54 @@ export function installMock(): void {
           toolCount: 17,
           toolMode: "lazy",
         };
-      case "compact_conversation":
+      case "compact_conversation": {
+        const conversationId = String(args.conversationId);
+        const history = messages.get(conversationId) ?? [];
+        if (generating.has(conversationId)) {
+          throw new Error("Stop the current turn before compacting.");
+        }
+        if (history.length < 4) throw new Error("Not enough history to compact.");
+        // Like the backend: hold the conversation, report Compacting then Idle,
+        // and add the summary as a system row.
+        generating.add(conversationId);
+        emit({ type: "status", conversationId, status: "compacting", message: null });
+        await delay(250);
+        generating.delete(conversationId);
+        const focus = typeof args.focus === "string" && args.focus ? ` Focus: ${args.focus}.` : "";
+        const summaryId = uid();
+        const partId = uid();
+        const text = `## Objective\nEarlier conversation, summarized.${focus}`;
+        history.push({
+          id: summaryId,
+          conversationId,
+          role: "system",
+          createdAt: now(),
+          status: "completed",
+          error: null,
+          parts: [
+            {
+              id: partId,
+              messageId: summaryId,
+              idx: 0,
+              kind: "summary",
+              payloadJson: JSON.stringify({ text, coversUntil: history.at(-1)?.id ?? "" }),
+            },
+          ],
+        });
+        emit({ type: "message_start", conversationId, messageId: summaryId, role: "system" });
+        emit({
+          type: "part",
+          conversationId,
+          messageId: summaryId,
+          partId,
+          kind: "summary",
+          payload: { text, coversUntil: history.at(-2)?.id ?? "" },
+        });
+        emit({ type: "message_end", conversationId, messageId: summaryId, status: "completed", error: null });
+        emit({ type: "status", conversationId, status: "idle", message: null });
+        emit({ type: "conversation_updated", conversationId });
         return null;
+      }
       case "is_generating":
         return generating.has(String(args.conversationId));
       case "get_auto_approve":

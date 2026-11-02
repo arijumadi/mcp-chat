@@ -64,6 +64,7 @@ async fn models(State(_state): State<ProviderState>) -> Json<Value> {
             {"id": "mock-length"},
             {"id": "mock-cut"},
             {"id": "mock-overflow"},
+            {"id": "mock-slow-compact"},
             {"id": "mock-weird-finish"},
             {"id": "mock-elicit"},
             {"id": "mock-big"},
@@ -476,6 +477,14 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
                 return sse(body);
             }
             text_response("Continued after interruption.")
+        }
+        "slow-compact" => {
+            // The summarizer never answers on its own, so a test can observe
+            // the compacting state and cancel it. Normal turns answer at once.
+            if compaction_request {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            }
+            text_response("Hello from the mock provider.")
         }
         "overflow" => {
             if compaction_request {

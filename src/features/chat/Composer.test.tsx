@@ -136,4 +136,70 @@ describe("Composer", () => {
     fireEvent.click(sendButton);
     expect(sendMessage).toHaveBeenCalledWith("");
   });
+
+  it("treats /compact as a command: it opens the confirmation and sends nothing", () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const steerMessage = vi.fn().mockResolvedValue(undefined);
+    const openCompact = vi.fn();
+    useApp.setState({
+      providers: [provider],
+      status: "idle",
+      step: null,
+      limitReached: false,
+      continueTurn: vi.fn(),
+      draft: "/compact keep the schema decisions",
+      pendingAttachments: [],
+      sendMessage,
+      steerMessage,
+      openCompact,
+    });
+    render(<Composer conversation={conversation} />);
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(openCompact).toHaveBeenCalledWith("keep the schema decisions");
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(steerMessage).not.toHaveBeenCalled();
+    // Cancel must lose nothing, so the draft is still there.
+    expect(useApp.getState().draft).toBe("/compact keep the schema decisions");
+  });
+
+  it("does not steer a running turn with /compact", () => {
+    const steerMessage = vi.fn().mockResolvedValue(undefined);
+    const openCompact = vi.fn();
+    useApp.setState({
+      providers: [provider],
+      status: "streaming",
+      step: { current: 1, max: 0 },
+      limitReached: false,
+      continueTurn: vi.fn(),
+      draft: "/compact",
+      pendingAttachments: [],
+      steerMessage,
+      openCompact,
+    });
+    render(<Composer conversation={conversation} />);
+    fireEvent.click(screen.getByRole("button", { name: "Steer message" }));
+    expect(steerMessage).not.toHaveBeenCalled();
+    // The store explains why it cannot compact right now.
+    expect(openCompact).toHaveBeenCalledWith("");
+  });
+
+  it("sends ordinary text that merely resembles the command", () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const openCompact = vi.fn();
+    useApp.setState({
+      providers: [provider],
+      status: "idle",
+      step: null,
+      limitReached: false,
+      continueTurn: vi.fn(),
+      draft: "/compactor is a path",
+      pendingAttachments: [],
+      sendMessage,
+      openCompact,
+    });
+    render(<Composer conversation={conversation} />);
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(sendMessage).toHaveBeenCalledWith("/compactor is a path");
+    expect(openCompact).not.toHaveBeenCalled();
+  });
 });
