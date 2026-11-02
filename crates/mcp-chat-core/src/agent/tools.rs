@@ -1166,6 +1166,18 @@ fn is_dangerous_tool_call(req: &ToolExecRequest) -> bool {
 
 fn auto_effective_effect(req: &ToolExecRequest, effect: Effect) -> Effect {
     if req.auto_approve && effect == Effect::Ask && !is_dangerous_tool_call(req) {
+        // An explicit shell file-write escape must remain a reviewed action,
+        // even when the chat is in auto mode. Otherwise the model can bypass
+        // the routing guard by setting allowFileWrites itself.
+        if req.remote_name == "bash"
+            && req
+                .args
+                .get("allowFileWrites")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        {
+            return Effect::Ask;
+        }
         Effect::Allow
     } else {
         effect
@@ -3796,6 +3808,12 @@ mod tests {
         let mut safe = request("bash", json!({"command": "dir"}));
         safe.auto_approve = true;
         assert_eq!(auto_effective_effect(&safe, Effect::Ask), Effect::Allow);
+        let mut escape = request(
+            "bash",
+            json!({"command": "echo hi > out.txt", "allowFileWrites": true}),
+        );
+        escape.auto_approve = true;
+        assert_eq!(auto_effective_effect(&escape, Effect::Ask), Effect::Ask);
         let mut dangerous = request("bash", json!({"command": "rm -rf build"}));
         dangerous.auto_approve = true;
         assert_eq!(auto_effective_effect(&dangerous, Effect::Ask), Effect::Ask);
