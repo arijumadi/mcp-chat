@@ -5,6 +5,7 @@ import { Button } from "@/components/Button";
 import { Modal } from "@/components/Modal";
 import { formatJson } from "@/lib/format";
 import { inputClass } from "@/components/ui";
+import { DiffView } from "./DiffView";
 
 export function ApprovalModal() {
   const approvals = useApp((state) => state.approvals);
@@ -83,15 +84,12 @@ export function ApprovalModal() {
       </p>
       {approval.diff ? (
         <div className="mb-3">
-          <div className="mb-1 text-[11.5px] font-medium" style={{ color: "var(--muted)" }}>
-            Changes
-          </div>
-          <pre
-            className="max-h-[38vh] overflow-auto rounded-lg border p-3 font-mono text-[11.5px] leading-relaxed"
-            style={{ borderColor: "var(--border)", background: "var(--code)" }}
-          >
-            {approval.diff}
-          </pre>
+          <DiffView
+            key={approval.callId}
+            diff={approval.diff}
+            defaultOpen
+            className="diff-view-modal"
+          />
         </div>
       ) : null}
       <div className="mb-1 text-[11.5px] font-medium" style={{ color: "var(--muted)" }}>

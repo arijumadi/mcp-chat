@@ -15,9 +15,16 @@ test("boots, sends a scripted message and renders a tool card", async ({ page })
   await expect(
     page.getByRole("button", { name: /Used 1 tool/ }),
   ).toBeVisible();
-  await page.getByRole("button", { name: /Used 1 tool/ }).click();
-  await expect(page.getByText("Mock MCP").first()).toBeVisible();
-  await expect(page.getByText("ok").first()).toBeVisible({ timeout: 15_000 });
+  // The tool shows as a compact row straight away; its details stay closed.
+  const row = page.getByRole("button", { name: /Mock MCP\/echo/ });
+  await expect(row).toBeVisible();
+  await expect(row).toHaveAttribute("aria-expanded", "false");
+  await expect(row.getByRole("img", { name: "completed" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Arguments", { exact: true })).toHaveCount(0);
+  await row.click();
+  await expect(row).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByText("Arguments", { exact: true })).toBeVisible();
+  await expect(page.getByText("Result", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible({
     timeout: 15_000,
   });

@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { AlertCircle, ChevronDown, Loader2 } from "lucide-react";
 import type { MessageWithParts, Part } from "@/lib/types";
 import { parsePayload, partText } from "@/app/store";
 import { formatDuration } from "@/lib/format";
 import { MessageItem } from "./MessageItem";
 import { ToolCard } from "./ToolCard";
+import { ThoughtRow } from "./ThoughtRow";
+import { thoughtDuration } from "./activity";
 
 interface Flattened {
   part: Part;
@@ -19,7 +21,9 @@ export function AssistantTurn({
   messages: MessageWithParts[];
   canRetry: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  // Activity rows are visible by default. The header only hides a long list.
+  const [open, setOpen] = useState(true);
+  const listId = useId();
   const last = messages[messages.length - 1];
   if (!last) return null;
 
@@ -126,15 +130,13 @@ export function AssistantTurn({
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        className="focus-ring my-1.5 flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-[12.5px] transition hover:bg-[var(--panel-2)]"
-        style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+        aria-controls={open ? listId : undefined}
+        className="focus-ring mb-0.5 flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[12px] transition-colors hover:bg-[var(--panel-2)]"
+        style={{ color: "var(--muted)" }}
       >
         <span className="font-medium">{summary}</span>
         {thinking ? (
-          <span
-            className="flex items-center gap-1 text-[10.5px]"
-            style={{ color: "var(--muted)" }}
-          >
+          <span className="flex items-center gap-1 text-[10.5px]">
             <Loader2
               size={12}
               className="animate-spin"
@@ -143,10 +145,7 @@ export function AssistantTurn({
             Thinking…
           </span>
         ) : runningTool ? (
-          <span
-            className="flex min-w-0 items-center gap-1 text-[10.5px]"
-            style={{ color: "var(--muted)" }}
-          >
+          <span className="flex min-w-0 items-center gap-1 text-[10.5px]">
             <Loader2
               size={12}
               className="animate-spin"
@@ -170,51 +169,28 @@ export function AssistantTurn({
           className="ml-auto flex items-center gap-1 text-[10.5px]"
           style={{ color: "var(--faint)" }}
         >
-          {open ? "Hide details" : "Show details"}
+          {open ? "Hide" : "Show"}
           <ChevronDown
             size={12}
-            className={open ? "rotate-180 transition" : "transition"}
+            aria-hidden
+            className={open ? "transition" : "-rotate-90 transition"}
           />
         </span>
       </button>
 
       {open ? (
-        <div
-          className="mb-2 ml-2 border-l pl-3"
-          style={{ borderColor: "var(--border)" }}
-        >
-          {work.map((item, index) => {
-            if (item.part.kind === "reasoning") {
-              const thought =
-                work
-                  .slice(0, index + 1)
-                  .filter((entry) => entry.part.kind === "reasoning").length;
-              return (
-                <div
-                  key={item.part.id}
-                  className="my-1.5 rounded-lg border px-3 py-2"
-                  style={{
-                    borderColor: "var(--border)",
-                    background: "var(--panel)",
-                  }}
-                >
-                  <div
-                    className="mb-1 text-[10.5px] tracking-[0.06em] uppercase"
-                    style={{ color: "var(--faint)" }}
-                  >
-                    Thought {thought}
-                  </div>
-                  <div
-                    className="max-h-56 overflow-y-auto text-[12.5px] whitespace-pre-wrap italic"
-                    style={{ color: "var(--muted)" }}
-                  >
-                    {partText(item.part)}
-                  </div>
-                </div>
-              );
-            }
-            return <ToolCard key={item.part.id} part={item.part} />;
-          })}
+        <div id={listId} className="mb-2">
+          {work.map((item) =>
+            item.part.kind === "reasoning" ? (
+              <ThoughtRow
+                key={item.part.id}
+                text={partText(item.part)}
+                duration={thoughtDuration(parsePayload(item.part))}
+              />
+            ) : (
+              <ToolCard key={item.part.id} part={item.part} />
+            ),
+          )}
         </div>
       ) : null}
 
