@@ -998,6 +998,7 @@ export function applyCoreEvent(
               next.resultPreview = event.message;
             }
             if (event.state === "error" && event.message) next.error = event.message;
+            if (event.diff) next.diff = event.diff;
             if (event.state === "completed" || event.state === "error" || event.state === "aborted") {
               next.endedAt = Date.now();
             }

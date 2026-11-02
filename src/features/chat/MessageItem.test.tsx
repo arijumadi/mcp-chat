@@ -150,4 +150,27 @@ describe("MessageItem", () => {
     expect(plain).toContain("Bold answer");
     expect(plain).not.toContain("**Bold**");
   });
+
+  it("keeps reasoning collapsed to a Thought row until it is opened", () => {
+    const item = message("assistant", [
+      part("r1", "reasoning", { text: "Private chain of thought", durationMs: 12_000 }),
+      part("t1", "text", { text: "The answer." }),
+    ]);
+    render(<MessageItem message={item} canRetry={false} />);
+    const row = screen.getByRole("button", { name: /Thought/ });
+    expect(row).toHaveTextContent("Thought");
+    expect(row).toHaveTextContent("12s");
+    expect(row).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Private chain of thought")).not.toBeInTheDocument();
+    expect(screen.getByText("The answer.")).toBeInTheDocument();
+
+    fireEvent.click(row);
+    expect(screen.getByText("Private chain of thought")).toBeInTheDocument();
+  });
+
+  it("shows only the label when a thought has no timing", () => {
+    const item = message("assistant", [part("r1", "reasoning", { text: "Hmm" })]);
+    render(<MessageItem message={item} canRetry={false} />);
+    expect(screen.getByRole("button", { name: /Thought/ }).textContent).toBe("Thought");
+  });
 });

@@ -40,7 +40,9 @@ SQLite in WAL mode, foreign keys on, migrations via `sqlx::migrate!`.
 - `settings`, `permission_rules`.
 - `messages_fts` — FTS5 over text parts, maintained by insert/update/delete triggers.
 
-A tool call is one part on the assistant message; its terminal state and result preview live in that payload. A separate `tool` message holds the result block sent back to the provider. The UI hides `tool` messages and renders the call card instead. This keeps the provider transcript valid while giving the renderer a compact card. Assistant text emitted before the last tool call is retained for provider context but omitted from the activity panel; only thoughts, tool cards and the post-tool answer are shown.
+A tool call is one part on the assistant message; its terminal state and result preview live in that payload. A separate `tool` message holds the result block sent back to the provider. The UI hides `tool` messages and renders each call as a compact activity row instead. This keeps the provider transcript valid while giving the renderer a one-line row. Assistant text emitted before the last tool call is retained for provider context but omitted from the activity list; only thoughts, tool rows and the post-tool answer are shown.
+
+File diffs follow the same rule: the transcript renders `tool_call` parts only, so `ToolExecutor::finish` moves the `diff` that `edit`, `apply_patch` and `write` return in their structured output onto the `tool_call` payload (and onto the live `tool` event) and removes it from the persisted `tool_result`. It is built from the text captured before the write, never by re-reading the file, and capped at about 48k characters with a truncation marker. Only the `content` of a tool result reaches the model, so the diff is display-only. Only built-in file tools are treated this way; an external MCP server's own `diff` field is left untouched.
 
 Synthetic user messages (continue prompts, max-step notices) are ordinary rows with `status = 'synthetic'`; they are part of the provider context but hidden from the transcript and skipped by Regenerate. Reverting a user message deletes that row and every later row with `delete_from`, removes matching spilled tool files, returns the original text to the composer, and resets the title to “New chat” when nothing remains.
 
@@ -133,7 +135,7 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 | Permissions | last-match-wins, glob, default policy, resource normalization |
 | Agent | text, tool loop, parallel, invalid args, unknown tool, policy deny, approval/rejection/always, auto-approve, per-chat server gating, lazy catalog/schema/call, batch execute, read_tool_output paging, built-in file/shell/search/skill/question tools, skill references and outside-workspace read-only access, shell labels/echo handling, loop guard, steering, optional max steps, continue-turn resume, layered prompt/AGENTS/skill catalog, default time/Jarvis prompt, cache-stable system prompt, length, cut, overflow, manual compaction/context status, guided/cache-aware compaction, unknown finish, retries, spill/paging |
 | DB | migrations from empty, repo CRUD, FTS sync/cascade, crash sweep |
-| UI | transcript reducer, tool card rendering, date grouping, rich Markdown copy, confirm-before-revert, auto-approve warning, model/workspace pickers, onboarding checklist, actionable toasts, accessible modals, Playwright smoke (5) |
+| UI | transcript reducer, compact tool/thought rows, diff view and stats parsing, date grouping, rich Markdown copy, confirm-before-revert, auto-approve warning, model/workspace pickers, onboarding checklist, actionable toasts, accessible modals, Playwright smoke and activity specs |
 
 ## Known gaps
 

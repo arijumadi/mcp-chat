@@ -47,6 +47,10 @@ pub enum CoreEvent {
         state: String,
         progress: Option<f64>,
         message: Option<String>,
+        /// UI-only unified diff for built-in file mutations. It is also stored
+        /// on the tool_call part and is never sent to the model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diff: Option<String>,
     },
     Approval {
         conversation_id: String,
@@ -102,6 +106,31 @@ pub enum TurnStatus {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn tool_event_carries_a_diff_only_when_present() {
+        let mut event = CoreEvent::Tool {
+            conversation_id: "c1".into(),
+            call_id: "call1".into(),
+            state: "completed".into(),
+            progress: None,
+            message: None,
+            diff: None,
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert!(value.get("diff").is_none());
+        if let CoreEvent::Tool { diff, .. } = &mut event {
+            *diff = Some("-old\n+new\n".into());
+        }
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["diff"], "-old\n+new\n");
+        // Events without the field still deserialize.
+        let legacy: CoreEvent = serde_json::from_value(
+            json!({"type": "tool", "conversationId": "c1", "callId": "x", "state": "running", "progress": null, "message": null}),
+        )
+        .unwrap();
+        assert!(matches!(legacy, CoreEvent::Tool { diff: None, .. }));
+    }
 
     #[test]
     fn event_fields_are_camel_case_for_the_webview() {

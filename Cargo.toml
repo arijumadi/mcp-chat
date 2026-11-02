@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/mcp-chat-core", "src-tauri", "tests/mock_servers"]
 
 [workspace.package]
-version = "0.3.17"
+version = "0.3.18"
 edition = "2024"
 license = "MIT"
 rust-version = "1.85"

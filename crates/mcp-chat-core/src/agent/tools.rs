@@ -1440,6 +1440,7 @@ impl ToolExecutor {
             state: "running".into(),
             progress: None,
             message: None,
+            diff: None,
         });
 
         let outcome = if builtin {
@@ -1465,9 +1466,21 @@ impl ToolExecutor {
         match outcome {
             Ok(Rendered {
                 mut content,
-                structured,
+                mut structured,
                 ok,
             }) => {
+                // The diff is UI metadata for the transcript. Move it onto the
+                // tool_call part and out of `structured`, so it is neither
+                // duplicated in the tool_result part nor spilled to disk. The
+                // model only ever sees `content`. Only built-in file tools set
+                // it; an external MCP server's own `diff` key is left alone.
+                let diff = if req.server_slug == "builtin"
+                    && matches!(req.remote_name.as_str(), "edit" | "apply_patch" | "write")
+                {
+                    take_ui_diff(&mut structured)
+                } else {
+                    None
+                };
                 let full_text = content.clone();
                 let exit_code = if matches!(req.remote_name.as_str(), "bash" | "python") {
                     structured
@@ -1524,6 +1537,7 @@ impl ToolExecutor {
                         "truncated": truncated,
                         "exitCode": exit_code,
                         "image": image,
+                        "diff": diff,
                         "error": if ok { Value::Null } else { Value::String(preview.clone()) }
                     }),
                 )
@@ -1534,6 +1548,7 @@ impl ToolExecutor {
                     state: if ok { "completed" } else { "error" }.into(),
                     progress: None,
                     message: Some(preview.clone()),
+                    diff,
                 });
                 ToolExecResult {
                     call_id: req.call_id,
@@ -1850,6 +1865,7 @@ impl ToolExecutor {
             state: "running".into(),
             progress: None,
             message: None,
+            diff: None,
         });
 
         let target_request = ToolExecRequest {
@@ -1939,6 +1955,7 @@ impl ToolExecutor {
             state: "running".into(),
             progress: None,
             message: Some(format!("Running {} MCP call(s)", calls.len())),
+            diff: None,
         });
 
         let futures = calls
@@ -2573,7 +2590,7 @@ impl ToolExecutor {
         .await?;
         Ok(Rendered {
             content: result.render(),
-            structured: None,
+            structured: Some(result.structured()),
             ok: true,
         })
     }
@@ -2667,14 +2684,23 @@ impl ToolExecutor {
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let path = resolve_write_path(&workspace, raw, req.allow_outside_workspace)?;
         let _guard = self.file_locks.acquire(vec![path.clone()]).await;
+        let relative = display_relative(&workspace, &path);
+        // Capture the previous text before overwriting. A missing file diffs
+        // against empty; an unreadable (binary or oversized) one gets no diff
+        // and must not fail the write.
+        let previous = match tokio::fs::metadata(&path).await {
+            Ok(_) => read_text_file(&path).await.ok(),
+            Err(_) => Some(String::new()),
+        };
+        let diff =
+            previous.map(|previous| crate::agent::diff::file_diff(&relative, &previous, content));
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
         tokio::fs::write(&path, content).await?;
-        let relative = display_relative(&workspace, &path);
         Ok(Rendered {
             content: format!("Wrote {relative} ({} bytes).", content.len()),
-            structured: Some(json!({"path": relative, "bytes": content.len()})),
+            structured: Some(json!({"path": relative, "bytes": content.len(), "diff": diff})),
             ok: true,
         })
     }
@@ -2714,6 +2740,8 @@ impl ToolExecutor {
         if outcome.content.len() as u64 > MAX_TEXT_BYTES {
             return Err(CoreError::invalid("Edited file is too large."));
         }
+        // Built from the in-memory before/after, never by re-reading the file.
+        let diff = crate::agent::diff::file_diff(&relative, &content, &outcome.content);
         tokio::fs::write(&path, &outcome.content).await?;
         Ok(Rendered {
             content: format!(
@@ -2722,7 +2750,8 @@ impl ToolExecutor {
             ),
             structured: Some(json!({
                 "path": relative,
-                "replacements": outcome.replacements
+                "replacements": outcome.replacements,
+                "diff": diff
             })),
             ok: true,
         })
@@ -3200,6 +3229,7 @@ impl ToolExecutor {
                 state: "running".into(),
                 progress: fraction.or(Some(event.progress)),
                 message: event.message,
+                diff: None,
             });
         }))
     }
@@ -3243,6 +3273,7 @@ impl ToolExecutor {
             state: state.into(),
             progress: None,
             message: Some(message.clone()),
+            diff: None,
         });
         ToolExecResult {
             call_id: req.call_id,
@@ -3285,6 +3316,15 @@ struct Rendered {
     content: String,
     structured: Option<Value>,
     ok: bool,
+}
+
+/// Remove and return the non-empty `diff` string from a tool's structured output.
+fn take_ui_diff(structured: &mut Option<Value>) -> Option<String> {
+    let object = structured.as_mut()?.as_object_mut()?;
+    match object.remove("diff")? {
+        Value::String(diff) if !diff.is_empty() => Some(diff),
+        _ => None,
+    }
 }
 
 struct BatchCall {
@@ -4004,6 +4044,268 @@ mod tests {
             std::fs::read_to_string(workspace.join("preview.txt")).unwrap(),
             "old\n"
         );
+    }
+
+    #[tokio::test]
+    async fn edit_returns_a_diff_built_before_the_file_is_written() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("preview.txt"), "keep\nold\n").unwrap();
+        let executor = test_executor(&workspace).await;
+        let result = executor
+            .run_edit(&request(
+                "edit",
+                json!({
+                    "filePath": "preview.txt",
+                    "oldString": "old",
+                    "newString": "new"
+                }),
+            ))
+            .await
+            .unwrap();
+        let structured = result.structured.as_ref().unwrap();
+        assert_eq!(structured["path"], "preview.txt");
+        assert_eq!(structured["replacements"], 1);
+        let diff = structured["diff"].as_str().unwrap();
+        assert!(diff.contains("--- a/preview.txt"), "{diff}");
+        assert!(diff.contains("+++ b/preview.txt"), "{diff}");
+        assert!(diff.contains("-old"), "{diff}");
+        assert!(diff.contains("+new"), "{diff}");
+        // The file is already rewritten. A diff made from it would be empty, so
+        // the removed line proves the before-text was captured before the write.
+        let on_disk = std::fs::read_to_string(workspace.join("preview.txt")).unwrap();
+        assert_eq!(on_disk, "keep\nnew\n");
+        assert!(!on_disk.contains("old"));
+        // The model-facing text carries no diff.
+        assert!(!result.content.contains("@@"), "{}", result.content);
+        assert!(!result.content.contains("+new"), "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn write_returns_a_diff_against_the_previous_content() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("a.txt"), "keep\nold\n").unwrap();
+        std::fs::write(workspace.join("blob.bin"), b"\0\x01\x02").unwrap();
+        let executor = test_executor(&workspace).await;
+
+        let overwrite = executor
+            .run_write(&request(
+                "write",
+                json!({"filePath": "a.txt", "content": "keep\nnew\n"}),
+            ))
+            .await
+            .unwrap();
+        let diff = overwrite.structured.as_ref().unwrap()["diff"]
+            .as_str()
+            .unwrap();
+        assert!(diff.contains("-old") && diff.contains("+new"), "{diff}");
+
+        let created = executor
+            .run_write(&request(
+                "write",
+                json!({"filePath": "fresh.txt", "content": "hello\n"}),
+            ))
+            .await
+            .unwrap();
+        let diff = created.structured.as_ref().unwrap()["diff"]
+            .as_str()
+            .unwrap();
+        assert!(diff.contains("+++ b/fresh.txt"), "{diff}");
+        assert!(diff.contains("+hello"), "{diff}");
+
+        // A binary file cannot be diffed as text. The write must still succeed.
+        let binary = executor
+            .run_write(&request(
+                "write",
+                json!({"filePath": "blob.bin", "content": "text\n"}),
+            ))
+            .await
+            .unwrap();
+        assert!(binary.ok);
+        assert!(binary.structured.as_ref().unwrap()["diff"].is_null());
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("blob.bin")).unwrap(),
+            "text\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_patch_returns_a_diff_for_every_file_and_a_summary() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("a.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(workspace.join("gone.txt"), "bye\n").unwrap();
+        let executor = test_executor(&workspace).await;
+        let result = executor
+            .run_apply_patch(&request(
+                "apply_patch",
+                json!({
+                    "patchText": "*** Begin Patch\n*** Update File: a.txt\n@@\n one\n-two\n+three\n*** Add File: b.txt\n+new\n*** Delete File: gone.txt\n*** End Patch\n"
+                }),
+            ))
+            .await
+            .unwrap();
+        let structured = result.structured.as_ref().unwrap();
+        let diff = structured["diff"].as_str().unwrap();
+        for expected in [
+            "--- a/a.txt",
+            "-two",
+            "+three",
+            "+++ b/b.txt",
+            "+new",
+            "--- a/gone.txt",
+            "-bye",
+        ] {
+            assert!(diff.contains(expected), "missing {expected:?} in {diff}");
+        }
+        let files = structured["files"].as_array().unwrap();
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0]["path"], "a.txt");
+        assert_eq!(files[0]["status"], "modified");
+        assert_eq!(files[0]["additions"], 1);
+        assert_eq!(files[0]["deletions"], 1);
+        assert_eq!(files[1]["status"], "added");
+        assert_eq!(files[2]["status"], "deleted");
+        // The files were really changed, and the diff still shows the old text.
+        assert!(!workspace.join("gone.txt").exists());
+        assert!(
+            !std::fs::read_to_string(workspace.join("a.txt"))
+                .unwrap()
+                .contains("two")
+        );
+        assert!(!result.content.contains("@@"), "{}", result.content);
+    }
+
+    async fn tool_call_part(executor: &ToolExecutor, name: &str) -> String {
+        let message = messages::create(
+            &executor.db.pool,
+            "test-conversation",
+            "assistant",
+            "streaming",
+        )
+        .await
+        .unwrap();
+        messages::append_part(
+            &executor.db.pool,
+            &message.id,
+            "tool_call",
+            &PartPayload::ToolCall {
+                call_id: format!("call-{name}"),
+                name: name.into(),
+                server: "mcp-chat".into(),
+                args: json!({}),
+                state: "running".into(),
+                started_at: Some(1),
+                ended_at: None,
+                executed: false,
+                approval: None,
+                error: None,
+                result_preview: None,
+                full_result_ref: None,
+                truncated: false,
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn finish_moves_the_diff_onto_the_tool_call_and_out_of_the_result() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let executor = test_executor(&workspace).await;
+        let mut events = executor.events.subscribe();
+        let mut req = request("edit", json!({}));
+        req.part_id = tool_call_part(&executor, "edit").await;
+        let part_id = req.part_id.clone();
+        let diff = "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n";
+
+        let result = executor
+            .finish(
+                req,
+                Instant::now(),
+                Ok(Rendered {
+                    content: "Edited a.txt: replaced 1 occurrence(s).".into(),
+                    structured: Some(json!({
+                        "path": "a.txt",
+                        "replacements": 1,
+                        "diff": diff
+                    })),
+                    ok: true,
+                }),
+            )
+            .await;
+
+        // What persists as the tool_result, and so what the model can see.
+        assert_eq!(result.content, "Edited a.txt: replaced 1 occurrence(s).");
+        let structured = result.structured.as_ref().unwrap();
+        assert_eq!(structured["path"], "a.txt");
+        assert!(structured.get("diff").is_none(), "{structured}");
+
+        // The transcript renders the tool_call part, so the diff lives there.
+        let stored = messages::get_part(&executor.db.pool, &part_id)
+            .await
+            .unwrap()
+            .payload();
+        assert_eq!(stored["state"], "completed");
+        assert_eq!(stored["diff"], diff);
+
+        // The live event carries it so the UI does not wait for a reload.
+        let mut seen = None;
+        while let Ok(event) = events.try_recv() {
+            if let CoreEvent::Tool { state, diff, .. } = event {
+                if state == "completed" {
+                    seen = diff;
+                }
+            }
+        }
+        assert_eq!(seen.as_deref(), Some(diff));
+    }
+
+    #[tokio::test]
+    async fn finish_leaves_an_external_servers_diff_field_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let executor = test_executor(&workspace).await;
+        let mut req = request("edit", json!({}));
+        req.server_slug = "other".into();
+        req.part_id = tool_call_part(&executor, "edit").await;
+        let part_id = req.part_id.clone();
+
+        let result = executor
+            .finish(
+                req,
+                Instant::now(),
+                Ok(Rendered {
+                    content: "ok".into(),
+                    structured: Some(json!({"diff": "server data"})),
+                    ok: true,
+                }),
+            )
+            .await;
+
+        assert_eq!(result.structured.as_ref().unwrap()["diff"], "server data");
+        let stored = messages::get_part(&executor.db.pool, &part_id)
+            .await
+            .unwrap()
+            .payload();
+        assert!(stored.get("diff").is_none());
+    }
+
+    #[test]
+    fn take_ui_diff_ignores_missing_empty_and_non_string_values() {
+        let mut none = None;
+        assert_eq!(take_ui_diff(&mut none), None);
+        let mut empty = Some(json!({"diff": ""}));
+        assert_eq!(take_ui_diff(&mut empty), None);
+        assert!(empty.unwrap().get("diff").is_none());
+        let mut number = Some(json!({"diff": 3}));
+        assert_eq!(take_ui_diff(&mut number), None);
+        let mut ok = Some(json!({"diff": "x", "path": "p"}));
+        assert_eq!(take_ui_diff(&mut ok).as_deref(), Some("x"));
+        assert_eq!(ok.unwrap(), json!({"path": "p"}));
     }
 
     #[tokio::test]

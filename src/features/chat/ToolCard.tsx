@@ -1,9 +1,8 @@
-import { useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronDown,
   Clock3,
   Copy,
   Loader2,
@@ -11,22 +10,29 @@ import {
 } from "lucide-react";
 import type { Part, ToolCallPayload, ToolImage } from "@/lib/types";
 import { parsePayload } from "@/app/store";
-import { formatDuration, formatJson } from "@/lib/format";
+import { formatJson } from "@/lib/format";
 import { call } from "@/lib/ipc";
 import { useApp } from "@/app/store";
 import { Button } from "@/components/Button";
 import { Modal } from "@/components/Modal";
 import { cn } from "@/lib/cn";
+import { ActivityRow } from "./ActivityRow";
+import { DiffView } from "./DiffView";
+import { summarizeTool, type Tone } from "./activity";
 
-const stateLabel: Record<string, string> = {
-  streaming: "preparing",
-  queued: "queued",
-  running: "running",
-  completed: "ok",
-  error: "error",
-  aborted: "stopped",
+const toneColor: Record<Tone, string> = {
+  muted: "var(--muted)",
+  warn: "var(--warn)",
+  danger: "var(--danger)",
 };
 
+const IN_FLIGHT = ["streaming", "queued", "running"];
+
+/**
+ * One tool call as a compact activity row. Collapsed it is a single line with
+ * the tool, its main argument and result metadata. Expanding it reveals the
+ * full arguments, result, image or error, and the file diff when there is one.
+ */
 export function ToolCard({ part }: { part: Part }) {
   const raw = parsePayload(part);
   const payload = raw as unknown as ToolCallPayload;
@@ -36,20 +42,12 @@ export function ToolCard({ part }: { part: Part }) {
   const image = (payload.image ?? null) as ToolImage | null;
   const metaArgs = (payload.args ?? {}) as Record<string, unknown>;
   const isMetaCall = payload.name === "mcp_call_tool";
-  const isBatch = payload.name === "mcp_execute";
-  const batchCalls = isBatch && Array.isArray(metaArgs.calls) ? metaArgs.calls.length : 0;
-  const displayName = isMetaCall
-    ? String(metaArgs.tool ?? payload.name)
-    : isBatch
-      ? `${payload.name} · ${batchCalls} call${batchCalls === 1 ? "" : "s"}`
-      : payload.name;
-  const displayServer = isMetaCall
-    ? String(metaArgs.server ?? payload.server)
-    : payload.server;
   const displayArgs =
     isMetaCall && metaArgs.arguments && typeof metaArgs.arguments === "object"
       ? (metaArgs.arguments as Record<string, unknown>)
       : (payload.args ?? {});
+  const [open, setOpen] = useState(false);
+  const bodyId = useId();
   const [full, setFull] = useState<string | null>(null);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [total, setTotal] = useState<number | null>(null);
@@ -57,10 +55,11 @@ export function ToolCard({ part }: { part: Part }) {
   const toast = useApp((store) => store.toast);
   const [copied, setCopied] = useState(false);
 
-  const duration =
-    payload.startedAt && payload.endedAt
-      ? formatDuration(payload.endedAt - payload.startedAt)
-      : "";
+  const summary = summarizeTool(payload);
+  const inFlight = IN_FLIGHT.includes(state);
+  // The diff only exists once the tool has finished; never show an empty one.
+  const diff = typeof payload.diff === "string" && payload.diff !== "" && !inFlight ? payload.diff : null;
+  const resultIsError = state === "error" && payload.resultPreview === payload.error;
 
   const showAll = async (offset = 0) => {
     setLoading(true);
@@ -106,67 +105,55 @@ export function ToolCard({ part }: { part: Part }) {
 
   return (
     <>
-      <div
-        className="my-2 overflow-hidden rounded-lg border text-[12.5px]"
-        style={{ borderColor: "var(--border)", background: "var(--panel)" }}
-      >
-        <div className="flex items-center gap-2 px-3 py-2">
-          <StatusIcon state={state} nonzeroExit={nonzeroExit} />
-          <span className="min-w-0 truncate font-medium" title={displayName}>
-            {displayName}
+      <div className="my-px" data-tool-state={state}>
+        <ActivityRow
+          icon={<StatusIcon state={state} nonzeroExit={nonzeroExit} />}
+          expanded={open}
+          onToggle={() => setOpen((value) => !value)}
+          controlsId={bodyId}
+          title={summary.title}
+          trailing={
+            <>
+              {summary.needsApproval ? (
+                <span style={{ color: "var(--warn)" }}>needs approval</span>
+              ) : null}
+              {summary.stateWord ? <span>{summary.stateWord}</span> : null}
+              {summary.duration ? (
+                <span className="flex items-center gap-1">
+                  <Clock3 size={10.5} aria-hidden /> {summary.duration}
+                </span>
+              ) : null}
+            </>
+          }
+        >
+          <span className="max-w-[40%] shrink-0 truncate font-medium">
+            {summary.prefix ? (
+              <span className="font-normal" style={{ color: "var(--muted)" }}>
+                {summary.prefix}
+              </span>
+            ) : null}
+            {summary.label}
           </span>
           <span
-            className="min-w-0 truncate rounded border px-1.5 py-0.5 text-[10.5px]"
-            style={{
-              borderColor: "var(--border)",
-              color: "var(--muted)",
-              maxWidth: 130,
-            }}
-            title={displayServer}
+            className="min-w-0 flex-1 truncate font-mono text-[11.5px]"
+            style={{ color: "var(--fg)" }}
           >
-            {displayServer || "unknown"}
+            {summary.target}
           </span>
-          <span
-            className="ml-auto flex shrink-0 items-center gap-1.5 text-[10.5px]"
-            style={{ color: "var(--faint)" }}
-          >
-            {payload.approval === "pending" ? (
-              <span style={{ color: "var(--warn)" }}>needs approval</span>
-            ) : null}
-            {duration ? (
-              <>
-                <Clock3 size={10.5} /> {duration}
-              </>
-            ) : null}
-            {nonzeroExit ? (
-              <span style={{ color: "var(--warn)" }}>exit {exitCode}</span>
-            ) : (
-              <span>{stateLabel[state] ?? state}</span>
-            )}
-          </span>
-        </div>
-
-        {image && image.path ? (
-          <div className="px-3 pb-2">
-            {imageUrl(image.path) ? (
-              <img
-                src={imageUrl(image.path)}
-                alt={image.name}
-                className="max-h-56 max-w-full rounded-md border object-contain"
-                style={{ borderColor: "var(--border)" }}
-              />
-            ) : (
-              <div className="text-[11.5px]" style={{ color: "var(--muted)" }}>
-                Image: {image.name} ({image.mime})
-              </div>
-            )}
-          </div>
-        ) : null}
+          {summary.result ? (
+            <span
+              className="max-w-[16rem] shrink-0 truncate text-[11.5px]"
+              style={{ color: toneColor[summary.tone] }}
+            >
+              {summary.result}
+            </span>
+          ) : null}
+        </ActivityRow>
 
         {state === "running" && typeof raw.progress === "number" ? (
-          <div className="px-3 pb-2">
+          <div className="mx-2 mt-0.5 mb-1">
             <div
-              className="h-1 overflow-hidden rounded-full"
+              className="h-0.5 overflow-hidden rounded-full"
               style={{ background: "var(--panel-2)" }}
             >
               <div
@@ -180,95 +167,84 @@ export function ToolCard({ part }: { part: Part }) {
           </div>
         ) : null}
 
-        <details
-          className="group border-t"
-          style={{ borderColor: "var(--border)" }}
-        >
-          <summary
-            className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-1.5 text-[11.5px] select-none"
-            style={{ color: "var(--muted)" }}
-          >
-            <ChevronDown
-              size={12}
-              className="transition group-open:rotate-180"
-            />
-            Arguments
-          </summary>
-          <div className="px-3 pb-3">
-            <pre
-              className="max-h-56 overflow-auto rounded-md p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
-              style={{ background: "var(--code)" }}
-            >
-              {formatJson(displayArgs)}
-            </pre>
-          </div>
-        </details>
-
-        {payload.error && state === "error" ? (
+        {open ? (
           <div
-            className="border-t px-3 py-2 text-[11.5px]"
-            style={{
-              borderColor: "var(--border)",
-              color: "var(--danger)",
-              background: "var(--danger-soft)",
-            }}
-          >
-            {payload.error}
-          </div>
-        ) : null}
-
-        {payload.resultPreview ? (
-          <details
-            className="group border-t"
+            id={bodyId}
+            className="mt-0.5 mb-2 ml-[15px] space-y-2.5 border-l pl-4 text-[12.5px]"
             style={{ borderColor: "var(--border)" }}
-            open={state !== "completed" ? true : undefined}
           >
-            <summary
-              className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-1.5 text-[11.5px] select-none"
-              style={{ color: "var(--muted)" }}
-            >
-              <ChevronDown size={12} className="transition group-open:rotate-180" />
-              Result
-              {payload.resultPreview ? (
-                <span
-                  className="ml-1 min-w-0 flex-1 truncate font-normal"
-                  style={{ color: "var(--faint)" }}
-                  title={payload.resultPreview}
-                >
-                  {payload.resultPreview.split("\n")[0]}
-                </span>
-              ) : null}
-              <span className="ml-auto flex items-center gap-2">
-                {payload.truncated ? <span>truncated</span> : null}
-                <button
-                  onClick={(event) => {
-                    event.preventDefault();
-                    void copyResult();
-                  }}
-                  className="focus-ring rounded p-0.5 hover:bg-[var(--panel-2)]"
-                  title="Copy result"
-                  aria-label="Copy result"
-                >
-                  {copied ? <CheckCircle2 size={11} /> : <Copy size={11} />}
-                </button>
-              </span>
-            </summary>
-            <div className="px-3 pb-3">
+            <Section label="Arguments">
               <pre
-                className="max-h-72 overflow-auto rounded-md p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
+                className="max-h-56 overflow-auto rounded-md p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
                 style={{ background: "var(--code)" }}
               >
-                {payload.resultPreview}
+                {formatJson(displayArgs)}
               </pre>
-              {payload.fullResultRef ? (
-                <div className="mt-2 flex justify-end">
-                  <Button size="sm" variant="ghost" loading={loading} onClick={() => void showAll()}>
-                    Show all
-                  </Button>
-                </div>
-              ) : null}
-            </div>
-          </details>
+            </Section>
+
+            {payload.resultPreview && !resultIsError ? (
+              <Section
+                label="Result"
+                action={
+                  <span className="flex items-center gap-2">
+                    {payload.truncated ? <span>truncated</span> : null}
+                    <button
+                      type="button"
+                      onClick={() => void copyResult()}
+                      className="focus-ring rounded p-0.5 hover:bg-[var(--panel-2)]"
+                      title="Copy result"
+                      aria-label="Copy result"
+                    >
+                      {copied ? <CheckCircle2 size={11} /> : <Copy size={11} />}
+                    </button>
+                  </span>
+                }
+              >
+                <pre
+                  className="max-h-72 overflow-auto rounded-md p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
+                  style={{ background: "var(--code)" }}
+                >
+                  {payload.resultPreview}
+                </pre>
+                {payload.fullResultRef ? (
+                  <div className="mt-2 flex justify-end">
+                    <Button size="sm" variant="ghost" loading={loading} onClick={() => void showAll()}>
+                      Show all
+                    </Button>
+                  </div>
+                ) : null}
+              </Section>
+            ) : null}
+
+            {payload.error && state === "error" ? (
+              <div
+                role="alert"
+                className="rounded-md px-2.5 py-2 text-[11.5px] whitespace-pre-wrap"
+                style={{ color: "var(--danger)", background: "var(--danger-soft)" }}
+              >
+                {payload.error}
+              </div>
+            ) : null}
+
+            {image && image.path ? (
+              <div>
+                {imageUrl(image.path) ? (
+                  <img
+                    src={imageUrl(image.path)}
+                    alt={image.name}
+                    className="max-h-56 max-w-full rounded-md border object-contain"
+                    style={{ borderColor: "var(--border)" }}
+                  />
+                ) : (
+                  <div className="text-[11.5px]" style={{ color: "var(--muted)" }}>
+                    Image: {image.name} ({image.mime})
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {diff ? <DiffView diff={diff} /> : null}
+          </div>
         ) : null}
       </div>
 
@@ -309,6 +285,33 @@ export function ToolCard({ part }: { part: Part }) {
   );
 }
 
+function Section({
+  label,
+  action,
+  children,
+}: {
+  label: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section>
+      <div
+        className="mb-1 flex items-center gap-2 text-[11px] font-medium"
+        style={{ color: "var(--muted)" }}
+      >
+        <span>{label}</span>
+        {action ? (
+          <span className="ml-auto font-normal" style={{ color: "var(--faint)" }}>
+            {action}
+          </span>
+        ) : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
 function imageUrl(path: string): string {
   if (!path || window.__MCP_CHAT_MOCK__ || !("__TAURI_INTERNALS__" in window)) return "";
   try {
@@ -318,24 +321,36 @@ function imageUrl(path: string): string {
   }
 }
 
+const STATE_NAME: Record<string, string> = {
+  streaming: "preparing",
+  queued: "queued",
+  running: "running",
+  completed: "completed",
+  error: "failed",
+  aborted: "stopped",
+};
+
 function StatusIcon({ state, nonzeroExit }: { state: string; nonzeroExit?: boolean }) {
+  const label = nonzeroExit ? "completed with non-zero exit" : (STATE_NAME[state] ?? state);
   if (state === "completed") {
     return nonzeroExit ? (
-      <AlertTriangle size={14} className="shrink-0" style={{ color: "var(--warn)" }} />
+      <AlertTriangle size={13} aria-label={label} role="img" style={{ color: "var(--warn)" }} />
     ) : (
-      <CheckCircle2 size={14} className="shrink-0" style={{ color: "var(--accent)" }} />
+      <CheckCircle2 size={13} aria-label={label} role="img" style={{ color: "var(--accent)" }} />
     );
   }
   if (state === "error" || state === "aborted") {
-    return <XCircle size={14} className="shrink-0" style={{ color: "var(--danger)" }} />;
+    return <XCircle size={13} aria-label={label} role="img" style={{ color: "var(--danger)" }} />;
   }
   if (state === "queued") {
-    return <Clock3 size={13} className="shrink-0" style={{ color: "var(--faint)" }} />;
+    return <Clock3 size={13} aria-label={label} role="img" style={{ color: "var(--faint)" }} />;
   }
   return (
     <Loader2
       size={13}
-      className={cn("shrink-0 animate-spin")}
+      aria-label={label}
+      role="img"
+      className={cn("animate-spin")}
       style={{ color: "var(--warn)" }}
     />
   );

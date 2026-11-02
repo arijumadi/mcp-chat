@@ -160,7 +160,7 @@ export function installMock(): void {
             idx: 0,
             kind: "reasoning",
             payloadJson: JSON.stringify({
-              text: "The user wants to know what MCP tools can do. I should demonstrate one read-only call.",
+              text: "The user wants to know what MCP tools can do. I should demonstrate one read-only call, then show how a file change is summarized.",
             }),
           },
           textPart(
@@ -186,6 +186,40 @@ export function installMock(): void {
               truncated: false,
             }),
           },
+          {
+            id: "demo-edit",
+            messageId: assistantId,
+            idx: 2,
+            kind: "tool_call",
+            payloadJson: JSON.stringify({
+              callId: "call_demo_edit",
+              name: "edit",
+              server: "mcp-chat",
+              args: {
+                filePath: "src/app.ts",
+                oldString: "const greeting = \"hello\";",
+                newString: "const greeting = \"hello, MCP\";\nconst tools = 1;",
+              },
+              state: "completed",
+              startedAt: now() - 1000 * 60 * 6 + 400,
+              endedAt: now() - 1000 * 60 * 6 + 520,
+              executed: true,
+              approval: "allowed",
+              resultPreview: "Edited src/app.ts: replaced 1 occurrence(s).",
+              truncated: false,
+              diff: [
+                "--- a/src/app.ts",
+                "+++ b/src/app.ts",
+                "@@ -1,4 +1,5 @@",
+                " import { run } from \"./run\";",
+                "-const greeting = \"hello\";",
+                "+const greeting = \"hello, MCP\";",
+                "+const tools = 1;",
+                " run(greeting);",
+                "",
+              ].join("\n"),
+            }),
+          },
         ],
       },
       {
@@ -198,7 +232,7 @@ export function installMock(): void {
         parts: [
           textPart(
             "demo-final",
-            "The tool returned `echo: hello from MCP`. Tool calls are grouped above so the transcript stays readable — click **Show details** to inspect the thoughts, arguments and full result.",
+            "The tool returned `echo: hello from MCP`. Thoughts and tool calls appear above as compact rows — click a row to inspect its arguments, result and file changes.",
           ),
         ],
       },
