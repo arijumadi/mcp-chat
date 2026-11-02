@@ -186,6 +186,7 @@ export function AssistantTurn({
                 key={item.part.id}
                 text={partText(item.part)}
                 duration={thoughtDuration(parsePayload(item.part))}
+                streaming={item.message.status === "streaming"}
               />
             ) : (
               <ToolCard key={item.part.id} part={item.part} />

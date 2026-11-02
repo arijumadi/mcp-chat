@@ -7,6 +7,7 @@ pub mod patch;
 pub mod permissions;
 pub mod prompt;
 pub mod runner;
+pub mod shell_guard;
 pub mod tools;
 pub mod types;
 

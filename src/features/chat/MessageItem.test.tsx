@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { installFakeScroll, removeFakeScroll } from "@/test/fakeScroll";
 import { MessageItem } from "./MessageItem";
 import { useApp } from "@/app/store";
 import { formatMessageDateTime } from "@/lib/format";
@@ -172,5 +173,24 @@ describe("MessageItem", () => {
     const item = message("assistant", [part("r1", "reasoning", { text: "Hmm" })]);
     render(<MessageItem message={item} canRetry={false} />);
     expect(screen.getByRole("button", { name: /Thought/ }).textContent).toBe("Thought");
+  });
+
+  it("passes the streaming state to its thought so it follows the newest text", () => {
+    installFakeScroll();
+    try {
+      const text = "x".repeat(400);
+      const streaming = { ...message("assistant", [part("r1", "reasoning", { text })]), status: "streaming" };
+      const { unmount } = render(<MessageItem message={streaming} canRetry={false} />);
+      fireEvent.click(screen.getByRole("button", { name: /^Thought/ }));
+      expect(screen.getByRole("region", { name: "Thought text" }).scrollTop).toBe(300);
+      unmount();
+
+      const done = message("assistant", [part("r1", "reasoning", { text })]);
+      render(<MessageItem message={done} canRetry={false} />);
+      fireEvent.click(screen.getByRole("button", { name: /^Thought/ }));
+      expect(screen.getByRole("region", { name: "Thought text" }).scrollTop).toBe(0);
+    } finally {
+      removeFakeScroll();
+    }
   });
 });
