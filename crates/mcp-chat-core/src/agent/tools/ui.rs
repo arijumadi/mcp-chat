@@ -4,6 +4,7 @@ use super::ToolExecutor;
 use super::workspace::{
     display_relative, read_text_file, resolve_write_path, workspace_root_for_conversation,
 };
+use crate::agent::capabilities::table;
 use serde_json::Value;
 
 /// Remove and return the non-empty `diff` string from a tool's structured output.
@@ -27,6 +28,9 @@ impl ToolExecutor {
         args: &Value,
     ) -> Option<String> {
         if !server_id.is_empty() {
+            return None;
+        }
+        if !table().get(tool_name).is_some_and(|c| c.produces_diff) {
             return None;
         }
         let workspace = workspace_root_for_conversation(&self.db.pool, conversation_id)

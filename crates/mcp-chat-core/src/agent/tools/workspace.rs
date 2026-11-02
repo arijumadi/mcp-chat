@@ -1,5 +1,6 @@
 //! Workspace path resolution and the text-file helpers shared by file tools.
 
+use crate::agent::capabilities::{AccessFormat, AccessKind, table};
 use crate::db::repo::{conversations, settings};
 use crate::{CoreError, Result};
 use serde_json::Value;
@@ -215,13 +216,13 @@ pub(crate) fn path_is_outside(workspace: &Path, raw: &str) -> bool {
     false
 }
 
+/// The path argument of a read-only tool, per the capability table.
 pub(super) fn outside_read_target<'a>(name: &str, args: &'a Value) -> Option<&'a str> {
-    match name {
-        "read" => args.get("filePath"),
-        "grep" | "glob" => args.get("path"),
-        _ => None,
+    let access = table().get(name)?.access.as_ref()?;
+    if access.kind != AccessKind::Read || access.format != AccessFormat::Path {
+        return None;
     }
-    .and_then(Value::as_str)
+    args.get(&access.arg).and_then(Value::as_str)
 }
 
 /// Writes stay confined unless the user approved a specific outside target.

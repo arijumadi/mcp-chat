@@ -1,6 +1,6 @@
 //! File tools: read, write, edit, grep and glob.
 
-use super::guards::WRITE_EXISTS_MESSAGE;
+use super::guards::overwrite_guard;
 use super::workspace::{
     MAX_TEXT_BYTES, display_relative, read_text_file, resolve_read_path, resolve_write_path,
     workspace_root_for_conversation,
@@ -255,11 +255,8 @@ impl ToolExecutor {
             .get("content")
             .and_then(Value::as_str)
             .ok_or_else(|| CoreError::invalid("content is required"))?;
-        let overwrite = req
-            .args
-            .get("overwrite")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        // `Some` while the write may not replace an existing file.
+        let no_overwrite = overwrite_guard(&req.remote_name, &req.args);
         if content.len() as u64 > MAX_TEXT_BYTES {
             return Err(CoreError::invalid("File content is too large."));
         }
@@ -269,12 +266,12 @@ impl ToolExecutor {
         let _guard = self.file_locks.acquire(vec![path.clone()]).await;
         let relative = display_relative(&workspace, &path);
         // Nothing is written, and no folder is created, when the target exists.
-        if !overwrite
+        if let Some(guard) = no_overwrite
             && tokio::fs::metadata(&path)
                 .await
                 .is_ok_and(|metadata| metadata.is_file())
         {
-            return Err(CoreError::invalid(WRITE_EXISTS_MESSAGE));
+            return Err(CoreError::invalid(&guard.blocked_message));
         }
         // Capture the previous text before overwriting. A missing file diffs
         // against empty; an unreadable (binary or oversized) one gets no diff
@@ -288,7 +285,7 @@ impl ToolExecutor {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        if overwrite {
+        if no_overwrite.is_none() {
             tokio::fs::write(&path, content).await?;
         } else {
             // create_new keeps this safe against a file appearing after the check.
@@ -300,7 +297,9 @@ impl ToolExecutor {
             {
                 Ok(file) => file,
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    return Err(CoreError::invalid(WRITE_EXISTS_MESSAGE));
+                    let message =
+                        no_overwrite.map_or("File already exists.", |g| &g.blocked_message);
+                    return Err(CoreError::invalid(message));
                 }
                 Err(error) => return Err(error.into()),
             };

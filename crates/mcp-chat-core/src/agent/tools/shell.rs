@@ -1,6 +1,6 @@
 //! Shell and Python execution, and the output cleanup they need.
 
-use super::guards::bash_write_block;
+use super::guards::shell_write_refusal;
 use super::workspace::{resolve_in_workspace, workspace_root_for_conversation};
 use super::{Rendered, ToolExecRequest, ToolExecutor};
 use crate::{CoreError, Result};
@@ -188,7 +188,7 @@ impl ToolExecutor {
             .get("command")
             .and_then(Value::as_str)
             .ok_or_else(|| CoreError::invalid("command is required"))?;
-        if let Some(message) = bash_write_block(&req.args) {
+        if let Some(message) = shell_write_refusal(&req.remote_name, &req.args) {
             return Err(CoreError::invalid(message));
         }
         let timeout_ms = req

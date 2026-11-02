@@ -18,6 +18,7 @@ import { Modal } from "@/components/Modal";
 import { cn } from "@/lib/cn";
 import { ActivityRow } from "./ActivityRow";
 import { DiffView } from "./DiffView";
+import { capabilityOf } from "@/lib/capabilities";
 import { summarizeTool, type Tone } from "./activity";
 
 const toneColor: Record<Tone, string> = {
@@ -28,9 +29,6 @@ const toneColor: Record<Tone, string> = {
 
 const IN_FLIGHT = ["streaming", "queued", "running"];
 
-// Built-in tools whose useful detail is the file change itself.
-const BUILTIN_SERVER = "mcp-chat";
-const FILE_MUTATION_TOOLS = ["write", "edit", "apply_patch"];
 
 /**
  * One tool call as a compact activity row. Collapsed it is a single line with
@@ -67,8 +65,8 @@ export function ToolCard({ part }: { part: Part }) {
   // A finished write, edit or patch opens straight onto its diff: no Arguments,
   // no Result, no second toggle. A failed call, or one without a diff, keeps the
   // regular body so its error and arguments stay visible.
-  const isFileMutation =
-    payload.server === BUILTIN_SERVER && FILE_MUTATION_TOOLS.includes(payload.name);
+  // Which tools carry a diff comes from the shared capability table.
+  const isFileMutation = capabilityOf(payload.server, payload.name)?.producesDiff === true;
   const mutationDiff = isFileMutation && state === "completed" ? diff : null;
 
   const showAll = async (offset = 0) => {

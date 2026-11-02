@@ -1,4 +1,5 @@
 pub mod approvals;
+pub mod capabilities;
 pub mod context;
 pub mod diff;
 pub mod edit;

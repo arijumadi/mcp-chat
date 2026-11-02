@@ -18,7 +18,7 @@ mod workspace;
 pub use defs::{
     builtin_default_effect, builtin_tool_def, builtin_tool_defs, builtin_tool_info, is_builtin_tool,
 };
-pub use guards::{WRITE_EXISTS_MESSAGE, is_dangerous_command};
+pub use guards::is_dangerous_command;
 pub use mcp::{
     MCP_CALL_TOOL, MCP_EXECUTE, MCP_GET_TOOL_SCHEMA, MCP_SEARCH_TOOLS, is_meta_tool,
     meta_tool_defs, meta_tool_info,
@@ -32,6 +32,7 @@ use self::guards::auto_effective_effect;
 use self::ui::take_ui_diff;
 use self::workspace::outside_read_target;
 use crate::agent::approvals::{ApprovalDecision, ApprovalRegistry, InputRegistry};
+use crate::agent::capabilities::{AccessFormat, AccessKind, table};
 use crate::agent::file_locks::FileLocks;
 use crate::agent::permissions::{self as permissions, Effect};
 use crate::db::Db;
@@ -244,35 +245,7 @@ impl ToolExecutor {
                 .unwrap_or_default()
         };
         let outside_write = if builtin {
-            match req.remote_name.as_str() {
-                "write" | "edit" => {
-                    if let Some(raw) = req.args.get("filePath").and_then(Value::as_str) {
-                        match workspace_root_for_conversation(&self.db.pool, &req.conversation_id)
-                            .await
-                        {
-                            Ok(workspace) => path_is_outside(&workspace, raw),
-                            Err(_) => false,
-                        }
-                    } else {
-                        false
-                    }
-                }
-                "apply_patch" => {
-                    if let Some(patch_text) = req.args.get("patchText").and_then(Value::as_str) {
-                        match workspace_root_for_conversation(&self.db.pool, &req.conversation_id)
-                            .await
-                        {
-                            Ok(workspace) => {
-                                crate::agent::patch::touches_outside(&workspace, patch_text)
-                            }
-                            Err(_) => false,
-                        }
-                    } else {
-                        false
-                    }
-                }
-                _ => false,
-            }
+            self.writes_outside_workspace(&req).await
         } else {
             false
         };
@@ -360,6 +333,31 @@ impl ToolExecutor {
         self.finish(req, started, outcome).await
     }
 
+    /// Whether a write-access tool targets a path outside the workspace. Which
+    /// argument names the target, and whether it is a path or a patch, comes
+    /// from the capability table.
+    async fn writes_outside_workspace(&self, req: &ToolExecRequest) -> bool {
+        let Some(access) = table()
+            .get(&req.remote_name)
+            .and_then(|capability| capability.access.as_ref())
+            .filter(|access| access.kind == AccessKind::Write)
+        else {
+            return false;
+        };
+        let Some(raw) = req.args.get(&access.arg).and_then(Value::as_str) else {
+            return false;
+        };
+        let Ok(workspace) =
+            workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await
+        else {
+            return false;
+        };
+        match access.format {
+            AccessFormat::Path => path_is_outside(&workspace, raw),
+            AccessFormat::Patch => crate::agent::patch::touches_outside(&workspace, raw),
+        }
+    }
+
     async fn finish(
         &self,
         req: ToolExecRequest,
@@ -379,7 +377,9 @@ impl ToolExecutor {
                 // model only ever sees `content`. Only built-in file tools set
                 // it; an external MCP server's own `diff` key is left alone.
                 let diff = if req.server_slug == "builtin"
-                    && matches!(req.remote_name.as_str(), "edit" | "apply_patch" | "write")
+                    && table()
+                        .get(&req.remote_name)
+                        .is_some_and(|capability| capability.produces_diff)
                 {
                     take_ui_diff(&mut structured)
                 } else {

@@ -1,8 +1,10 @@
 //! Unit tests for the tool executor and its helpers.
 
-use super::defs::{builtin_default_effect, builtin_tool_defs, builtin_tool_info};
+use super::defs::{
+    builtin_default_effect, builtin_tool_def, builtin_tool_defs, builtin_tool_info, is_builtin_tool,
+};
 use super::files::{line_prefix, strip_utf8_bom};
-use super::guards::{WRITE_EXISTS_MESSAGE, auto_effective_effect, is_dangerous_command};
+use super::guards::{auto_effective_effect, is_dangerous_command};
 use super::output::{READ_PAGE_CHARS, page_text, read_spilled_lines};
 use super::shell::{
     PS_PROLOG, clean_powershell_stderr, clip_lines, echo_suspect, normalize_shell_text,
@@ -29,6 +31,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
+
+// The exact wording the model is told. Kept literal on purpose: it must not
+// change just because the capability table does.
+const WRITE_EXISTS_MESSAGE: &str = "File already exists. Use apply_patch to modify it, or pass overwrite: true to replace the whole file.";
+const BLOCKED_MESSAGE: &str = "BLOCKED: bash tidak boleh mengubah isi file. Pakai write (file baru) atau apply_patch (file existing). Untuk operasi yang memang disengaja, set allowFileWrites=true.";
 
 #[test]
 fn workspace_paths_cannot_escape() {
@@ -791,7 +798,7 @@ async fn a_blocked_bash_command_is_refused_before_any_approval_prompt() {
     .expect("the call should fail without waiting for approval");
     assert!(!result.ok);
     assert!(!result.executed);
-    assert_eq!(result.content, crate::agent::shell_guard::BLOCKED_MESSAGE);
+    assert_eq!(result.content, BLOCKED_MESSAGE);
     while let Ok(event) = events.try_recv() {
         assert!(!matches!(event, CoreEvent::Approval { .. }));
     }
@@ -1443,4 +1450,194 @@ async fn read_only_tools_can_leave_workspace_in_auto_mode() {
     glob.auto_approve = true;
     let result = executor.run_glob(&glob).await.unwrap();
     assert!(result.content.contains("outside.txt"));
+}
+
+// ---- capability table: drift guards -----------------------------------------
+
+#[tokio::test]
+async fn every_tool_in_the_table_has_a_handler_and_a_schema() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    let executor = test_executor(&workspace).await;
+    let table = crate::agent::capabilities::table();
+
+    let defs = builtin_tool_defs();
+    assert_eq!(
+        defs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+        table
+            .tools
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>(),
+        "definitions follow the table, in order"
+    );
+    for capability in &table.tools {
+        assert!(is_builtin_tool(&capability.name), "{}", capability.name);
+        // No arguments: every handler must reject this as invalid input. Only a
+        // missing handler answers "Unknown built-in tool".
+        let outcome = executor
+            .run_builtin(&request(&capability.name, json!({})))
+            .await;
+        if let Err(error) = outcome {
+            assert!(
+                !error.user_message().contains("Unknown built-in tool"),
+                "{} is in the table but not handled",
+                capability.name
+            );
+        }
+    }
+    assert!(!is_builtin_tool("not_a_tool"));
+    assert_eq!(builtin_default_effect("not_a_tool"), Effect::Allow);
+}
+
+#[test]
+fn guard_flags_are_in_the_schema_and_only_there() {
+    let table = crate::agent::capabilities::table();
+    for capability in &table.tools {
+        let def = builtin_tool_def(&capability.name).unwrap();
+        let properties = def.input_schema["properties"].as_object().unwrap();
+        match &capability.guard {
+            Some(guard) => {
+                assert_eq!(properties[&guard.override_param]["type"], "boolean");
+                assert_eq!(
+                    properties[&guard.override_param]["description"],
+                    guard.override_description.as_str()
+                );
+            }
+            None => {
+                for other in table.tools.iter().filter_map(|t| t.guard.as_ref()) {
+                    assert!(
+                        !properties.contains_key(&other.override_param),
+                        "{} must not carry another tool's override flag",
+                        capability.name
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn outside_read_targets_follow_the_table() {
+    assert_eq!(
+        outside_read_target("read", &json!({"filePath": "/etc/x"})),
+        Some("/etc/x")
+    );
+    assert_eq!(
+        outside_read_target("grep", &json!({"path": "/etc"})),
+        Some("/etc")
+    );
+    assert_eq!(
+        outside_read_target("glob", &json!({"path": "/etc"})),
+        Some("/etc")
+    );
+    // Write tools are checked by the write path, not the read path.
+    assert_eq!(
+        outside_read_target("write", &json!({"filePath": "/etc/x"})),
+        None
+    );
+    assert_eq!(outside_read_target("bash", &json!({"command": "ls"})), None);
+}
+
+#[tokio::test]
+async fn writes_outside_the_workspace_are_detected_from_the_table() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    let executor = test_executor(&workspace).await;
+    let outside = if cfg!(windows) {
+        "C:\\Windows\\x.txt"
+    } else {
+        "/tmp/x.txt"
+    };
+
+    for tool in ["write", "edit"] {
+        let inside = request(tool, json!({"filePath": "a.txt"}));
+        assert!(!executor.writes_outside_workspace(&inside).await, "{tool}");
+        let outside_call = request(tool, json!({"filePath": outside}));
+        assert!(
+            executor.writes_outside_workspace(&outside_call).await,
+            "{tool}"
+        );
+    }
+    let patch_inside = request(
+        "apply_patch",
+        json!({"patchText": "*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch\n"}),
+    );
+    assert!(!executor.writes_outside_workspace(&patch_inside).await);
+    let patch_outside = request(
+        "apply_patch",
+        json!({"patchText": format!("*** Begin Patch\n*** Add File: {outside}\n+x\n*** End Patch\n")}),
+    );
+    assert!(executor.writes_outside_workspace(&patch_outside).await);
+    // Read tools and shell are not write-access tools.
+    assert!(
+        !executor
+            .writes_outside_workspace(&request("read", json!({"filePath": outside})))
+            .await
+    );
+    assert!(
+        !executor
+            .writes_outside_workspace(&request("bash", json!({"command": "ls"})))
+            .await
+    );
+}
+
+#[test]
+fn dangerous_calls_follow_the_table() {
+    let mut rm = request("bash", json!({"command": "rm -rf build"}));
+    rm.auto_approve = true;
+    assert_eq!(auto_effective_effect(&rm, Effect::Ask), Effect::Ask);
+
+    let mut delete = request(
+        "apply_patch",
+        json!({"patchText": "*** Begin Patch\n*** Delete File: a.txt\n*** End Patch\n"}),
+    );
+    delete.auto_approve = true;
+    assert_eq!(auto_effective_effect(&delete, Effect::Ask), Effect::Ask);
+
+    let mut add = request(
+        "apply_patch",
+        json!({"patchText": "*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch\n"}),
+    );
+    add.auto_approve = true;
+    assert_eq!(auto_effective_effect(&add, Effect::Ask), Effect::Allow);
+
+    // `overwrite` is not an escape that needs review; `allowFileWrites` is.
+    let mut overwrite = request(
+        "write",
+        json!({"filePath": "a.txt", "content": "x", "overwrite": true}),
+    );
+    overwrite.auto_approve = true;
+    assert_eq!(
+        auto_effective_effect(&overwrite, Effect::Ask),
+        Effect::Allow
+    );
+    let mut escape = request(
+        "bash",
+        json!({"command": "echo hi > out.txt", "allowFileWrites": true}),
+    );
+    escape.auto_approve = true;
+    assert_eq!(auto_effective_effect(&escape, Effect::Ask), Effect::Ask);
+}
+
+#[tokio::test]
+async fn only_diff_capable_tools_get_an_approval_diff() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    std::fs::write(workspace.join("a.txt"), "old\n").unwrap();
+    let executor = test_executor(&workspace).await;
+    let edit_args = json!({"filePath": "a.txt", "oldString": "old", "newString": "new"});
+    assert!(
+        executor
+            .approval_diff("test-conversation", "", "edit", &edit_args)
+            .await
+            .is_some()
+    );
+    // A tool that is not in the diff set never gets one, whatever its arguments.
+    assert!(
+        executor
+            .approval_diff("test-conversation", "", "bash", &edit_args)
+            .await
+            .is_none()
+    );
 }

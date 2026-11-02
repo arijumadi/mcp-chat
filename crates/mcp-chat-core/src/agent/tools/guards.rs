@@ -2,23 +2,35 @@
 
 use super::workspace::{resolve_write_path, workspace_root_for_conversation};
 use super::{ToolExecRequest, ToolExecutor};
+use crate::agent::capabilities::{DangerKind, Guard, GuardKind, table};
 use crate::agent::permissions::Effect;
 use regex::RegexBuilder;
 use serde_json::Value;
 
-/// Returned when `write` would replace a file that already exists.
-pub const WRITE_EXISTS_MESSAGE: &str = "File already exists. Use apply_patch to modify it, or pass overwrite: true to replace the whole file.";
-
-/// The model's refusal message when a bash command writes file contents and
-/// `allowFileWrites` is not set. `None` means the command may run.
-pub(super) fn bash_write_block(args: &Value) -> Option<&'static str> {
-    let command = args.get("command").and_then(Value::as_str)?;
-    let allowed = args
-        .get("allowFileWrites")
+/// Whether this call sets the guard's override flag (`overwrite: true`,
+/// `allowFileWrites: true`).
+pub(super) fn override_set(guard: &Guard, args: &Value) -> bool {
+    args.get(&guard.override_param)
         .and_then(Value::as_bool)
-        .unwrap_or(false);
-    (!allowed && crate::agent::shell_guard::writes_file_contents(command))
-        .then_some(crate::agent::shell_guard::BLOCKED_MESSAGE)
+        .unwrap_or(false)
+}
+
+/// The refusal for a guarded shell tool, if its command writes file contents
+/// and the override is not set. The wording comes from the capability table.
+pub(super) fn shell_write_refusal(tool: &str, args: &Value) -> Option<String> {
+    let guard = table().get(tool)?.guard.as_ref()?;
+    if guard.kind != GuardKind::ShellContentWrite || override_set(guard, args) {
+        return None;
+    }
+    let command = args.get("command").and_then(Value::as_str)?;
+    crate::agent::shell_guard::writes_file_contents(command).then(|| guard.blocked_message.clone())
+}
+
+/// The refusal for a tool that must not replace an existing file, when the
+/// override is not set. The caller checks whether the file exists.
+pub(super) fn overwrite_guard(tool: &str, args: &Value) -> Option<&'static Guard> {
+    let guard = table().get(tool)?.guard.as_ref()?;
+    (guard.kind == GuardKind::NoOverwrite && !override_set(guard, args)).then_some(guard)
 }
 
 /// Shell commands that are destructive enough to keep asking even when
@@ -85,41 +97,35 @@ pub fn is_dangerous_command(command: &str) -> bool {
 }
 
 pub(super) fn is_dangerous_tool_call(req: &ToolExecRequest) -> bool {
-    if req.remote_name == "bash" {
-        return req
-            .args
-            .get("command")
-            .and_then(Value::as_str)
-            .map(is_dangerous_command)
-            .unwrap_or(true);
-    }
-    if req.remote_name == "apply_patch" {
-        return req
-            .args
-            .get("patchText")
-            .and_then(Value::as_str)
+    let Some(danger) = table()
+        .get(&req.remote_name)
+        .and_then(|capability| capability.danger.as_ref())
+    else {
+        return false;
+    };
+    let value = req.args.get(&danger.arg).and_then(Value::as_str);
+    match danger.kind {
+        DangerKind::ShellCommand => value.map(is_dangerous_command).unwrap_or(true),
+        DangerKind::PatchDelete => value
             .map(|patch| {
                 patch
                     .lines()
                     .any(|line| line.starts_with("*** Delete File:"))
             })
-            .unwrap_or(true);
+            .unwrap_or(true),
     }
-    false
 }
 
 pub(super) fn auto_effective_effect(req: &ToolExecRequest, effect: Effect) -> Effect {
     if req.auto_approve && effect == Effect::Ask && !is_dangerous_tool_call(req) {
-        // An explicit shell file-write escape must remain a reviewed action,
-        // even when the chat is in auto mode. Otherwise the model can bypass
-        // the routing guard by setting allowFileWrites itself.
-        if req.remote_name == "bash"
-            && req
-                .args
-                .get("allowFileWrites")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        {
+        // An explicit escape from a routing guard must remain a reviewed
+        // action, even when the chat is in auto mode. Otherwise the model can
+        // bypass the guard by setting the flag itself.
+        let escaped = table()
+            .get(&req.remote_name)
+            .and_then(|capability| capability.guard.as_ref())
+            .is_some_and(|guard| guard.override_needs_review && override_set(guard, &req.args));
+        if escaped {
             return Effect::Ask;
         }
         Effect::Allow
@@ -132,17 +138,11 @@ impl ToolExecutor {
     /// Guards that need no approval to evaluate. Outside-workspace paths are
     /// skipped here: they are checked after the separate outside-write approval.
     pub(super) async fn precheck_builtin(&self, req: &ToolExecRequest) -> Option<String> {
-        match req.remote_name.as_str() {
-            "bash" => bash_write_block(&req.args).map(str::to_owned),
-            "write" => {
-                let overwrite = req
-                    .args
-                    .get("overwrite")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if overwrite {
-                    return None;
-                }
+        let guard = table().get(&req.remote_name)?.guard.as_ref()?;
+        match guard.kind {
+            GuardKind::ShellContentWrite => shell_write_refusal(&req.remote_name, &req.args),
+            GuardKind::NoOverwrite => {
+                overwrite_guard(&req.remote_name, &req.args)?;
                 let raw = req.args.get("filePath").and_then(Value::as_str)?;
                 let workspace =
                     workspace_root_for_conversation(&self.db.pool, &req.conversation_id)
@@ -153,9 +153,8 @@ impl ToolExecutor {
                     .await
                     .map(|metadata| metadata.is_file())
                     .unwrap_or(false);
-                exists.then(|| WRITE_EXISTS_MESSAGE.to_owned())
+                exists.then(|| guard.blocked_message.clone())
             }
-            _ => None,
         }
     }
 }
