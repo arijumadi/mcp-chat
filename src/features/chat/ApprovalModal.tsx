@@ -82,6 +82,16 @@ export function ApprovalModal() {
       <p className="mb-3 text-[12.5px]" style={{ color: "var(--muted)" }}>
         The model asked to execute this tool. Review the changes and arguments before allowing it.
       </p>
+      {approval.tool === "bash" && approval.args.allowFileWrites === true ? (
+        <div
+          role="note"
+          className="mb-3 rounded-lg px-3 py-2 text-[12px]"
+          style={{ background: "var(--warn-soft)", color: "var(--warn)" }}
+        >
+          <span className="font-medium">allowFileWrites is on.</span> This command may write file
+          contents directly. Normally that goes through write or apply_patch.
+        </div>
+      ) : null}
       {approval.diff ? (
         <div className="mb-3">
           <DiffView

@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { installFakeScroll, removeFakeScroll } from "@/test/fakeScroll";
 import { AssistantTurn } from "./AssistantTurn";
 import type { MessageWithParts, Part } from "@/lib/types";
 
@@ -29,8 +30,11 @@ function assistant(
   };
 }
 
+beforeEach(installFakeScroll);
+
 afterEach(() => {
   cleanup();
+  removeFakeScroll();
 });
 
 describe("AssistantTurn", () => {
@@ -133,7 +137,7 @@ describe("AssistantTurn", () => {
     expect(screen.getByRole("button", { name: /echo/ })).toBeInTheDocument();
   });
 
-  it("shows an edit row with change counts and keeps its diff collapsed", () => {
+  it("shows an edit row with change counts and opens its diff in one click", () => {
     render(
       <AssistantTurn
         messages={[
@@ -155,10 +159,11 @@ describe("AssistantTurn", () => {
     expect(row).toHaveTextContent("src/app.ts");
     expect(row).toHaveTextContent("+1 \u22121");
     expect(screen.queryByText("-old")).not.toBeInTheDocument();
+    // One click on the row shows the colored diff; there is no second toggle.
     fireEvent.click(row);
-    fireEvent.click(screen.getByRole("button", { name: /Changes/ }));
     expect(screen.getByText("-old")).toHaveClass("diff-line-removed");
     expect(screen.getByText("+new")).toHaveClass("diff-line-added");
+    expect(screen.queryByText("Arguments")).not.toBeInTheDocument();
   });
 
   it("reports failed tool calls and total duration", () => {
@@ -252,5 +257,24 @@ describe("AssistantTurn", () => {
       />,
     );
     expect(screen.getByText("Thinking…")).toBeInTheDocument();
+  });
+
+  it("makes a thought follow its text only while its own message is streaming", () => {
+    const text = "x".repeat(400);
+    const turn = (status: string) => (
+      <AssistantTurn
+        messages={[assistant("m1", [part("p1", "reasoning", { text })], status)]}
+        canRetry={false}
+      />
+    );
+    const { unmount } = render(turn("streaming"));
+    fireEvent.click(screen.getByRole("button", { name: /^Thought/ }));
+    expect(screen.getByRole("region", { name: "Thought text" }).scrollTop).toBe(300);
+    unmount();
+
+    // A finished message opens at the top.
+    render(turn("completed"));
+    fireEvent.click(screen.getByRole("button", { name: /^Thought/ }));
+    expect(screen.getByRole("region", { name: "Thought text" }).scrollTop).toBe(0);
   });
 });

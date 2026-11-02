@@ -220,6 +220,80 @@ export function installMock(): void {
               ].join("\n"),
             }),
           },
+          {
+            id: "demo-write",
+            messageId: assistantId,
+            idx: 3,
+            kind: "tool_call",
+            payloadJson: JSON.stringify({
+              callId: "call_demo_write",
+              name: "write",
+              server: "mcp-chat",
+              args: { filePath: "docs/notes.md", content: "# Notes\n\nWritten by the write tool.\n" },
+              state: "completed",
+              startedAt: now() - 1000 * 60 * 6 + 540,
+              endedAt: now() - 1000 * 60 * 6 + 600,
+              executed: true,
+              approval: "allowed",
+              resultPreview: "Wrote docs/notes.md (36 bytes).",
+              truncated: false,
+              diff: [
+                "--- a/docs/notes.md",
+                "+++ b/docs/notes.md",
+                "@@ -0,0 +1,3 @@",
+                "+# Notes",
+                "+",
+                "+Written by the write tool.",
+                "",
+              ].join("\n"),
+            }),
+          },
+          {
+            id: "demo-patch",
+            messageId: assistantId,
+            idx: 4,
+            kind: "tool_call",
+            payloadJson: JSON.stringify({
+              callId: "call_demo_patch",
+              name: "apply_patch",
+              server: "mcp-chat",
+              args: {
+                patchText: [
+                  "*** Begin Patch",
+                  "*** Update File: src/util.ts",
+                  "@@",
+                  " export function add(a: number, b: number) {",
+                  "-  return a + b;",
+                  "+  return a + b + 0;",
+                  " }",
+                  "*** Add File: src/index.ts",
+                  "+export * from \"./util\";",
+                  "*** End Patch",
+                ].join("\n"),
+              },
+              state: "completed",
+              startedAt: now() - 1000 * 60 * 6 + 620,
+              endedAt: now() - 1000 * 60 * 6 + 780,
+              executed: true,
+              approval: "allowed",
+              resultPreview: "Applied patch (2 file(s)).\nM src/util.ts (+1/-1)\nA src/index.ts (+1)",
+              truncated: false,
+              diff: [
+                "--- a/src/util.ts",
+                "+++ b/src/util.ts",
+                "@@ -1,3 +1,3 @@",
+                " export function add(a: number, b: number) {",
+                "-  return a + b;",
+                "+  return a + b + 0;",
+                " }",
+                "--- a/src/index.ts",
+                "+++ b/src/index.ts",
+                "@@ -0,0 +1 @@",
+                "+export * from \"./util\";",
+                "",
+              ].join("\n"),
+            }),
+          },
         ],
       },
       {
@@ -622,6 +696,33 @@ export function installMock(): void {
       completionTokens: 0,
       contextWindow: 128000,
     });
+    // "long thought" streams a tall reasoning part so scrolling can be exercised.
+    let thoughtText = "";
+    const thoughtId = uid();
+    if (/long thought/i.test(text)) {
+      for (let step = 1; step <= 200; step += 1) {
+        if (!generating.has(conversationId)) return;
+        const line = `Step ${step}: weighing the next option against the constraints.\n`;
+        thoughtText += line;
+        emit({
+          type: "delta",
+          conversationId,
+          messageId: assistantId,
+          partId: thoughtId,
+          deltaType: "reasoning",
+          text: line,
+        });
+        await delay(35);
+      }
+      emit({
+        type: "part",
+        conversationId,
+        messageId: assistantId,
+        partId: thoughtId,
+        kind: "reasoning",
+        payload: { text: thoughtText },
+      });
+    }
     const partId = uid();
     const interim = "Let me check that with the echo tool.";
     let buffer = "";
@@ -685,6 +786,15 @@ export function installMock(): void {
     });
     const list = messages.get(conversationId) ?? [];
     const target = list.find((message) => message.id === assistantId);
+    if (thoughtText) {
+      target?.parts.push({
+        id: thoughtId,
+        messageId: assistantId,
+        idx: 0,
+        kind: "reasoning",
+        payloadJson: JSON.stringify({ text: thoughtText }),
+      });
+    }
     target?.parts.push({
       id: partId,
       messageId: assistantId,
