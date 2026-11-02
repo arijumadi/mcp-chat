@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useApp } from "@/app/store";
 import { useUi } from "@/app/ui";
 import type { ApprovalEvent, ProviderView } from "@/lib/types";
+import readme from "../../../README.md?raw";
 import { COMMANDS, commandById, filterCommands, matchesQuery } from "./registry";
 import { handleShortcut, resolveShortcut, type OverlayState } from "./useShortcuts";
 import { formatShortcut, parseChord } from "./shortcuts";
@@ -64,6 +65,15 @@ describe("the command list", () => {
 
   it("shows readable shortcut text", () => {
     expect(formatShortcut(commandById("approval.once")!.shortcut!, false)).toBe("Ctrl+Enter");
+  });
+});
+
+describe("documentation", () => {
+  it("lists every shortcut of the registry in the README", () => {
+    for (const command of COMMANDS.filter((item) => item.shortcut)) {
+      const written = command.shortcut!.replaceAll("Mod", "Ctrl/Cmd");
+      expect(readme, `${command.id} (${written})`).toContain(`\`${written}\``);
+    }
   });
 });
 

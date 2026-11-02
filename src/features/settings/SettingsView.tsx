@@ -28,6 +28,7 @@ import { inputClass, hintClass } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { ProviderForm } from "./ProviderForm";
 import { AppearanceSettings, ShortcutList } from "./AppearanceSettings";
+import { NotificationSettings } from "./NotificationSettings";
 import { DEFAULT_SYSTEM_PROMPT } from "@/lib/defaults";
 
 export function SettingsView() {
@@ -356,6 +357,14 @@ export function SettingsView() {
               ))}
             </div>
             <AppearanceSettings />
+          </Section>
+
+          <Section
+            id="notifications"
+            title="Notifications"
+            description="Know when a long task needs you, without watching the window."
+          >
+            <NotificationSettings />
           </Section>
 
           <Section
@@ -761,6 +770,7 @@ function SettingsNav() {
   const items = [
     ["providers", "Providers"],
     ["appearance", "Appearance"],
+    ["notifications", "Notifications"],
     ["shortcuts", "Shortcuts"],
     ["chat-defaults", "Chat defaults"],
     ["context", "Context"],

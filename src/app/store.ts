@@ -1,3 +1,4 @@
+import { maybeNotify, notificationsEnabled, primeNotifications } from "@/lib/notify";
 import {
   appearanceSettings,
   applyAppearance,
@@ -355,6 +356,9 @@ export const useApp = create<AppStore>()((set, get) => ({
       set({ view: "settings" });
       return;
     }
+    // The user is in front of the app right now, so a system permission prompt
+    // would be seen. Asking later, from a background event, would not be.
+    void primeNotifications(notificationsEnabled(get().settings));
     const tempId = `temp-${Date.now()}`;
     const parts: Part[] = [];
     if (text.trim()) {
@@ -1216,9 +1220,27 @@ function flushPendingDeltas(set: StoreSet, get: () => AppStore) {
   for (const event of merged) applyCoreEvent(event, set, get);
 }
 
+/**
+ * Tell the user, with a desktop notification, about an event they cannot see
+ * because the window is in the background or another chat is open.
+ */
+function announce(event: CoreEvent, get: () => AppStore): void {
+  if (event.type !== "status" && event.type !== "approval" && event.type !== "input_request") {
+    return;
+  }
+  const state = get();
+  void maybeNotify(event, {
+    enabled: notificationsEnabled(state.settings),
+    activeId: state.activeId,
+    titleOf: (id) => state.conversations.find((item) => item.id === id)?.title,
+  });
+}
+
 function handleCoreEvent(event: CoreEvent, set: StoreSet, get: () => AppStore) {
   if (event.type !== "delta") {
     flushPendingDeltas(set, get);
+    // Look at the state as it was before this event changed it.
+    announce(event, get);
     applyCoreEvent(event, set, get);
     return;
   }

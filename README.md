@@ -22,6 +22,9 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - `edit`, `apply_patch` and `write` keep their diff after they finish: it is stored on the tool call, and one click on the row opens it directly (no Arguments or Result, no second toggle) with added and removed lines highlighted; a multi-file patch shows every file in one body. A failed call, or one without a diff, keeps the regular Arguments/Result/error view. The approval prompt uses the same diff view. The diff is display-only and is never sent to the model.
 - An expanded **Thought** that is still streaming follows its newest text. Scroll up inside it to stop following, and scroll back near the bottom to resume. Only the thought body scrolls, not the transcript.
 - Tool routing is enforced, not only prompted. `write` creates new files and refuses to replace an existing one unless `overwrite: true`. `bash` refuses commands that clearly write file contents (redirects to a file, `tee`, `sed -i`, `dd of=`, `Set-Content`/`Out-File`/`Add-Content`/`Clear-Content`/`Tee-Object`, `[IO.File]::Write*`, `New-Item -ItemType File`) unless `allowFileWrites: true`; build, test, git, package-manager and plain file-management commands (`mkdir`, `rm`, `mv`) are not affected. The check is a conservative routing aid, not a security boundary, and both refusals happen before any approval prompt. The approval prompt flags a bash call that sets `allowFileWrites`.
+- **`/compact [focus]`** in the composer (or the palette, or `Ctrl/Cmd+Shift+K`) summarizes the older messages to free context. It asks first because it cannot be undone, shows the current context size, and takes an optional focus such as "keep the database decisions". It holds the conversation while it runs, so nothing can be sent meanwhile, and Stop cancels it.
+- **Settings > Appearance** has density (comfortable or compact), chat text size (13 to 19 px) and chat width (narrow, default, wide, full). They apply at once and are remembered. The defaults are the original look.
+- **Desktop notifications** (Settings > Notifications, on by default) tell you when a reply finishes, fails, or a tool waits for your approval or answer, while Jarvis is in the background or another chat is open. They show only the chat title and what happened, never your messages or commands. Jarvis asks the system for permission when you send a message, never from the background. There is no tray icon yet.
 - **Auto** in the composer enables approval-free calls for built-in tools in the current chat after a warning. In auto mode, `read`/`grep`/`glob` may also use explicit paths outside the workspace. Without auto mode, those outside reads ask for an explicit per-call approval instead of failing immediately. `write`/`edit`/`apply_patch` inside the workspace follow auto mode, but outside-workspace writes always require an explicit per-call approval and cannot be auto-approved. Destructive shell commands (`rm -rf`, `del`, `Remove-Item -Recurse`, `git reset --hard`, etc.) and patch file deletions still ask for approval; explicit deny policies still win. MCP still evaluates its server policy first; as before, auto mode can relax an MCP `Ask` to `Allow`, while `Deny` remains.
 - Built-in local tools available in every chat: `bash`, `python`, `read`, `grep`, `glob`, `edit`, `apply_patch`, `write`, `skill` and `question`. `apply_patch` applies compact multi-file patches (add/update/move/delete) with CRLF-aware, whitespace-tolerant hunk matching, `@@` context anchors and `*** End of File` anchoring; file deletes still require approval even when auto-approve is on, and outside-workspace targets require explicit approval. `edit` replaces one exact string in one existing file, matches files as the model sees them (LF view) and tolerates typographic punctuation and trailing whitespace; use `apply_patch` for multiple hunks or files. File-mutation approval prompts include a unified diff when the target is inside the workspace. `bash` defaults to PowerShell on Windows and `sh` elsewhere; `cmd`/`pwsh`/`bash` remain explicit options. It supports a per-call `cwd`, labelled stdout/stderr and echo detection; PowerShell uses `-EncodedCommand` to avoid nested-quote failures. Absolute workspace paths are normalized (`\\?\`, case and trailing separators) consistently across filesystem tools. File writes stay inside the workspace by default; outside-workspace `write`/`edit`/`apply_patch` targets always require explicit approval. `read`/`grep`/`glob` can use explicit external paths after per-call approval, or without approval in auto mode. `bash`, `edit`, `apply_patch` and `write` ask for approval by default. `python` runs complete source through stdin with UTF-8 environment, a workspace `cwd`, and timeout, avoiding shell quoting. Shell exit codes are part of the command result; a non-zero exit does not by itself mark the tool call as failed. `question` renders a multi-question picker (options plus custom answers) and blocks the turn until answered.
 - Provider models are fetched once in the provider form and saved with the provider; the chat model picker uses that saved list. Model is optional on the provider.
@@ -138,13 +141,25 @@ The Rust tests cover the acceptance matrix: split tool arguments, two parallel c
 
 ## Keyboard shortcuts
 
+`Ctrl` on Windows and Linux, `Cmd` on macOS. The list below is generated from the command registry, which also feeds the palette and **Settings > Keyboard shortcuts**.
+
 | Shortcut | Action |
 |---|---|
+| `Ctrl/Cmd+Shift+P` | Command palette (every command below, and why one is unavailable) |
+| `Ctrl/Cmd+K` | Search chats. Typing `>` there opens the palette |
 | `Ctrl/Cmd+N` | New chat |
-| `Ctrl/Cmd+K` | Quick switcher |
-| `Enter` | Send |
-| `Shift+Enter` | Newline |
-| `Esc` | Stop the current turn |
+| `Ctrl/Cmd+Shift+K` | Compact the conversation (asks first) |
+| `Ctrl/Cmd+Shift+M` | Switch model |
+| `Ctrl/Cmd+Shift+O` | Switch workspace |
+| `Ctrl/Cmd+B` | Toggle the sidebar |
+| `Ctrl/Cmd+,` | Settings |
+| `Esc` | Stop the current turn (from the message box) |
+| `Ctrl/Cmd+Enter` | Allow the pending tool call once |
+| `Ctrl/Cmd+Shift+Enter` | Always allow the pending tool call |
+| `Ctrl/Cmd+Backspace` | Reject the pending tool call |
+| `Enter` / `Shift+Enter` | Send / newline |
+
+The approval shortcuts never fire while you are typing in a text field, so writing a rejection reason cannot approve the call by accident.
 
 ## Privacy and security
 

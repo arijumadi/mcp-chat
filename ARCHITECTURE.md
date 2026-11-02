@@ -139,8 +139,36 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 | DB | migrations from empty, repo CRUD, FTS sync/cascade, crash sweep |
 | UI | transcript reducer, compact tool/thought rows, diff view and stats parsing, date grouping, rich Markdown copy, confirm-before-revert, auto-approve warning, model/workspace pickers, onboarding checklist, actionable toasts, accessible modals, Playwright smoke and activity specs |
 
+## Tool routing, guards and the capability table
+
+`shared/capabilities.json` is the single description of the built-in tools: label, risk class, description, the path argument it touches, its danger rule, its guard and whether it produces a diff. Text uses role placeholders (`{modify_file}`, `{create_file}`, `{replace_once}`, `{shell}`), so "existing files are changed with `apply_patch`" is written once. `agent/capabilities.rs` loads and strictly validates it (unknown fields, unknown roles or placeholders, duplicate tools and a diff tool that is not a file writer are all errors) and renders:
+
+- the tool descriptions and the guard override flags (`overwrite`, `allowFileWrites`) in `builtin_tool_defs`
+- the routing table and self-check in the harness rules
+- the refusal messages of the `write` and `bash` guards
+- default approval effects, dangerous-call rules, outside read/write targets, which tools return a diff, and whether using a guard override still needs review in auto mode
+
+The renderer imports the same file for labels and the diff list. Tests pin the rendered tool definitions and the harness text, so the cached system prefix only changes on purpose, and fail when the table and the handlers drift apart.
+
+`agent/tools/` is split by concern: `mod.rs` (executor, permission flow, `finish`), `shell`, `files`, `workspace`, `skills`, `patch`, `mcp`, `guards`, `defs`, `ui` (UI-only metadata such as the approval diff), `output` (spilled results) and `question`. Public paths under `agent::tools` are unchanged.
+
+## Manual compaction
+
+`compact_conversation` takes an optional focus text (capped at 2,000 characters) that is added to the summarizer prompt. It claims the conversation's turn slot for its whole duration (`ChatEngine::claim_turn`, released on success, error and cancel), so a message, regenerate or second compaction is refused meanwhile and Stop cancels it. It reports `Compacting` then `Idle`. The UI always confirms first, from the `/compact` command, the palette and the shortcut alike.
+
+## Keyboard and the command registry
+
+`src/features/commands/registry.ts` lists every command once, with its shortcut, a reason it is unavailable, and whether it may fire from a text field. The palette, the global shortcut handler and the settings shortcut list are all built from it. Rules that matter: approval chords never fire from a text field; on macOS `Mod` is Cmd only, because Ctrl+K/N/B are cursor movement there; nothing fires while an overlay is open, during key repeat or IME composition.
+
+## Appearance and notifications
+
+Density, text size and width are `ui.*` settings applied as `data-density`, `--chat-fs` and `--chat-width` on the root (`lib/appearance.ts`); every chat text size is a fraction of `--chat-fs` over 30 so the defaults reproduce the original sizes exactly. The global `button, input, textarea, select { font: inherit }` rule is unlayered and beats Tailwind size utilities, so the few chat controls that need to follow the setting set their size inline.
+
+Notifications are decided in `lib/notifications.ts` (pure: given an event and what the user is looking at) and sent by `lib/notify.ts` through the Tauri notification plugin, or the Web Notification API in the browser mock. A turn-ending notice is sent for a background window or a chat that is not open, never for a stop the user asked for, and carries only the chat title. Permission is requested when the user sends a message or presses the test button, never from a background event. Only `is-permission-granted`, `request-permission` and `notify` are granted in the capability file.
+
 ## Known gaps
 
+- **Desktop notifications are verified only up to the shell.** The decision logic, the sender and the settings are tested, the plugin and capability resolve with the locked manifest, but the shell was not compiled and no notification was shown by a real operating system here. On Windows notifications work only for an installed app. There is no tray icon.
 - **Tauri shell is not compiled/launched in this environment.** The host lacks `libwebkit2gtk-4.1-dev`, GTK development headers, a display and sudo. The core and renderer are verified; the shell is intended for a desktop with the README prerequisites.
 - **M6 OAuth is not implemented.** Static bearer tokens and per-server `X-API-Key` headers (value in the OS keychain) work; the OAuth option is disabled. `oauth_issuer`/`oauth_client_id` columns are reserved, and `McpManager` already looks up tokens by issuer, but there is no DCR/PKCE/loopback/refresh flow yet.
 - **Native installers are built on the target OS.** `tauri.conf.json`, platform icons, NSIS artwork and packaging scripts are in the repository, but no Windows/macOS/Linux bundle was produced on the headless host. Follow `PACKAGING.md` on a desktop or CI runner. Automatic updates and MSIX are not implemented.
