@@ -52,17 +52,6 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   }, [value]);
 
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && BUSY_STATUSES.includes(useApp.getState().status)) {
-        event.preventDefault();
-        void useApp.getState().stop();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  useEffect(() => {
     if (active || disabled) {
       setDragging(false);
       setDragCount(0);

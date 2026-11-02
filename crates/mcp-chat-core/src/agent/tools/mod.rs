@@ -318,6 +318,7 @@ impl ToolExecutor {
             progress: None,
             message: None,
             diff: None,
+            exit_code: None,
         });
 
         let outcome = if builtin {
@@ -331,6 +332,14 @@ impl ToolExecutor {
         };
 
         self.finish(req, started, outcome).await
+    }
+
+    /// Record how an approval was answered. A call that is approved is marked
+    /// `allowed` when it starts running; any other outcome must not leave the
+    /// part saying `pending`, or the transcript would show "needs approval" on
+    /// a call that was refused, stopped or abandoned.
+    async fn settle_approval(&self, part_id: &str, outcome: &str) {
+        self.patch_part(part_id, json!({"approval": outcome})).await;
     }
 
     /// Whether a write-access tool targets a path outside the workspace. Which
@@ -453,6 +462,7 @@ impl ToolExecutor {
                     progress: None,
                     message: Some(preview.clone()),
                     diff,
+                    exit_code,
                 });
                 ToolExecResult {
                     call_id: req.call_id,
@@ -539,13 +549,18 @@ impl ToolExecutor {
         let answer = tokio::select! {
             _ = cancel.cancelled() => {
                 self.approvals.cancel(call_id);
+                self.settle_approval(part_id, "rejected").await;
                 return Err("Tool execution interrupted".into());
             }
             answer = receiver => answer.ok(),
         };
         let Some(answer) = answer else {
+            self.settle_approval(part_id, "rejected").await;
             return Err("The approval prompt was closed without an answer.".into());
         };
+        if answer.decision == ApprovalDecision::Reject {
+            self.settle_approval(part_id, "rejected").await;
+        }
         match answer.decision {
             ApprovalDecision::Once => Ok(()),
             ApprovalDecision::Always => {
@@ -639,6 +654,7 @@ impl ToolExecutor {
             progress: None,
             message: Some(message.clone()),
             diff: None,
+            exit_code: None,
         });
         ToolExecResult {
             call_id: req.call_id,

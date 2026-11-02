@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CornerDownLeft, Search } from "lucide-react";
 import { useApp } from "@/app/store";
+import { useUi } from "@/app/ui";
 import { cn } from "@/lib/cn";
 import { inputClass } from "@/components/ui";
 
@@ -79,8 +80,19 @@ export function QuickSwitcher({
           <input
             ref={inputRef}
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              const value = event.target.value;
+              // Typing ">" turns the search into the command palette.
+              if (value.startsWith(">")) {
+                useUi.getState().openPalette("root", value.slice(1).trimStart());
+                return;
+              }
+              setQuery(value);
+            }}
             onKeyDown={(event) => {
+              // Keys typed here belong to the switcher alone. Without this,
+              // Escape reached the window and also stopped a running turn.
+              event.stopPropagation();
               if (event.key === "Escape") onClose();
               if (event.key === "ArrowDown") {
                 event.preventDefault();

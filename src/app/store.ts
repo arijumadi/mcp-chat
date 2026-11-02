@@ -1049,6 +1049,12 @@ export function applyCoreEvent(
             }
             if (event.state === "error" && event.message) next.error = event.message;
             if (event.diff) next.diff = event.diff;
+            if (typeof event.exitCode === "number") next.exitCode = event.exitCode;
+            // A tool that is running or finished has been answered. Without
+            // this the row kept saying "needs approval" until the next reload.
+            if (payload.approval === "pending" && event.state !== "queued" && event.state !== "streaming") {
+              next.approval = event.state === "error" || event.state === "aborted" ? "rejected" : "allowed";
+            }
             if (event.state === "completed" || event.state === "error" || event.state === "aborted") {
               next.endedAt = Date.now();
             }

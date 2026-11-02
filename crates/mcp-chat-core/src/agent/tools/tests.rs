@@ -1013,6 +1013,78 @@ async fn finish_moves_the_diff_onto_the_tool_call_and_out_of_the_result() {
 }
 
 #[tokio::test]
+async fn finish_sends_the_shell_exit_code_on_the_live_event() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    let executor = test_executor(&workspace).await;
+    let mut events = executor.events.subscribe();
+    let mut req = request("bash", json!({"command": "false"}));
+    req.part_id = tool_call_part(&executor, "bash").await;
+    let part_id = req.part_id.clone();
+
+    executor
+        .finish(
+            req,
+            Instant::now(),
+            Ok(Rendered {
+                content: "[exit code 3]".into(),
+                structured: Some(json!({"exitCode": 3, "success": false})),
+                ok: true,
+            }),
+        )
+        .await;
+
+    let mut seen = None;
+    while let Ok(event) = events.try_recv() {
+        if let CoreEvent::Tool {
+            state, exit_code, ..
+        } = event
+        {
+            if state == "completed" {
+                seen = exit_code;
+            }
+        }
+    }
+    assert_eq!(
+        seen,
+        Some(3),
+        "the row shows the exit code without a reload"
+    );
+    let stored = messages::get_part(&executor.db.pool, &part_id)
+        .await
+        .unwrap()
+        .payload();
+    assert_eq!(stored["exitCode"], 3, "and it is stored too");
+
+    // A tool without an exit code sends none.
+    let mut read = request("read", json!({"filePath": "x"}));
+    read.part_id = tool_call_part(&executor, "read").await;
+    executor
+        .finish(
+            read,
+            Instant::now(),
+            Ok(Rendered {
+                content: "x".into(),
+                structured: None,
+                ok: true,
+            }),
+        )
+        .await;
+    let mut none_seen = false;
+    while let Ok(event) = events.try_recv() {
+        if let CoreEvent::Tool {
+            state, exit_code, ..
+        } = event
+        {
+            if state == "completed" {
+                none_seen = exit_code.is_none();
+            }
+        }
+    }
+    assert!(none_seen);
+}
+
+#[tokio::test]
 async fn finish_leaves_an_external_servers_diff_field_alone() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().canonicalize().unwrap();
@@ -1639,5 +1711,94 @@ async fn only_diff_capable_tools_get_an_approval_diff() {
             .approval_diff("test-conversation", "", "bash", &edit_args)
             .await
             .is_none()
+    );
+}
+
+// ---- the stored approval value never stays "pending" ----------------------
+
+/// Run a `bash` call that asks for approval, answer it with `answer` (or
+/// cancel it when `None`), and return the `approval` value saved on its part.
+async fn stored_approval_after(answer: Option<ApprovalDecision>) -> Option<String> {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    let executor = Arc::new(test_executor(&workspace).await);
+    let mut events = executor.events.subscribe();
+    let mut req = request("bash", json!({"command": "echo hi"}));
+    req.part_id = tool_call_part(&executor, "bash").await;
+    let part_id = req.part_id.clone();
+    let cancel = req.cancel.clone();
+    let runner = executor.clone();
+    let handle = tokio::spawn(async move { runner.execute(req).await });
+
+    let call_id = loop {
+        let event = tokio::time::timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("approval event")
+            .expect("event channel");
+        if let CoreEvent::Approval { call_id, .. } = event {
+            break call_id;
+        }
+    };
+    // While the prompt is open the part says so.
+    let pending = messages::get_part(&executor.db.pool, &part_id)
+        .await
+        .unwrap()
+        .payload();
+    assert_eq!(pending["approval"], "pending");
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    match answer {
+        Some(decision) => {
+            assert!(executor.approvals.respond(
+                &call_id,
+                crate::agent::approvals::ApprovalAnswer {
+                    decision,
+                    feedback: None,
+                }
+            ));
+        }
+        None => cancel.cancel(),
+    }
+    handle.await.unwrap();
+    messages::get_part(&executor.db.pool, &part_id)
+        .await
+        .unwrap()
+        .payload()
+        .get("approval")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+#[tokio::test]
+async fn an_approved_call_is_stored_as_allowed() {
+    assert_eq!(
+        stored_approval_after(Some(ApprovalDecision::Once))
+            .await
+            .as_deref(),
+        Some("allowed")
+    );
+    assert_eq!(
+        stored_approval_after(Some(ApprovalDecision::Always))
+            .await
+            .as_deref(),
+        Some("allowed")
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_call_is_stored_as_rejected_not_pending() {
+    assert_eq!(
+        stored_approval_after(Some(ApprovalDecision::Reject))
+            .await
+            .as_deref(),
+        Some("rejected")
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_approval_is_stored_as_rejected_not_pending() {
+    assert_eq!(
+        stored_approval_after(None).await.as_deref(),
+        Some("rejected")
     );
 }

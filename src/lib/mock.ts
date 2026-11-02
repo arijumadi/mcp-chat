@@ -33,6 +33,7 @@ export function installMock(): void {
   const messages = new Map<string, MessageWithParts[]>();
   const subscribers = new Set<(event: CoreEvent) => void>();
   const generating = new Set<string>();
+  const approvalWaiters = new Map<string, (decision: string) => void>();
   const autoApprove = new Set<string>();
   const settingsStore: Record<string, string> = {
     theme: localStorage.getItem("theme") ?? "system",
@@ -540,7 +541,9 @@ export function installMock(): void {
         if (conversation) conversation.updatedAt = now();
         emit({ type: "conversation_updated", conversationId });
         generating.add(conversationId);
-        void simulateTurn(conversationId, text);
+        void (/needs approval/i.test(text)
+          ? simulateApprovalTurn(conversationId)
+          : simulateTurn(conversationId, text));
         return user;
       }
       case "regenerate":
@@ -572,6 +575,13 @@ export function installMock(): void {
         return { text, attachments: [] };
       }
       case "respond_approval": {
+        // A scripted approval turn is waiting for this answer.
+        const waiter = approvalWaiters.get(String(args.callId));
+        if (waiter) {
+          approvalWaiters.delete(String(args.callId));
+          waiter(String(args.decision));
+          return true;
+        }
         emit({
           type: "tool",
           conversationId: String(args.conversationId ?? ""),
@@ -718,6 +728,100 @@ export function installMock(): void {
       default:
         throw new Error(`Mock bridge does not implement ${command}`);
     }
+  }
+
+  /**
+   * A turn that asks permission to run `bash`, then waits for the answer. A
+   * message containing "needs approval" starts it, so the approval modal and its
+   * keyboard shortcuts can be exercised without a real provider.
+   */
+  async function simulateApprovalTurn(conversationId: string) {
+    await delay(120);
+    const assistantId = uid();
+    const toolPartId = uid();
+    const callId = uid();
+    const startedAt = now();
+    const assistant: MessageWithParts = {
+      id: assistantId,
+      conversationId,
+      role: "assistant",
+      createdAt: now(),
+      status: "streaming",
+      error: null,
+      parts: [],
+    };
+    addMessage(conversationId, assistant);
+    emit({ type: "message_start", conversationId, messageId: assistantId });
+    emit({ type: "status", conversationId, status: "streaming", message: null });
+    const base = {
+      callId,
+      name: "bash",
+      server: "mcp-chat",
+      args: { command: "npm test" },
+      startedAt,
+    };
+    emit({
+      type: "part",
+      conversationId,
+      messageId: assistantId,
+      partId: toolPartId,
+      kind: "tool_call",
+      payload: { ...base, state: "running", executed: false, approval: "pending" },
+    });
+    emit({
+      type: "approval",
+      conversationId,
+      callId,
+      server: "mcp-chat",
+      tool: "bash",
+      args: base.args,
+      allowAlways: true,
+      diff: null,
+    });
+    emit({ type: "status", conversationId, status: "waiting_approval", message: null });
+
+    const decision = await new Promise<string>((resolve) => approvalWaiters.set(callId, resolve));
+    const approved = decision !== "reject";
+    const finished = approved
+      ? {
+          ...base,
+          state: "completed",
+          executed: true,
+          approval: "allowed",
+          endedAt: now(),
+          exitCode: 0,
+          resultPreview: "all tests passed",
+        }
+      : {
+          ...base,
+          state: "error",
+          executed: false,
+          approval: "rejected",
+          endedAt: now(),
+          error: "The user declined this tool call",
+          resultPreview: "The user declined this tool call",
+        };
+    emit({
+      type: "tool",
+      conversationId,
+      callId,
+      state: finished.state,
+      progress: null,
+      message: finished.resultPreview,
+      exitCode: approved ? 0 : null,
+    });
+    assistant.parts.push({
+      id: toolPartId,
+      messageId: assistantId,
+      idx: 0,
+      kind: "tool_call",
+      payloadJson: JSON.stringify(finished),
+    });
+    assistant.status = "completed";
+    generating.delete(conversationId);
+    emit({ type: "message_end", conversationId, messageId: assistantId, status: "completed", error: null });
+    emit({ type: "status", conversationId, status: "idle", message: null });
+    emit({ type: "conversation_updated", conversationId });
   }
 
   async function simulateTurn(conversationId: string, text: string) {
