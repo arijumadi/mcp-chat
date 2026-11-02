@@ -230,7 +230,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
           </div>
         </div>
       ) : null}
-      <div className="mx-auto w-full max-w-[760px]">
+      <div className="mx-auto w-full max-w-(--chat-width)">
         {limitReached && !active ? (
           <div
             className="mb-2 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-[12.5px]"
@@ -299,7 +299,8 @@ export function Composer({ conversation }: { conversation: Conversation }) {
             rows={1}
             disabled={disabled}
             placeholder={disabled ? "Configure a provider first…" : "Message the model…"}
-            className="max-h-[240px] min-h-[38px] w-full resize-none bg-transparent px-2 py-2 text-[14.5px] leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:cursor-not-allowed"
+            className="max-h-[240px] min-h-[38px] w-full resize-none bg-transparent px-2 py-2 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:cursor-not-allowed"
+            style={{ fontSize: "var(--chat-fs)" }}
             aria-label="Message"
           />
           <div className="mt-1 flex items-center gap-1.5 px-1">

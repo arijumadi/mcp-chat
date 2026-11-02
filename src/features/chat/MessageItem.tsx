@@ -46,7 +46,7 @@ export function MessageItem({
     const attachments = attachmentsFromParts(parts);
     return (
       <>
-        <div className="animate-in flex justify-end py-2">
+        <div className="animate-in flex justify-end py-(--message-py)">
           <div
             className="group flex max-w-[85%] flex-col items-end"
             data-testid="user-message"
@@ -59,7 +59,7 @@ export function MessageItem({
           ) : null}
           {text ? (
             <div
-              className="max-w-full rounded-2xl rounded-br-md px-4 py-2.5 text-[14.5px] whitespace-pre-wrap"
+              className="max-w-full rounded-2xl rounded-br-md px-4 py-2.5 text-[length:var(--fs-user)] whitespace-pre-wrap"
               style={{ background: "var(--user)" }}
             >
               {text}
@@ -67,7 +67,7 @@ export function MessageItem({
           ) : null}
           <div className="mt-0.5 flex h-6 items-center justify-end gap-0.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
             <span
-              className="mr-1 text-[10.5px] tabular-nums"
+              className="mr-1 text-[length:var(--fs-meta)] tabular-nums"
               style={{ color: "var(--muted)" }}
             >
               {formatMessageDateTime(message.createdAt)}
@@ -112,7 +112,7 @@ export function MessageItem({
             </>
           }
         >
-          <p className="text-[13.5px] leading-relaxed" style={{ color: "var(--muted)" }}>
+          <p className="text-[length:var(--fs-status)] leading-relaxed" style={{ color: "var(--muted)" }}>
             The message text will be placed back in the composer so you can edit
             and send it again.
           </p>
@@ -165,7 +165,7 @@ export function MessageItem({
   );
 
   return (
-    <div ref={copyRoot} className="group animate-in py-2">
+    <div ref={copyRoot} className="group animate-in py-(--message-py)">
       {!hasVisible && streaming && !hideThinking ? <Thinking /> : null}
       {parts.map((part) => {
         if (part.kind === "text") {
@@ -192,7 +192,7 @@ export function MessageItem({
           return (
             <div
               key={part.id}
-              className="my-2.5 rounded-xl border px-3.5 py-3 text-[13.5px]"
+              className="my-2.5 rounded-xl border px-3.5 py-3 text-[length:var(--fs-status)]"
               style={{
                 borderColor: "color-mix(in srgb, var(--danger) 40%, var(--border))",
                 background: "var(--danger-soft)",
@@ -232,7 +232,7 @@ export function MessageItem({
           return (
             <details
               key={part.id}
-              className="my-2 rounded-lg border px-3 py-2 text-[12.5px]"
+              className="my-2 rounded-lg border px-3 py-2 text-[length:var(--fs-row)]"
               style={{ borderColor: "var(--border)", background: "var(--panel)" }}
             >
               <summary className="cursor-pointer select-none" style={{ color: "var(--muted)" }}>
@@ -248,12 +248,12 @@ export function MessageItem({
       })}
 
       {message.status === "interrupted" ? (
-        <div className="mt-1 text-[11.5px]" style={{ color: "var(--faint)" }}>
+        <div className="mt-1 text-[length:var(--fs-mono)]" style={{ color: "var(--faint)" }}>
           Interrupted — the partial answer was kept.
         </div>
       ) : null}
       {message.status === "error" && !parts.some((part) => part.kind === "error") ? (
-        <div className="mt-1 text-[12.5px]" style={{ color: "var(--danger)" }}>
+        <div className="mt-1 text-[length:var(--fs-row)]" style={{ color: "var(--danger)" }}>
           {message.error ?? "The turn failed."}
         </div>
       ) : null}
@@ -269,7 +269,7 @@ export function MessageItem({
 function Thinking() {
   return (
     <div
-      className="flex items-center gap-2 py-1 text-[13.5px]"
+      className="flex items-center gap-2 py-1 text-[length:var(--fs-status)]"
       style={{ color: "var(--muted)" }}
     >
       <span className="pulse-dot inline-block h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />

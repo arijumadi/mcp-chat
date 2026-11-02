@@ -1,3 +1,9 @@
+import {
+  appearanceSettings,
+  applyAppearance,
+  readAppearance,
+  type Appearance,
+} from "@/lib/appearance";
 import { create } from "zustand";
 import { call, subscribe } from "@/lib/ipc";
 import type {
@@ -118,6 +124,8 @@ export interface AppStore {
   ) => void;
   dismissToast: (id: string) => void;
   setTheme: (theme: Theme) => Promise<void>;
+  /** Change reading comfort settings. Applies at once and is saved. */
+  setAppearance: (change: Partial<Appearance>) => Promise<void>;
   loadOlderMessages: () => Promise<void>;
   reloadActive: () => Promise<void>;
 }
@@ -179,6 +187,7 @@ export const useApp = create<AppStore>()((set, get) => ({
         call<Conversation[]>("list_conversations", { limit: 200, offset: 0 }),
       ]);
       applyTheme((settings.theme as Theme) ?? "system");
+      applyAppearance(readAppearance(settings));
       set({
         appInfo,
         providers,
@@ -859,6 +868,22 @@ export const useApp = create<AppStore>()((set, get) => ({
 
   dismissToast(id) {
     set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) }));
+  },
+
+  async setAppearance(change) {
+    const next = { ...readAppearance(get().settings), ...change };
+    // Normalize through the reader so an out-of-range value cannot be stored.
+    const stored = appearanceSettings(next);
+    const appearance = readAppearance(stored);
+    applyAppearance(appearance);
+    set((state) => ({ settings: { ...state.settings, ...appearanceSettings(appearance) } }));
+    try {
+      for (const [key, value] of Object.entries(appearanceSettings(appearance))) {
+        await call("set_setting", { key, value });
+      }
+    } catch (error) {
+      get().toast(String(error), "error");
+    }
   },
 
   async setTheme(theme) {

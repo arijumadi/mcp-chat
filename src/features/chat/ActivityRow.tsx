@@ -30,13 +30,15 @@ export function ActivityRow({
       aria-expanded={expanded}
       aria-controls={expanded ? controlsId : undefined}
       title={title}
-      className="focus-ring flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left text-[12.5px] leading-5 transition-colors hover:bg-[var(--panel-2)]"
+      // The global button reset beats size utilities; follow the chat size explicitly.
+      style={{ fontSize: "var(--chat-fs)" }}
+      className="focus-ring flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-(--row-py) text-left leading-5 transition-colors hover:bg-[var(--panel-2)]"
     >
       <span className="flex w-4 shrink-0 items-center justify-center">{icon}</span>
       {children}
       {trailing ? (
         <span
-          className="ml-auto flex shrink-0 items-center gap-1.5 pl-1 text-[10.5px] tabular-nums"
+          className="ml-auto flex shrink-0 items-center gap-1.5 pl-1 text-[length:var(--fs-meta)] tabular-nums"
           style={{ color: "var(--faint)" }}
         >
           {trailing}

@@ -39,6 +39,8 @@ export function installMock(): void {
     theme: localStorage.getItem("theme") ?? "system",
     "compaction.keep_tokens": "15000",
     "compaction.buffer": "0",
+    // Reading comfort settings survive a reload, as they do in the real app.
+    ...JSON.parse(localStorage.getItem("mock-ui-settings") ?? "{}"),
   };
   let providers: ProviderView[] = [
     {
@@ -340,6 +342,11 @@ export function installMock(): void {
       case "set_setting":
         settingsStore[String(args.key)] = String(args.value);
         if (args.key === "theme") localStorage.setItem("theme", String(args.value));
+        if (String(args.key).startsWith("ui.")) {
+          const stored = JSON.parse(localStorage.getItem("mock-ui-settings") ?? "{}");
+          stored[String(args.key)] = String(args.value);
+          localStorage.setItem("mock-ui-settings", JSON.stringify(stored));
+        }
         return null;
       case "list_conversations": {
         const offset = Number(args.offset ?? 0);
