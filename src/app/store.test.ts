@@ -83,6 +83,39 @@ describe("transcript event reducer", () => {
     expect(payload.resultPreview).toBe("echo: hi");
   });
 
+  it("stores a finished tool's diff on the tool_call part", () => {
+    apply({ type: "message_start", conversationId: "c1", messageId: "m1" });
+    apply({
+      type: "part",
+      conversationId: "c1",
+      messageId: "m1",
+      partId: "tool1",
+      kind: "tool_call",
+      payload: {
+        callId: "call1",
+        name: "edit",
+        server: "mcp-chat",
+        args: { filePath: "a.txt" },
+        state: "running",
+      },
+    });
+    apply({
+      type: "tool",
+      conversationId: "c1",
+      callId: "call1",
+      state: "completed",
+      message: "Edited a.txt",
+      diff: "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n",
+    });
+    const payload = parsePayload(get().messages[0]!.parts[0]!);
+    expect(payload.state).toBe("completed");
+    expect(payload.diff).toBe("--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n");
+
+    // A later event without a diff must not erase it.
+    apply({ type: "tool", conversationId: "c1", callId: "call1", state: "completed" });
+    expect(parsePayload(get().messages[0]!.parts[0]!).diff).toContain("+new");
+  });
+
   it("shows a compaction summary as a system row without reloading", () => {
     apply({
       type: "message_start",

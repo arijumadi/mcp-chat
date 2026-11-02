@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+use serde_json::{Value, json};
 use tokio::fs;
 
 use crate::agent::diff;
@@ -45,13 +47,30 @@ struct Change {
     new: Option<String>,
 }
 
+/// One file touched by a patch, for UI summaries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PatchFile {
+    /// Final path (the destination for a move).
+    pub path: String,
+    /// Original path, only for a move.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// `added`, `modified`, `deleted` or `moved`.
+    pub status: &'static str,
+    pub additions: usize,
+    pub deletions: usize,
+}
+
 pub struct PatchResult {
     lines: Vec<String>,
+    files: Vec<PatchFile>,
+    diff: String,
 }
 
 pub struct PatchPlan {
     changes: Vec<Change>,
     results: Vec<String>,
+    files: Vec<PatchFile>,
 }
 
 impl PatchPlan {
@@ -66,9 +85,14 @@ impl PatchPlan {
         commit(&self.changes).await
     }
 
-    pub fn result(&self) -> PatchResult {
+    /// Summarize the plan. The diff comes from the before/after text captured
+    /// while preparing, so call this before or after `commit`; it never reads
+    /// the files again.
+    pub fn result(&self, workspace: &Path) -> PatchResult {
         PatchResult {
             lines: self.results.clone(),
+            files: self.files.clone(),
+            diff: self.diff(workspace),
         }
     }
 
@@ -94,6 +118,19 @@ impl PatchPlan {
 }
 
 impl PatchResult {
+    pub fn diff(&self) -> &str {
+        &self.diff
+    }
+
+    pub fn files(&self) -> &[PatchFile] {
+        &self.files
+    }
+
+    /// UI metadata for the tool call. It is not part of the text the model sees.
+    pub fn structured(&self) -> Value {
+        json!({"files": self.files, "diff": self.diff})
+    }
+
     pub fn render(&self) -> String {
         let mut out = format!("Applied patch ({} file(s)).", self.lines.len());
         for line in &self.lines {
@@ -132,8 +169,11 @@ pub async fn apply_with_scope(
     allow_outside: bool,
 ) -> Result<PatchResult> {
     let plan = prepare_with_scope(workspace, patch_text, allow_outside).await?;
+    // Build the summary and diff from the prepared before/after text first, so
+    // nothing is derived from files after they have been written.
+    let result = plan.result(workspace);
     plan.commit().await?;
-    Ok(plan.result())
+    Ok(result)
 }
 
 pub async fn preview_with_scope(
@@ -209,6 +249,7 @@ async fn prepare_with_scope(
 
     let mut changes = Vec::new();
     let mut results = Vec::new();
+    let mut files = Vec::new();
     let mut seen = HashSet::new();
     for operation in operations {
         match operation {
@@ -231,6 +272,13 @@ async fn prepare_with_scope(
                     "A {} (+{additions})",
                     relative(workspace, &resolved)
                 ));
+                files.push(PatchFile {
+                    path: relative(workspace, &resolved),
+                    from: None,
+                    status: "added",
+                    additions,
+                    deletions: 0,
+                });
                 changes.push(Change {
                     path: resolved,
                     old: None,
@@ -246,6 +294,13 @@ async fn prepare_with_scope(
                     "D {} (-{deletions})",
                     relative(workspace, &resolved)
                 ));
+                files.push(PatchFile {
+                    path: relative(workspace, &resolved),
+                    from: None,
+                    status: "deleted",
+                    additions: 0,
+                    deletions,
+                });
                 changes.push(Change {
                     path: resolved,
                     old: Some(old),
@@ -275,6 +330,13 @@ async fn prepare_with_scope(
                     results.push(format!(
                         "R {old_relative} -> {new_relative} (+{additions}/-{deletions})"
                     ));
+                    files.push(PatchFile {
+                        path: new_relative.clone(),
+                        from: Some(old_relative.clone()),
+                        status: "moved",
+                        additions,
+                        deletions,
+                    });
                     changes.push(Change {
                         path: resolved,
                         old: Some(old),
@@ -287,6 +349,13 @@ async fn prepare_with_scope(
                     });
                 } else {
                     results.push(format!("M {old_relative} (+{additions}/-{deletions})"));
+                    files.push(PatchFile {
+                        path: old_relative.clone(),
+                        from: None,
+                        status: "modified",
+                        additions,
+                        deletions,
+                    });
                     changes.push(Change {
                         path: resolved,
                         old: Some(old),
@@ -297,7 +366,11 @@ async fn prepare_with_scope(
         }
     }
 
-    Ok(PatchPlan { changes, results })
+    Ok(PatchPlan {
+        changes,
+        results,
+        files,
+    })
 }
 
 async fn ensure_new_path(path: &Path, seen: &mut HashSet<String>) -> Result<()> {
@@ -745,6 +818,73 @@ mod tests {
         );
         assert!(!workspace.join("old.txt").exists());
         assert!(!workspace.join("obsolete.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn result_carries_a_diff_and_file_summary_for_add_update_delete_and_move() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("old.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(workspace.join("obsolete.txt"), "bye\n").unwrap();
+        let text = patch(
+            "*** Add File: src/new.txt\n+hello\n+world\n*** Update File: old.txt\n@@\n one\n-two\n+three\n*** Move to: moved.txt\n*** Delete File: obsolete.txt",
+        );
+        let result = apply(&workspace, &text).await.unwrap();
+
+        let diff = result.diff();
+        for expected in [
+            "+++ b/src/new.txt",
+            "+hello",
+            "--- a/old.txt",
+            "+++ b/moved.txt",
+            "+three",
+            "--- a/obsolete.txt",
+            "-bye",
+        ] {
+            assert!(diff.contains(expected), "missing {expected:?} in:\n{diff}");
+        }
+
+        // The diff was captured before the write: "two" is gone from disk but
+        // still shown as a removed line.
+        assert!(
+            !std::fs::read_to_string(workspace.join("moved.txt"))
+                .unwrap()
+                .contains("two")
+        );
+        assert!(diff.contains("-two"), "{diff}");
+        assert!(!workspace.join("obsolete.txt").exists());
+
+        let files = result.files();
+        assert_eq!(
+            files.iter().map(|file| file.status).collect::<Vec<_>>(),
+            ["added", "moved", "deleted"]
+        );
+        assert_eq!(files[0].path, "src/new.txt");
+        assert_eq!((files[0].additions, files[0].deletions), (2, 0));
+        assert_eq!(files[1].path, "moved.txt");
+        assert_eq!(files[1].from.as_deref(), Some("old.txt"));
+        assert_eq!((files[1].additions, files[1].deletions), (1, 1));
+        assert_eq!(files[2].path, "obsolete.txt");
+        assert_eq!((files[2].additions, files[2].deletions), (0, 1));
+
+        let structured = result.structured();
+        assert_eq!(structured["diff"], diff);
+        assert_eq!(structured["files"][1]["from"], "old.txt");
+        assert!(structured["files"][0].get("from").is_none());
+        assert!(!result.render().contains("@@"));
+    }
+
+    #[tokio::test]
+    async fn a_rejected_patch_returns_no_result_and_writes_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("file.txt"), "a\n").unwrap();
+        let text = patch("*** Update File: file.txt\n@@\n-missing\n+x");
+        assert!(apply(&workspace, &text).await.is_err());
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("file.txt")).unwrap(),
+            "a\n"
+        );
     }
 
     #[tokio::test]

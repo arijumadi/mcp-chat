@@ -180,6 +180,10 @@ export interface TextPayload {
 
 export interface ReasoningPayload {
   text: string;
+  /** Optional timing. The backend does not record it yet, so rows omit it when absent. */
+  durationMs?: number | null;
+  startedAt?: number | null;
+  endedAt?: number | null;
 }
 
 export interface ToolImage {
@@ -205,6 +209,11 @@ export interface ToolCallPayload {
   truncated?: boolean;
   exitCode?: number | null;
   image?: ToolImage | null;
+  /**
+   * Unified diff for built-in edit, apply_patch and write calls. UI-only: it is
+   * stored on the tool_call part, never sent to the model.
+   */
+  diff?: string | null;
 }
 
 export interface ToolResultPayload {
@@ -341,6 +350,7 @@ export type CoreEvent =
       state: string;
       progress?: number | null;
       message?: string | null;
+      diff?: string | null;
     }
   | ApprovalEvent
   | UsageEvent

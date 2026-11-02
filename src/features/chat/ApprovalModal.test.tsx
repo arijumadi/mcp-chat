@@ -28,9 +28,19 @@ describe("ApprovalModal", () => {
       ],
     });
     render(<ApprovalModal />);
+    // Open by default so the user can review without an extra click.
+    expect(screen.getByRole("button", { name: /Changes/ })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
     expect(screen.getByText("Changes")).toBeInTheDocument();
-    expect(screen.getByText(/--- a\/src\/app\.ts/)).toBeInTheDocument();
-    expect(screen.getByText(/-old/)).toBeInTheDocument();
-    expect(screen.getByText(/\+new/)).toBeInTheDocument();
+    expect(screen.getByText(/--- a\/src\/app\.ts/)).toHaveClass("diff-file-header");
+    expect(screen.getByText("-old")).toHaveClass("diff-line-removed");
+    expect(screen.getByText("+new")).toHaveClass("diff-line-added");
+    // The diff precedes the arguments.
+    const diff = screen.getByRole("region", { name: "Changes" });
+    const args = screen.getByText("Arguments");
+    expect(diff.compareDocumentPosition(args) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeInTheDocument();
   });
 });

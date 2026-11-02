@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 describe("AssistantTurn", () => {
-  it("collapses tools and thoughts behind a summary, then shows the final answer", () => {
+  it("shows a compact row for every thought and tool by default, plus the final answer", () => {
     const messages = [
       assistant("m1", [
         part("p1", "reasoning", { text: "think one" }),
@@ -62,25 +62,103 @@ describe("AssistantTurn", () => {
 
     render(<AssistantTurn messages={messages} canRetry={false} />);
 
-    expect(
-      screen.getByRole("button", { name: /Used 2 tools/ }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Final answer is here.")).toBeInTheDocument();
-    expect(screen.queryByText("echo")).not.toBeInTheDocument();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: /Used 2 tools/ }),
+    // The summary is only a thin header. The rows are visible without clicking.
+    expect(screen.getByRole("button", { name: /Used 2 tools/ })).toHaveAttribute(
+      "aria-expanded",
+      "true",
     );
-
-    expect(screen.getAllByText("echo").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("add").length).toBeGreaterThan(0);
-    expect(screen.getByText("Thought 1")).toBeInTheDocument();
-    expect(screen.getByText("Thought 2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /echo/ })).toHaveTextContent("text=hi");
+    expect(screen.getByRole("button", { name: /add/ })).toHaveTextContent("a=1 b=2");
+    expect(screen.getAllByRole("button", { name: /Thought/ })).toHaveLength(2);
     expect(screen.getByText("Final answer is here.")).toBeInTheDocument();
-    expect(
-      screen.queryByText("A pre-tool narration."),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByText("Interim note")).not.toBeInTheDocument();
+
+    // Every row starts collapsed: no thought text, arguments or results.
+    expect(screen.queryByText("think one")).not.toBeInTheDocument();
+    expect(screen.queryByText("think two")).not.toBeInTheDocument();
+    expect(screen.queryByText("Arguments")).not.toBeInTheDocument();
+    expect(screen.queryByText("A pre-tool narration.")).not.toBeInTheDocument();
+  });
+
+  it("expands a thought and a tool independently", () => {
+    render(
+      <AssistantTurn
+        messages={[
+          assistant("m1", [
+            part("p1", "reasoning", { text: "think one" }),
+            part("p2", "tool_call", {
+              callId: "call1",
+              name: "echo",
+              server: "Mock",
+              args: { text: "hi" },
+              state: "completed",
+            }),
+          ]),
+        ]}
+        canRetry={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Thought/ }));
+    expect(screen.getByText("think one")).toBeInTheDocument();
+    expect(screen.queryByText("Arguments")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /echo/ }));
+    expect(screen.getByText("Arguments")).toBeInTheDocument();
+    expect(screen.getByText("think one")).toBeInTheDocument();
+  });
+
+  it("lets the header hide and show the whole list of rows", () => {
+    render(
+      <AssistantTurn
+        messages={[
+          assistant("m1", [
+            part("p1", "tool_call", {
+              callId: "call1",
+              name: "echo",
+              server: "Mock",
+              args: { text: "hi" },
+              state: "completed",
+            }),
+            part("p2", "text", { text: "Done." }),
+          ]),
+        ]}
+        canRetry={false}
+      />,
+    );
+    const header = screen.getByRole("button", { name: /Used 1 tool/ });
+    fireEvent.click(header);
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: /echo/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Done.")).toBeInTheDocument();
+    fireEvent.click(header);
+    expect(screen.getByRole("button", { name: /echo/ })).toBeInTheDocument();
+  });
+
+  it("shows an edit row with change counts and keeps its diff collapsed", () => {
+    render(
+      <AssistantTurn
+        messages={[
+          assistant("m1", [
+            part("p1", "tool_call", {
+              callId: "call1",
+              name: "edit",
+              server: "mcp-chat",
+              args: { filePath: "src/app.ts" },
+              state: "completed",
+              diff: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n",
+            }),
+          ]),
+        ]}
+        canRetry={false}
+      />,
+    );
+    const row = screen.getByRole("button", { name: /Edit/ });
+    expect(row).toHaveTextContent("src/app.ts");
+    expect(row).toHaveTextContent("+1 \u22121");
+    expect(screen.queryByText("-old")).not.toBeInTheDocument();
+    fireEvent.click(row);
+    fireEvent.click(screen.getByRole("button", { name: /Changes/ }));
+    expect(screen.getByText("-old")).toHaveClass("diff-line-removed");
+    expect(screen.getByText("+new")).toHaveClass("diff-line-added");
   });
 
   it("reports failed tool calls and total duration", () => {
@@ -155,6 +233,8 @@ describe("AssistantTurn", () => {
     expect(
       screen.getByRole("button", { name: /2 thoughts/ }),
     ).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^Thought/ })).toHaveLength(2);
+    expect(screen.queryByText("think one")).not.toBeInTheDocument();
     expect(screen.queryByText(/Used .* tools/)).not.toBeInTheDocument();
   });
 

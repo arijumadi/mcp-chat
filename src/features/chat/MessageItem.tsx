@@ -6,7 +6,8 @@ import { Markdown } from "@/components/Markdown";
 import { Button } from "@/components/Button";
 import { Modal } from "@/components/Modal";
 import { ToolCard } from "./ToolCard";
-import { cn } from "@/lib/cn";
+import { ThoughtRow } from "./ThoughtRow";
+import { thoughtDuration } from "./activity";
 import { formatMessageDateTime } from "@/lib/format";
 import { CopyButton } from "./CopyButton";
 import { AttachmentGrid, attachmentsFromParts } from "./Attachments";
@@ -283,20 +284,5 @@ function Reasoning({ part }: { part: Part }) {
   const payload = parsePayload(part);
   const text = String(payload.text ?? "");
   if (!text) return null;
-  return (
-    <details
-      className={cn("my-2 rounded-lg border px-3 py-2 text-[12.5px]")}
-      style={{ borderColor: "var(--border)", background: "var(--panel)" }}
-    >
-      <summary className="cursor-pointer select-none" style={{ color: "var(--muted)" }}>
-        Reasoning
-      </summary>
-      <div
-        className="mt-2 whitespace-pre-wrap italic"
-        style={{ color: "var(--muted)" }}
-      >
-        {text}
-      </div>
-    </details>
-  );
+  return <ThoughtRow text={text} duration={thoughtDuration(payload)} />;
 }
