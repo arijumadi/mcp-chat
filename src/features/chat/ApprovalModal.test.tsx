@@ -43,4 +43,48 @@ describe("ApprovalModal", () => {
     expect(diff.compareDocumentPosition(args) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("button", { name: "Allow once" })).toBeInTheDocument();
   });
+
+  it("calls out a bash command that is allowed to write file contents", () => {
+    useApp.setState({
+      activeId: "c1",
+      respondApproval: vi.fn().mockResolvedValue(undefined),
+      approvals: [
+        {
+          type: "approval",
+          conversationId: "c1",
+          callId: "call2",
+          server: "mcp-chat",
+          tool: "bash",
+          args: { command: "echo hi > out.txt", allowFileWrites: true },
+          allowAlways: true,
+          diff: null,
+        },
+      ],
+    });
+    render(<ApprovalModal />);
+    expect(screen.getByRole("note")).toHaveTextContent("allowFileWrites is on.");
+    // The flag is also in the raw arguments the user approves.
+    expect(screen.getByText(/"allowFileWrites": true/)).toBeInTheDocument();
+  });
+
+  it("shows no warning for an ordinary bash command", () => {
+    useApp.setState({
+      activeId: "c1",
+      respondApproval: vi.fn().mockResolvedValue(undefined),
+      approvals: [
+        {
+          type: "approval",
+          conversationId: "c1",
+          callId: "call3",
+          server: "mcp-chat",
+          tool: "bash",
+          args: { command: "npm test" },
+          allowAlways: true,
+          diff: null,
+        },
+      ],
+    });
+    render(<ApprovalModal />);
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
 });

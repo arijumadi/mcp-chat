@@ -11,7 +11,16 @@ const MAX_AGENTS_FILE: usize = 32_000;
 const MAX_AGENTS_TOTAL: usize = 64_000;
 
 pub const HARNESS_RULES: &str = r#"# Harness rules
-- Inspect with `read`/`grep`/`glob`. Prefer `apply_patch` for multi-file or multi-hunk edits; use `edit` for one exact replacement and `write` for a whole new file. Use `bash` only for shell/system work.
+- Tool routing:
+  - Baca file -> `read`
+  - Cari pola/file -> `grep`/`glob`
+  - File baru -> `write`
+  - Ubah file existing -> `apply_patch`
+  - Satu exact replacement -> `edit`
+  - Build/test/git/package manager -> `bash`
+  - Rename/move/delete massal -> `bash`
+  - Proses/port/disk/env -> `bash`
+- Sebelum bash: apakah command ini mengubah isi file? Kalau ya, tool-nya salah.
 - Read a file before editing it. Keep patches small, include unique context, and preserve unrelated user changes.
 - Use `skill` to load SKILL.md or reference files inside a skill; do not browse skill folders with bash.
 - Do not use a tool only to send a message to the user. Put explanations and conclusions in the final answer.
@@ -194,6 +203,31 @@ mod tests {
         let mcp = system.find("MCP").unwrap();
         let summary = system.find("SUMMARY").unwrap();
         assert!(base < harness && harness < env && env < mcp && mcp < summary);
+    }
+
+    #[test]
+    fn harness_rules_carry_the_routing_table_and_self_check() {
+        for route in [
+            "Baca file -> `read`",
+            "Cari pola/file -> `grep`/`glob`",
+            "File baru -> `write`",
+            "Ubah file existing -> `apply_patch`",
+            "Satu exact replacement -> `edit`",
+            "Build/test/git/package manager -> `bash`",
+            "Rename/move/delete massal -> `bash`",
+            "Proses/port/disk/env -> `bash`",
+        ] {
+            assert!(HARNESS_RULES.contains(route), "missing route: {route}");
+        }
+        assert!(HARNESS_RULES.contains(
+            "Sebelum bash: apakah command ini mengubah isi file? Kalau ya, tool-nya salah."
+        ));
+        // The table lives in the prompt once, not in every tool schema.
+        let schemas: String = crate::agent::tools::builtin_tool_defs()
+            .iter()
+            .map(|tool| tool.description.clone())
+            .collect();
+        assert!(!schemas.contains("Rename/move/delete massal"));
     }
 
     #[tokio::test]

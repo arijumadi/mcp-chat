@@ -9,7 +9,7 @@ use globset::GlobBuilder;
 use regex::RegexBuilder;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::{Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
@@ -842,8 +842,8 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "call_id": {"type": "string", "description": "The tool call id whose spilled output should be read."},
-                    "offset": {"type": "integer", "minimum": 0, "description": "Character offset to start from. Default 0. Page ends align to line boundaries when possible."},
+                    "call_id": {"type": "string", "description": "The tool call id to read."},
+                    "offset": {"type": "integer", "minimum": 0, "description": "Character offset. Default 0. Pages end on line boundaries when possible."},
                     "line": {"type": "integer", "minimum": 1, "description": "Optional 1-based line to start from. Takes precedence over offset."},
                     "maxLines": {"type": "integer", "minimum": 1, "maximum": 5000, "description": "Maximum lines when using line-based paging. Default 200."}
                 },
@@ -853,20 +853,21 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "bash".into(),
-            description: "Run a shell command in the workspace; each call is a fresh process. Defaults to powershell on Windows and sh elsewhere; cmd.exe remains available with shell=cmd. With shell=powershell/pwsh, send the script body directly; do not wrap it in another powershell -Command. Non-zero exit codes are command output, not automatically tool failures. Destructive commands require approval.".into(),
+            description: "Run a shell command for build, test, lint, git, package managers, process/system/disk/network inspection, file management (rename/move/delete), or running scripts. Do not use bash to read or modify file contents; use read, write, or apply_patch instead. Before calling bash, ask: does this command change the contents of a file? If yes, use a file tool.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "The command to execute for the selected shell. Do not wrap it in another invocation of the same shell."},
+                    "command": {"type": "string", "description": "The command to run. Do not wrap it in another invocation of the same shell."},
                     "shell": {
                         "type": "string",
                         "enum": ["auto", "cmd", "powershell", "pwsh", "sh", "bash"],
-                        "description": "Shell to use. Default auto: powershell on Windows, sh elsewhere; use cmd for legacy .bat/.cmd. PowerShell commands are passed with -EncodedCommand; provide the script body only, not another powershell -Command wrapper."
+                        "description": "Default auto: powershell on Windows, sh elsewhere. For PowerShell send the script body only."
                     },
-                    "cwd": {"type": "string", "description": "Optional working directory relative to the workspace. The process starts here; cd inside the command does not persist."},
+                    "cwd": {"type": "string", "description": "Optional workspace-relative working directory."},
                     "maxLines": {"type": "integer", "minimum": 1, "maximum": 5000, "description": "Optional maximum lines of stdout/stderr to return."},
                     "tail": {"type": "boolean", "description": "Keep the last maxLines instead of the first. Default false."},
-                    "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 600000, "description": "Timeout in milliseconds. Default 120000."}
+                    "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 600000, "description": "Timeout in milliseconds. Default 120000."},
+                    "allowFileWrites": {"type": "boolean", "description": "Allow redirects, tee, sed -i or Set-Content to write file contents. Default false (blocked)."}
                 },
                 "required": ["command"],
                 "additionalProperties": false
@@ -874,12 +875,12 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "python".into(),
-            description: "Run Python code directly without shell quoting. Code is sent through stdin to python; use for data processing, spreadsheet work, and verification scripts. The process starts in the workspace and has a timeout. Approve it like a shell command.".into(),
+            description: "Run Python code through stdin, with no shell quoting. For data/spreadsheet processing and verification scripts. Starts in the workspace with a timeout; approved like a shell command.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "code": {"type": "string", "description": "Complete Python source to execute."},
-                    "cwd": {"type": "string", "description": "Optional working directory, workspace-relative or an explicit inside-workspace path."},
+                    "cwd": {"type": "string", "description": "Optional workspace directory."},
                     "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 600000, "description": "Timeout in milliseconds. Default 120000."}
                 },
                 "required": ["code"],
@@ -888,7 +889,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "edit".into(),
-            description: "Replace exact text in an existing file. Matching tolerates CRLF/LF, typographic punctuation, and trailing whitespace. oldString must match once unless replaceAll is true. Outside-workspace targets need approval.".into(),
+            description: "Replace one exact string in one existing file. Use edit for a single exact replacement; use apply_patch for multiple hunks, multiple files, add/delete/move, or context-anchored changes. Matching tolerates CRLF/LF, typographic punctuation, and trailing whitespace. Outside-workspace targets need approval.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -903,7 +904,7 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "apply_patch".into(),
-            description: "Apply a multi-file patch: `*** Begin Patch`, Add/Update/Delete File markers, and `*** End Patch`. Update hunks start with `@@` (optional context anchor); `*** End of File` anchors EOF. Context/removed/added lines use space/-/+; Add lines use +. Optional `*** Move to: path`. Paths are workspace-relative or approved outside paths.".into(),
+            description: "Apply a multi-file patch with add/update/delete/move. Use this for existing-file changes, multiple hunks, multiple files, or context anchors. Format: `*** Begin Patch`, Add/Update/Delete File markers, `*** End Patch`. Update hunks start with `@@` (optional context anchor); `*** End of File` anchors EOF. Context/removed/added lines use space/-/+; Add lines use +. Optional `*** Move to: path`. Outside paths need approval.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -915,12 +916,13 @@ pub fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "write".into(),
-            description: "Create or overwrite a file. Parent folders are created automatically. Outside-workspace targets require explicit approval.".into(),
+            description: "Create a new file. Existing files are rejected unless overwrite is true. Use apply_patch to modify an existing file.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "filePath": {"type": "string", "description": "Workspace-relative path, or an explicit outside path."},
-                    "content": {"type": "string", "description": "Complete file content."}
+                    "content": {"type": "string", "description": "Complete file content."},
+                    "overwrite": {"type": "boolean", "description": "Replace an existing file entirely. Default false."}
                 },
                 "required": ["filePath", "content"],
                 "additionalProperties": false
@@ -1041,6 +1043,21 @@ pub fn builtin_tool_info(name: &str) -> Option<ToolInfo> {
         output_schema: None,
         annotations: None,
     })
+}
+
+/// Returned when `write` would replace a file that already exists.
+pub const WRITE_EXISTS_MESSAGE: &str = "File already exists. Use apply_patch to modify it, or pass overwrite: true to replace the whole file.";
+
+/// The model's refusal message when a bash command writes file contents and
+/// `allowFileWrites` is not set. `None` means the command may run.
+fn bash_write_block(args: &Value) -> Option<&'static str> {
+    let command = args.get("command").and_then(Value::as_str)?;
+    let allowed = args
+        .get("allowFileWrites")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    (!allowed && crate::agent::shell_guard::writes_file_contents(command))
+        .then_some(crate::agent::shell_guard::BLOCKED_MESSAGE)
 }
 
 pub fn is_builtin_tool(name: &str) -> bool {
@@ -1321,6 +1338,14 @@ impl ToolExecutor {
             return self.execute_mcp_call(req, started).await;
         }
 
+        // Refuse a call that is certain to be rejected before asking the user
+        // to approve it.
+        if builtin {
+            if let Some(message) = self.precheck_builtin(&req).await {
+                return self.fail(req, "error", message, started, false).await;
+            }
+        }
+
         let action = if builtin {
             format!("builtin.{}", req.remote_name)
         } else {
@@ -1454,6 +1479,36 @@ impl ToolExecutor {
         };
 
         self.finish(req, started, outcome).await
+    }
+
+    /// Guards that need no approval to evaluate. Outside-workspace paths are
+    /// skipped here: they are checked after the separate outside-write approval.
+    async fn precheck_builtin(&self, req: &ToolExecRequest) -> Option<String> {
+        match req.remote_name.as_str() {
+            "bash" => bash_write_block(&req.args).map(str::to_owned),
+            "write" => {
+                let overwrite = req
+                    .args
+                    .get("overwrite")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if overwrite {
+                    return None;
+                }
+                let raw = req.args.get("filePath").and_then(Value::as_str)?;
+                let workspace =
+                    workspace_root_for_conversation(&self.db.pool, &req.conversation_id)
+                        .await
+                        .ok()?;
+                let path = resolve_write_path(&workspace, raw, false).ok()?;
+                let exists = tokio::fs::metadata(&path)
+                    .await
+                    .map(|metadata| metadata.is_file())
+                    .unwrap_or(false);
+                exists.then(|| WRITE_EXISTS_MESSAGE.to_owned())
+            }
+            _ => None,
+        }
     }
 
     async fn finish(
@@ -2267,6 +2322,9 @@ impl ToolExecutor {
             .get("command")
             .and_then(Value::as_str)
             .ok_or_else(|| CoreError::invalid("command is required"))?;
+        if let Some(message) = bash_write_block(&req.args) {
+            return Err(CoreError::invalid(message));
+        }
         let timeout_ms = req
             .args
             .get("timeoutMs")
@@ -2677,6 +2735,11 @@ impl ToolExecutor {
             .get("content")
             .and_then(Value::as_str)
             .ok_or_else(|| CoreError::invalid("content is required"))?;
+        let overwrite = req
+            .args
+            .get("overwrite")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         if content.len() as u64 > MAX_TEXT_BYTES {
             return Err(CoreError::invalid("File content is too large."));
         }
@@ -2685,6 +2748,14 @@ impl ToolExecutor {
         let path = resolve_write_path(&workspace, raw, req.allow_outside_workspace)?;
         let _guard = self.file_locks.acquire(vec![path.clone()]).await;
         let relative = display_relative(&workspace, &path);
+        // Nothing is written, and no folder is created, when the target exists.
+        if !overwrite
+            && tokio::fs::metadata(&path)
+                .await
+                .is_ok_and(|metadata| metadata.is_file())
+        {
+            return Err(CoreError::invalid(WRITE_EXISTS_MESSAGE));
+        }
         // Capture the previous text before overwriting. A missing file diffs
         // against empty; an unreadable (binary or oversized) one gets no diff
         // and must not fail the write.
@@ -2697,7 +2768,25 @@ impl ToolExecutor {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        tokio::fs::write(&path, content).await?;
+        if overwrite {
+            tokio::fs::write(&path, content).await?;
+        } else {
+            // create_new keeps this safe against a file appearing after the check.
+            let mut file = match tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .await
+            {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    return Err(CoreError::invalid(WRITE_EXISTS_MESSAGE));
+                }
+                Err(error) => return Err(error.into()),
+            };
+            file.write_all(content.as_bytes()).await?;
+            file.flush().await?;
+        }
         Ok(Rendered {
             content: format!("Wrote {relative} ({} bytes).", content.len()),
             structured: Some(json!({"path": relative, "bytes": content.len(), "diff": diff})),
@@ -4092,7 +4181,7 @@ mod tests {
         let overwrite = executor
             .run_write(&request(
                 "write",
-                json!({"filePath": "a.txt", "content": "keep\nnew\n"}),
+                json!({"filePath": "a.txt", "content": "keep\nnew\n", "overwrite": true}),
             ))
             .await
             .unwrap();
@@ -4118,7 +4207,7 @@ mod tests {
         let binary = executor
             .run_write(&request(
                 "write",
-                json!({"filePath": "blob.bin", "content": "text\n"}),
+                json!({"filePath": "blob.bin", "content": "text\n", "overwrite": true}),
             ))
             .await
             .unwrap();
@@ -4127,6 +4216,286 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(workspace.join("blob.bin")).unwrap(),
             "text\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_creates_a_new_file_and_its_parent_folders() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let executor = test_executor(&workspace).await;
+        let result = executor
+            .run_write(&request(
+                "write",
+                json!({"filePath": "deep/er/new.txt", "content": "hello\n"}),
+            ))
+            .await
+            .unwrap();
+        assert!(result.ok);
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("deep/er/new.txt")).unwrap(),
+            "hello\n"
+        );
+        assert!(
+            result.structured.as_ref().unwrap()["diff"]
+                .as_str()
+                .unwrap()
+                .contains("+hello")
+        );
+    }
+
+    #[tokio::test]
+    async fn write_refuses_to_replace_an_existing_file_by_default() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("keep.txt"), "original\n").unwrap();
+        let executor = test_executor(&workspace).await;
+
+        for args in [
+            json!({"filePath": "keep.txt", "content": "clobbered\n"}),
+            json!({"filePath": "keep.txt", "content": "clobbered\n", "overwrite": false}),
+        ] {
+            let error = executor
+                .run_write(&request("write", args))
+                .await
+                .err()
+                .expect("an existing file must be rejected");
+            assert_eq!(error.user_message(), WRITE_EXISTS_MESSAGE);
+            assert_eq!(
+                std::fs::read_to_string(workspace.join("keep.txt")).unwrap(),
+                "original\n"
+            );
+        }
+        assert_eq!(
+            WRITE_EXISTS_MESSAGE,
+            "File already exists. Use apply_patch to modify it, or pass overwrite: true to replace the whole file."
+        );
+    }
+
+    #[tokio::test]
+    async fn write_with_overwrite_replaces_the_file_and_diffs_the_old_content() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("keep.txt"), "line\nold\n").unwrap();
+        let executor = test_executor(&workspace).await;
+        let result = executor
+            .run_write(&request(
+                "write",
+                json!({"filePath": "keep.txt", "content": "line\nnew\n", "overwrite": true}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("keep.txt")).unwrap(),
+            "line\nnew\n"
+        );
+        let diff = result.structured.as_ref().unwrap()["diff"]
+            .as_str()
+            .unwrap();
+        assert!(diff.contains("-old") && diff.contains("+new"), "{diff}");
+    }
+
+    #[tokio::test]
+    async fn a_rejected_overwrite_is_refused_before_any_approval_prompt() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        std::fs::write(workspace.join("keep.txt"), "original\n").unwrap();
+        let executor = test_executor(&workspace).await;
+        let mut events = executor.events.subscribe();
+        // `write` asks for approval by default, so a missing precheck would hang here.
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            executor.execute(request(
+                "write",
+                json!({"filePath": "keep.txt", "content": "clobbered\n"}),
+            )),
+        )
+        .await
+        .expect("the call should fail without waiting for approval");
+        assert!(!result.ok);
+        assert!(!result.executed);
+        assert_eq!(result.content, WRITE_EXISTS_MESSAGE);
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(event, CoreEvent::Approval { .. }));
+        }
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("keep.txt")).unwrap(),
+            "original\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_refuses_to_write_file_contents() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let executor = test_executor(&workspace).await;
+        for command in [
+            "echo hi > out.txt",
+            "echo hi >> out.txt",
+            "echo hi | tee out.txt",
+            "sed -i 's/a/b/' out.txt",
+            "Set-Content -Path out.txt -Value hi",
+            "'hi' | Out-File out.txt",
+        ] {
+            let error = executor
+                .run_bash(&request("bash", json!({"command": command})))
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("should have been blocked: {command}"));
+            let message = error.user_message();
+            assert!(
+                message.starts_with("BLOCKED: bash tidak boleh mengubah isi file."),
+                "{message}"
+            );
+            assert!(message.contains("allowFileWrites=true"));
+            assert!(!workspace.join("out.txt").exists(), "{command}");
+        }
+    }
+
+    #[tokio::test]
+    async fn bash_still_runs_commands_that_do_not_write_file_contents() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let executor = test_executor(&workspace).await;
+        let echo = executor
+            .run_bash(&request("bash", json!({"command": "echo ok"})))
+            .await
+            .unwrap();
+        assert!(echo.content.contains("ok"));
+        // File management is not a content write.
+        executor
+            .run_bash(&request("bash", json!({"command": "mkdir made"})))
+            .await
+            .unwrap();
+        assert!(workspace.join("made").is_dir());
+        // The quoted redirect is text, not a redirect.
+        let quoted = executor
+            .run_bash(&request("bash", json!({"command": "echo \"a > b\""})))
+            .await
+            .unwrap();
+        assert!(quoted.content.contains("a > b"));
+        assert!(!workspace.join("b").exists());
+    }
+
+    #[tokio::test]
+    async fn allow_file_writes_lets_a_deliberate_bash_write_through() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let executor = test_executor(&workspace).await;
+        let result = executor
+            .run_bash(&request(
+                "bash",
+                json!({"command": "echo hi > out.txt", "allowFileWrites": true}),
+            ))
+            .await
+            .unwrap();
+        assert!(result.ok);
+        assert!(workspace.join("out.txt").is_file());
+        // An explicit false is the same as the default.
+        assert!(
+            executor
+                .run_bash(&request(
+                    "bash",
+                    json!({"command": "echo hi > other.txt", "allowFileWrites": false}),
+                ))
+                .await
+                .is_err()
+        );
+        assert!(!workspace.join("other.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn a_blocked_bash_command_is_refused_before_any_approval_prompt() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let executor = test_executor(&workspace).await;
+        let mut events = executor.events.subscribe();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            executor.execute(request("bash", json!({"command": "echo hi > out.txt"}))),
+        )
+        .await
+        .expect("the call should fail without waiting for approval");
+        assert!(!result.ok);
+        assert!(!result.executed);
+        assert_eq!(result.content, crate::agent::shell_guard::BLOCKED_MESSAGE);
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(event, CoreEvent::Approval { .. }));
+        }
+        assert!(!workspace.join("out.txt").exists());
+    }
+
+    #[test]
+    fn tool_schemas_accept_the_new_flags_and_state_the_routing_rules() {
+        let defs = builtin_tool_defs();
+        let def = |name: &str| defs.iter().find(|tool| tool.name == name).unwrap();
+
+        let write = def("write");
+        assert_eq!(
+            write.input_schema["properties"]["overwrite"]["type"],
+            "boolean"
+        );
+        assert!(
+            validate_args(
+                &write.input_schema,
+                &json!({"filePath": "a", "content": "b", "overwrite": true})
+            )
+            .is_ok()
+        );
+        assert!(
+            write
+                .description
+                .contains("Existing files are rejected unless overwrite is true")
+        );
+        assert!(
+            write
+                .description
+                .contains("Use apply_patch to modify an existing file")
+        );
+
+        let bash = def("bash");
+        assert_eq!(
+            bash.input_schema["properties"]["allowFileWrites"]["type"],
+            "boolean"
+        );
+        assert!(
+            validate_args(
+                &bash.input_schema,
+                &json!({"command": "ls", "allowFileWrites": true})
+            )
+            .is_ok()
+        );
+        assert!(
+            bash.description
+                .contains("Do not use bash to read or modify file contents")
+        );
+        assert!(
+            bash.description.contains(
+                "does this command change the contents of a file? If yes, use a file tool."
+            )
+        );
+
+        let edit = def("edit");
+        assert!(
+            edit.description
+                .contains("Replace one exact string in one existing file")
+        );
+        assert!(edit.description.contains("use apply_patch for multiple hunks, multiple files, add/delete/move, or context-anchored changes"));
+        // The matching rules stay in the description.
+        assert!(edit.description.contains("CRLF"));
+        assert!(edit.description.contains("typographic punctuation"));
+        assert!(edit.description.contains("trailing whitespace"));
+
+        let patch = def("apply_patch");
+        assert!(
+            patch
+                .description
+                .contains("Apply a multi-file patch with add/update/delete/move")
+        );
+        assert!(
+            patch.description.contains(
+                "existing-file changes, multiple hunks, multiple files, or context anchors"
+            )
         );
     }
 

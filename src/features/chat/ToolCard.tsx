@@ -28,6 +28,10 @@ const toneColor: Record<Tone, string> = {
 
 const IN_FLIGHT = ["streaming", "queued", "running"];
 
+// Built-in tools whose useful detail is the file change itself.
+const BUILTIN_SERVER = "mcp-chat";
+const FILE_MUTATION_TOOLS = ["write", "edit", "apply_patch"];
+
 /**
  * One tool call as a compact activity row. Collapsed it is a single line with
  * the tool, its main argument and result metadata. Expanding it reveals the
@@ -60,6 +64,12 @@ export function ToolCard({ part }: { part: Part }) {
   // The diff only exists once the tool has finished; never show an empty one.
   const diff = typeof payload.diff === "string" && payload.diff !== "" && !inFlight ? payload.diff : null;
   const resultIsError = state === "error" && payload.resultPreview === payload.error;
+  // A finished write, edit or patch opens straight onto its diff: no Arguments,
+  // no Result, no second toggle. A failed call, or one without a diff, keeps the
+  // regular body so its error and arguments stay visible.
+  const isFileMutation =
+    payload.server === BUILTIN_SERVER && FILE_MUTATION_TOOLS.includes(payload.name);
+  const mutationDiff = isFileMutation && state === "completed" ? diff : null;
 
   const showAll = async (offset = 0) => {
     setLoading(true);
@@ -105,7 +115,7 @@ export function ToolCard({ part }: { part: Part }) {
 
   return (
     <>
-      <div className="my-px" data-tool-state={state}>
+      <div className="my-px" data-tool-state={state} data-tool-name={payload.name}>
         <ActivityRow
           icon={<StatusIcon state={state} nonzeroExit={nonzeroExit} />}
           expanded={open}
@@ -173,77 +183,83 @@ export function ToolCard({ part }: { part: Part }) {
             className="mt-0.5 mb-2 ml-[15px] space-y-2.5 border-l pl-4 text-[12.5px]"
             style={{ borderColor: "var(--border)" }}
           >
-            <Section label="Arguments">
-              <pre
-                className="max-h-56 overflow-auto rounded-md p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
-                style={{ background: "var(--code)" }}
-              >
-                {formatJson(displayArgs)}
-              </pre>
-            </Section>
+            {mutationDiff ? (
+              <DiffView diff={mutationDiff} defaultOpen />
+            ) : (
+              <>
+                <Section label="Arguments">
+                  <pre
+                    className="max-h-56 overflow-auto rounded-md p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
+                    style={{ background: "var(--code)" }}
+                  >
+                    {formatJson(displayArgs)}
+                  </pre>
+                </Section>
 
-            {payload.resultPreview && !resultIsError ? (
-              <Section
-                label="Result"
-                action={
-                  <span className="flex items-center gap-2">
-                    {payload.truncated ? <span>truncated</span> : null}
-                    <button
-                      type="button"
-                      onClick={() => void copyResult()}
-                      className="focus-ring rounded p-0.5 hover:bg-[var(--panel-2)]"
-                      title="Copy result"
-                      aria-label="Copy result"
+                {payload.resultPreview && !resultIsError ? (
+                  <Section
+                    label="Result"
+                    action={
+                      <span className="flex items-center gap-2">
+                        {payload.truncated ? <span>truncated</span> : null}
+                        <button
+                          type="button"
+                          onClick={() => void copyResult()}
+                          className="focus-ring rounded p-0.5 hover:bg-[var(--panel-2)]"
+                          title="Copy result"
+                          aria-label="Copy result"
+                        >
+                          {copied ? <CheckCircle2 size={11} /> : <Copy size={11} />}
+                        </button>
+                      </span>
+                    }
+                  >
+                    <pre
+                      className="max-h-72 overflow-auto rounded-md p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
+                      style={{ background: "var(--code)" }}
                     >
-                      {copied ? <CheckCircle2 size={11} /> : <Copy size={11} />}
-                    </button>
-                  </span>
-                }
-              >
-                <pre
-                  className="max-h-72 overflow-auto rounded-md p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
-                  style={{ background: "var(--code)" }}
-                >
-                  {payload.resultPreview}
-                </pre>
-                {payload.fullResultRef ? (
-                  <div className="mt-2 flex justify-end">
-                    <Button size="sm" variant="ghost" loading={loading} onClick={() => void showAll()}>
-                      Show all
-                    </Button>
+                      {payload.resultPreview}
+                    </pre>
+                    {payload.fullResultRef ? (
+                      <div className="mt-2 flex justify-end">
+                        <Button size="sm" variant="ghost" loading={loading} onClick={() => void showAll()}>
+                          Show all
+                        </Button>
+                      </div>
+                    ) : null}
+                  </Section>
+                ) : null}
+
+                {payload.error && state === "error" ? (
+                  <div
+                    role="alert"
+                    className="rounded-md px-2.5 py-2 text-[11.5px] whitespace-pre-wrap"
+                    style={{ color: "var(--danger)", background: "var(--danger-soft)" }}
+                  >
+                    {payload.error}
                   </div>
                 ) : null}
-              </Section>
-            ) : null}
 
-            {payload.error && state === "error" ? (
-              <div
-                role="alert"
-                className="rounded-md px-2.5 py-2 text-[11.5px] whitespace-pre-wrap"
-                style={{ color: "var(--danger)", background: "var(--danger-soft)" }}
-              >
-                {payload.error}
-              </div>
-            ) : null}
-
-            {image && image.path ? (
-              <div>
-                {imageUrl(image.path) ? (
-                  <img
-                    src={imageUrl(image.path)}
-                    alt={image.name}
-                    className="max-h-56 max-w-full rounded-md border object-contain"
-                    style={{ borderColor: "var(--border)" }}
-                  />
-                ) : (
-                  <div className="text-[11.5px]" style={{ color: "var(--muted)" }}>
-                    Image: {image.name} ({image.mime})
+                {image && image.path ? (
+                  <div>
+                    {imageUrl(image.path) ? (
+                      <img
+                        src={imageUrl(image.path)}
+                        alt={image.name}
+                        className="max-h-56 max-w-full rounded-md border object-contain"
+                        style={{ borderColor: "var(--border)" }}
+                      />
+                    ) : (
+                      <div className="text-[11.5px]" style={{ color: "var(--muted)" }}>
+                        Image: {image.name} ({image.mime})
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            ) : null}
+                ) : null}
 
-            {diff ? <DiffView diff={diff} /> : null}
+    {diff ? <DiffView diff={diff} /> : null}
+              </>
+            )}
           </div>
         ) : null}
       </div>

@@ -181,7 +181,7 @@ export function MessageItem({
           );
         }
         if (part.kind === "reasoning") {
-          return <Reasoning key={part.id} part={part} />;
+          return <Reasoning key={part.id} part={part} streaming={streaming} />;
         }
         if (part.kind === "tool_call") {
           return <ToolCard key={part.id} part={part} />;
@@ -280,9 +280,9 @@ function Thinking() {
   );
 }
 
-function Reasoning({ part }: { part: Part }) {
+function Reasoning({ part, streaming }: { part: Part; streaming: boolean }) {
   const payload = parsePayload(part);
   const text = String(payload.text ?? "");
   if (!text) return null;
-  return <ThoughtRow text={text} duration={thoughtDuration(payload)} />;
+  return <ThoughtRow text={text} duration={thoughtDuration(payload)} streaming={streaming} />;
 }
