@@ -1,5 +1,6 @@
 import type { ToolCallPayload } from "@/lib/types";
 import { formatDuration } from "@/lib/format";
+import { BUILTIN_SERVER, capabilityOf } from "@/lib/capabilities";
 import { statsForDiff } from "./diff";
 
 export type Tone = "muted" | "warn" | "danger";
@@ -21,20 +22,9 @@ export interface ToolSummary {
   title: string;
 }
 
-const BUILTIN_SERVER = "mcp-chat";
-
-const BUILTIN_LABELS: Record<string, string> = {
-  read: "Read",
-  write: "Write",
-  edit: "Edit",
-  apply_patch: "Patch",
-  bash: "Bash",
-  python: "Python",
-  grep: "Grep",
-  glob: "Glob",
-  skill: "Skill",
-  question: "Question",
-  read_tool_output: "Read output",
+// Labels of the MCP meta tools. Labels of the other built-in tools come from
+// the shared capability table.
+const META_LABELS: Record<string, string> = {
   mcp_search_tools: "Search tools",
   mcp_get_tool_schema: "Tool schema",
   mcp_execute: "MCP batch",
@@ -102,6 +92,7 @@ export function summarizeTool(payload: ToolCallPayload): ToolSummary {
   const state = payload.state ?? "running";
   const name = String(payload.name ?? "");
   const builtin = payload.server === BUILTIN_SERVER;
+  const capability = capabilityOf(payload.server, name);
   let prefix = "";
   let label = name;
   let target = "";
@@ -116,7 +107,7 @@ export function summarizeTool(payload: ToolCallPayload): ToolSummary {
       target = keyValues(inner as Record<string, unknown>).join(" ");
     }
   } else if (builtin) {
-    label = BUILTIN_LABELS[name] ?? name;
+    label = capability?.label ?? META_LABELS[name] ?? name;
     switch (name) {
       case "read": {
         const path = str(args.filePath);

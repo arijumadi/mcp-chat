@@ -33,11 +33,14 @@ export function installMock(): void {
   const messages = new Map<string, MessageWithParts[]>();
   const subscribers = new Set<(event: CoreEvent) => void>();
   const generating = new Set<string>();
+  const approvalWaiters = new Map<string, (decision: string) => void>();
   const autoApprove = new Set<string>();
   const settingsStore: Record<string, string> = {
     theme: localStorage.getItem("theme") ?? "system",
     "compaction.keep_tokens": "15000",
     "compaction.buffer": "0",
+    // Reading comfort settings survive a reload, as they do in the real app.
+    ...JSON.parse(localStorage.getItem("mock-ui-settings") ?? "{}"),
   };
   let providers: ProviderView[] = [
     {
@@ -339,6 +342,11 @@ export function installMock(): void {
       case "set_setting":
         settingsStore[String(args.key)] = String(args.value);
         if (args.key === "theme") localStorage.setItem("theme", String(args.value));
+        if (String(args.key).startsWith("ui.")) {
+          const stored = JSON.parse(localStorage.getItem("mock-ui-settings") ?? "{}");
+          stored[String(args.key)] = String(args.value);
+          localStorage.setItem("mock-ui-settings", JSON.stringify(stored));
+        }
         return null;
       case "list_conversations": {
         const offset = Number(args.offset ?? 0);
@@ -451,8 +459,54 @@ export function installMock(): void {
           toolCount: 17,
           toolMode: "lazy",
         };
-      case "compact_conversation":
+      case "compact_conversation": {
+        const conversationId = String(args.conversationId);
+        const history = messages.get(conversationId) ?? [];
+        if (generating.has(conversationId)) {
+          throw new Error("Stop the current turn before compacting.");
+        }
+        if (history.length < 4) throw new Error("Not enough history to compact.");
+        // Like the backend: hold the conversation, report Compacting then Idle,
+        // and add the summary as a system row.
+        generating.add(conversationId);
+        emit({ type: "status", conversationId, status: "compacting", message: null });
+        await delay(250);
+        generating.delete(conversationId);
+        const focus = typeof args.focus === "string" && args.focus ? ` Focus: ${args.focus}.` : "";
+        const summaryId = uid();
+        const partId = uid();
+        const text = `## Objective\nEarlier conversation, summarized.${focus}`;
+        history.push({
+          id: summaryId,
+          conversationId,
+          role: "system",
+          createdAt: now(),
+          status: "completed",
+          error: null,
+          parts: [
+            {
+              id: partId,
+              messageId: summaryId,
+              idx: 0,
+              kind: "summary",
+              payloadJson: JSON.stringify({ text, coversUntil: history.at(-1)?.id ?? "" }),
+            },
+          ],
+        });
+        emit({ type: "message_start", conversationId, messageId: summaryId, role: "system" });
+        emit({
+          type: "part",
+          conversationId,
+          messageId: summaryId,
+          partId,
+          kind: "summary",
+          payload: { text, coversUntil: history.at(-2)?.id ?? "" },
+        });
+        emit({ type: "message_end", conversationId, messageId: summaryId, status: "completed", error: null });
+        emit({ type: "status", conversationId, status: "idle", message: null });
+        emit({ type: "conversation_updated", conversationId });
         return null;
+      }
       case "is_generating":
         return generating.has(String(args.conversationId));
       case "get_auto_approve":
@@ -494,7 +548,9 @@ export function installMock(): void {
         if (conversation) conversation.updatedAt = now();
         emit({ type: "conversation_updated", conversationId });
         generating.add(conversationId);
-        void simulateTurn(conversationId, text);
+        void (/needs approval/i.test(text)
+          ? simulateApprovalTurn(conversationId)
+          : simulateTurn(conversationId, text));
         return user;
       }
       case "regenerate":
@@ -526,6 +582,13 @@ export function installMock(): void {
         return { text, attachments: [] };
       }
       case "respond_approval": {
+        // A scripted approval turn is waiting for this answer.
+        const waiter = approvalWaiters.get(String(args.callId));
+        if (waiter) {
+          approvalWaiters.delete(String(args.callId));
+          waiter(String(args.decision));
+          return true;
+        }
         emit({
           type: "tool",
           conversationId: String(args.conversationId ?? ""),
@@ -674,8 +737,106 @@ export function installMock(): void {
     }
   }
 
+  /**
+   * A turn that asks permission to run `bash`, then waits for the answer. A
+   * message containing "needs approval" starts it, so the approval modal and its
+   * keyboard shortcuts can be exercised without a real provider.
+   */
+  async function simulateApprovalTurn(conversationId: string) {
+    await delay(120);
+    // A stop can arrive while the scripted turn is waiting to start.
+    if (!generating.has(conversationId)) return;
+    const assistantId = uid();
+    const toolPartId = uid();
+    const callId = uid();
+    const startedAt = now();
+    const assistant: MessageWithParts = {
+      id: assistantId,
+      conversationId,
+      role: "assistant",
+      createdAt: now(),
+      status: "streaming",
+      error: null,
+      parts: [],
+    };
+    addMessage(conversationId, assistant);
+    emit({ type: "message_start", conversationId, messageId: assistantId });
+    emit({ type: "status", conversationId, status: "streaming", message: null });
+    const base = {
+      callId,
+      name: "bash",
+      server: "mcp-chat",
+      args: { command: "npm test" },
+      startedAt,
+    };
+    emit({
+      type: "part",
+      conversationId,
+      messageId: assistantId,
+      partId: toolPartId,
+      kind: "tool_call",
+      payload: { ...base, state: "running", executed: false, approval: "pending" },
+    });
+    emit({
+      type: "approval",
+      conversationId,
+      callId,
+      server: "mcp-chat",
+      tool: "bash",
+      args: base.args,
+      allowAlways: true,
+      diff: null,
+    });
+    emit({ type: "status", conversationId, status: "waiting_approval", message: null });
+
+    const decision = await new Promise<string>((resolve) => approvalWaiters.set(callId, resolve));
+    const approved = decision !== "reject";
+    const finished = approved
+      ? {
+          ...base,
+          state: "completed",
+          executed: true,
+          approval: "allowed",
+          endedAt: now(),
+          exitCode: 0,
+          resultPreview: "all tests passed",
+        }
+      : {
+          ...base,
+          state: "error",
+          executed: false,
+          approval: "rejected",
+          endedAt: now(),
+          error: "The user declined this tool call",
+          resultPreview: "The user declined this tool call",
+        };
+    emit({
+      type: "tool",
+      conversationId,
+      callId,
+      state: finished.state,
+      progress: null,
+      message: finished.resultPreview,
+      exitCode: approved ? 0 : null,
+    });
+    assistant.parts.push({
+      id: toolPartId,
+      messageId: assistantId,
+      idx: 0,
+      kind: "tool_call",
+      payloadJson: JSON.stringify(finished),
+    });
+    assistant.status = "completed";
+    generating.delete(conversationId);
+    emit({ type: "message_end", conversationId, messageId: assistantId, status: "completed", error: null });
+    emit({ type: "status", conversationId, status: "idle", message: null });
+    emit({ type: "conversation_updated", conversationId });
+  }
+
   async function simulateTurn(conversationId: string, text: string) {
     await delay(160);
+    // A stop can arrive while the scripted turn is waiting to start.
+    if (!generating.has(conversationId)) return;
     const assistantId = uid();
     const assistant: MessageWithParts = {
       id: assistantId,

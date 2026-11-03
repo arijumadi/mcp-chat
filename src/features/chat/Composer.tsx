@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ClipboardEvent } from "react";
 import { ArrowUp, Loader2, Paperclip, Square, Upload } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useApp } from "@/app/store";
+import { BUSY_STATUSES, useApp } from "@/app/store";
 import { Button } from "@/components/Button";
 import { cn } from "@/lib/cn";
 import { formatTokens } from "@/lib/format";
@@ -11,14 +11,7 @@ import { ModelPicker } from "./ModelPicker";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { AutoApproveButton } from "./AutoApproveButton";
 import { AttachmentGrid } from "./Attachments";
-
-const ACTIVE: string[] = [
-  "thinking",
-  "streaming",
-  "compacting",
-  "waiting_approval",
-  "running_tool",
-];
+import { parseCompactCommand } from "./slashCommands";
 
 export function Composer({ conversation }: { conversation: Conversation }) {
   const value = useApp((state) => state.draft);
@@ -27,6 +20,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const send = useApp((state) => state.sendMessage);
   const steer = useApp((state) => state.steerMessage);
   const stop = useApp((state) => state.stop);
+  const openCompact = useApp((state) => state.openCompact);
   const status = useApp((state) => state.status);
   const providers = useApp((state) => state.providers);
   const usage = useApp((state) => state.usage);
@@ -43,7 +37,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const [steering, setSteering] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [dragCount, setDragCount] = useState(0);
-  const active = ACTIVE.includes(status);
+  const active = BUSY_STATUSES.includes(status);
   const disabled = providers.length === 0;
   const hasContent = value.trim().length > 0 || pendingAttachments.length > 0;
   const canSend = hasContent && !active && !disabled;
@@ -56,17 +50,6 @@ export function Composer({ conversation }: { conversation: Conversation }) {
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 240)}px`;
   }, [value]);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && ACTIVE.includes(useApp.getState().status)) {
-        event.preventDefault();
-        void useApp.getState().stop();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
   useEffect(() => {
     if (active || disabled) {
@@ -140,6 +123,14 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const submit = () => {
     const text = value.trim();
     if (disabled || steering) return;
+    // `/compact [focus]` is a command, not a message. It must not reach the
+    // model, not even as a steer message while a turn runs.
+    const compact = pendingAttachments.length === 0 ? parseCompactCommand(text) : null;
+    if (compact) {
+      // The draft stays until the user confirms, so Cancel loses nothing.
+      openCompact(compact.focus);
+      return;
+    }
     if (active) {
       if (!hasContent) return;
       setValue("");
@@ -239,7 +230,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
           </div>
         </div>
       ) : null}
-      <div className="mx-auto w-full max-w-[760px]">
+      <div className="mx-auto w-full max-w-(--chat-width)">
         {limitReached && !active ? (
           <div
             className="mb-2 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-[12.5px]"
@@ -308,7 +299,8 @@ export function Composer({ conversation }: { conversation: Conversation }) {
             rows={1}
             disabled={disabled}
             placeholder={disabled ? "Configure a provider first…" : "Message the model…"}
-            className="max-h-[240px] min-h-[38px] w-full resize-none bg-transparent px-2 py-2 text-[14.5px] leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:cursor-not-allowed"
+            className="max-h-[240px] min-h-[38px] w-full resize-none bg-transparent px-2 py-2 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:cursor-not-allowed"
+            style={{ fontSize: "var(--chat-fs)" }}
             aria-label="Message"
           />
           <div className="mt-1 flex items-center gap-1.5 px-1">

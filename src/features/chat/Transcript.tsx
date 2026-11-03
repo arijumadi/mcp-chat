@@ -160,12 +160,12 @@ export function Transcript() {
         onWheel={onWheel}
         className="h-full overflow-y-auto"
       >
-        <div className="mx-auto w-full max-w-[760px] px-6 pt-8 pb-10">
+        <div className="mx-auto w-full max-w-(--chat-width) px-6 pt-8 pb-10">
           {messageHasMore || loadingOlder ? (
             <div className="mb-4 flex justify-center">
               {loadingOlder ? (
                 <span
-                  className="flex items-center gap-1.5 text-[11.5px]"
+                  className="flex items-center gap-1.5 text-[length:var(--fs-mono)]"
                   style={{ color: "var(--muted)" }}
                 >
                   <Loader2 size={12} className="animate-spin" />
@@ -175,7 +175,7 @@ export function Transcript() {
                 <button
                   type="button"
                   onClick={loadEarlier}
-                  className="focus-ring rounded-full border px-3 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)]"
+                  className="focus-ring rounded-full border px-3 py-1.5 text-[length:var(--fs-mono)] transition hover:bg-[var(--panel-2)]"
                   style={{ borderColor: "var(--border)", color: "var(--muted)" }}
                 >
                   Load earlier messages
@@ -222,14 +222,14 @@ export function Transcript() {
           })}
           {showCompacting ? (
             <div
-              className="flex items-center gap-2 py-2 text-[13.5px]"
+              className="flex items-center gap-2 py-(--status-py) text-[length:var(--fs-status)]"
               style={{ color: "var(--muted)" }}
             >
               <Loader2 size={14} className="animate-spin" style={{ color: "var(--warn)" }} />
               <span>Compacting context…</span>
             </div>
           ) : showThinking ? (
-            <div className="flex items-center gap-2 py-2 text-[13.5px]" style={{ color: "var(--muted)" }}>
+            <div className="flex items-center gap-2 py-(--status-py) text-[length:var(--fs-status)]" style={{ color: "var(--muted)" }}>
               <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
               <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-[var(--accent)] [animation-delay:150ms]" />
               <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-[var(--accent)] [animation-delay:300ms]" />
@@ -239,7 +239,7 @@ export function Transcript() {
             </div>
           ) : null}
           {status === "running_tool" ? (
-            <div className="py-1 text-[11.5px]" style={{ color: "var(--faint)" }}>
+            <div className="py-1 text-[length:var(--fs-mono)]" style={{ color: "var(--faint)" }}>
               A tool is running. You can stop the turn with Esc.
             </div>
           ) : null}
@@ -249,7 +249,7 @@ export function Transcript() {
       {showJump ? (
         <button
           onClick={() => scrollToBottom()}
-          className="focus-ring absolute right-6 bottom-4 flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11.5px] shadow-lg transition hover:bg-[var(--panel-2)]"
+          className="focus-ring absolute right-6 bottom-4 flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[length:var(--fs-mono)] shadow-lg transition hover:bg-[var(--panel-2)]"
           style={{ background: "var(--panel)", borderColor: "var(--border)" }}
         >
           <ArrowDown size={12} /> Latest

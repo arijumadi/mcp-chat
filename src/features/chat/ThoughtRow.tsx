@@ -77,7 +77,7 @@ export function ThoughtRow({
           role="region"
           aria-label="Thought text"
           tabIndex={0}
-          className="mt-0.5 mb-1.5 ml-[15px] max-h-56 overflow-y-auto border-l pl-4 text-[12.5px] whitespace-pre-wrap italic"
+          className="mt-0.5 mb-1.5 ml-[15px] max-h-56 overflow-y-auto border-l pl-4 text-[length:var(--fs-row)] whitespace-pre-wrap italic"
           style={{ borderColor: "var(--border)", color: "var(--muted)" }}
         >
           {text}

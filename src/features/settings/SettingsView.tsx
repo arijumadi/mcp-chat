@@ -27,6 +27,8 @@ import { Modal } from "@/components/Modal";
 import { inputClass, hintClass } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { ProviderForm } from "./ProviderForm";
+import { AppearanceSettings, ShortcutList } from "./AppearanceSettings";
+import { NotificationSettings } from "./NotificationSettings";
 import { DEFAULT_SYSTEM_PROMPT } from "@/lib/defaults";
 
 export function SettingsView() {
@@ -329,7 +331,7 @@ export function SettingsView() {
           <Section
             id="appearance"
             title="Appearance"
-            description="The interface follows the system theme by default."
+            description="Theme, density, text size and chat width. The interface follows the system theme by default."
           >
             <div className="flex flex-wrap gap-2">
               {(
@@ -354,6 +356,23 @@ export function SettingsView() {
                 </button>
               ))}
             </div>
+            <AppearanceSettings />
+          </Section>
+
+          <Section
+            id="notifications"
+            title="Notifications"
+            description="Know when a long task needs you, without watching the window."
+          >
+            <NotificationSettings />
+          </Section>
+
+          <Section
+            id="shortcuts"
+            title="Keyboard shortcuts"
+            description="Press Ctrl+Shift+P (Cmd+Shift+P on macOS) to search every command."
+          >
+            <ShortcutList />
           </Section>
 
           <Section
@@ -751,6 +770,8 @@ function SettingsNav() {
   const items = [
     ["providers", "Providers"],
     ["appearance", "Appearance"],
+    ["notifications", "Notifications"],
+    ["shortcuts", "Shortcuts"],
     ["chat-defaults", "Chat defaults"],
     ["context", "Context"],
     ["export", "Export"],

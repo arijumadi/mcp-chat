@@ -5,7 +5,30 @@ import { Button } from "@/components/Button";
 import { Modal } from "@/components/Modal";
 import { formatJson } from "@/lib/format";
 import { inputClass } from "@/components/ui";
+import { capabilityOf, toolForRole } from "@/lib/capabilities";
+import { commandById } from "@/features/commands/registry";
+import { ariaKeyShortcuts, formatShortcut } from "@/features/commands/shortcuts";
 import { DiffView } from "./DiffView";
+
+/** Tooltip and aria attributes for a button that has a keyboard shortcut. */
+function shortcutProps(id: string, label: string) {
+  const shortcut = commandById(id)?.shortcut;
+  if (!shortcut) return { title: label };
+  return {
+    title: `${label} (${formatShortcut(shortcut)})`,
+    "aria-keyshortcuts": ariaKeyShortcuts(shortcut),
+  };
+}
+
+function overrideParam(server: string, tool: string): string {
+  return capabilityOf(server, tool)?.overrideParam ?? "";
+}
+
+/** A shell call that sets the flag lifting its file-write guard. */
+function guardOverridden(server: string, tool: string, args: Record<string, unknown>): boolean {
+  const capability = capabilityOf(server, tool);
+  return capability?.risk === "shell" && capability.overrideParam !== null && args[capability.overrideParam] === true;
+}
 
 export function ApprovalModal() {
   const approvals = useApp((state) => state.approvals);
@@ -55,7 +78,12 @@ export function ApprovalModal() {
           </>
         ) : (
           <>
-            <Button size="sm" variant="ghost" onClick={() => setRejecting(true)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setRejecting(true)}
+              {...shortcutProps("approval.reject", "Reject, with optional feedback. The shortcut rejects at once")}
+            >
               Reject
             </Button>
             {approval.allowAlways ? (
@@ -63,7 +91,7 @@ export function ApprovalModal() {
                 size="sm"
                 variant="secondary"
                 onClick={() => void respond(approval.callId, "always")}
-                title="Adds a saved rule for this tool"
+                {...shortcutProps("approval.always", "Adds a saved rule for this tool")}
               >
                 Always allow
               </Button>
@@ -72,6 +100,7 @@ export function ApprovalModal() {
               size="sm"
               variant="primary"
               onClick={() => void respond(approval.callId, "once")}
+              {...shortcutProps("approval.once", "Allow this call once")}
             >
               Allow once
             </Button>
@@ -82,14 +111,15 @@ export function ApprovalModal() {
       <p className="mb-3 text-[12.5px]" style={{ color: "var(--muted)" }}>
         The model asked to execute this tool. Review the changes and arguments before allowing it.
       </p>
-      {approval.tool === "bash" && approval.args.allowFileWrites === true ? (
+      {guardOverridden(approval.server, approval.tool, approval.args) ? (
         <div
           role="note"
           className="mb-3 rounded-lg px-3 py-2 text-[12px]"
           style={{ background: "var(--warn-soft)", color: "var(--warn)" }}
         >
-          <span className="font-medium">allowFileWrites is on.</span> This command may write file
-          contents directly. Normally that goes through write or apply_patch.
+          <span className="font-medium">{overrideParam(approval.server, approval.tool)} is on.</span>{" "}
+          This command may write file contents directly. Normally that goes through{" "}
+          {toolForRole("create_file")} or {toolForRole("modify_file")}.
         </div>
       ) : null}
       {approval.diff ? (

@@ -8,9 +8,6 @@
 //! text, heredoc bodies and comments. Build tools that write generated files,
 //! and file management such as `mkdir`, `rm` and `mv`, are never flagged.
 
-/// Returned to the model when a command is blocked.
-pub const BLOCKED_MESSAGE: &str = "BLOCKED: bash tidak boleh mengubah isi file. Pakai write (file baru) atau apply_patch (file existing). Untuk operasi yang memang disengaja, set allowFileWrites=true.";
-
 /// How many levels of `sh -c "..."` payloads are inspected.
 const MAX_NESTING: usize = 3;
 

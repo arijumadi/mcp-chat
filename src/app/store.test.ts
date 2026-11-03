@@ -83,6 +83,54 @@ describe("transcript event reducer", () => {
     expect(payload.resultPreview).toBe("echo: hi");
   });
 
+  it("shows a shell exit code as soon as the call finishes", () => {
+    apply({ type: "message_start", conversationId: "c1", messageId: "m1" });
+    apply({
+      type: "part",
+      conversationId: "c1",
+      messageId: "m1",
+      partId: "bash1",
+      kind: "tool_call",
+      payload: { callId: "b1", name: "bash", server: "mcp-chat", args: {}, state: "running" },
+    });
+    apply({ type: "tool", conversationId: "c1", callId: "b1", state: "completed", message: "done", exitCode: 2 });
+    const payload = parsePayload(get().messages[0]!.parts[0]!);
+    expect(payload.exitCode).toBe(2);
+    // An event without an exit code does not erase it.
+    apply({ type: "tool", conversationId: "c1", callId: "b1", state: "completed" });
+    expect(parsePayload(get().messages[0]!.parts[0]!).exitCode).toBe(2);
+  });
+
+  it("stops saying a tool needs approval once it has been answered", () => {
+    const start = (callId: string) => {
+      apply({
+        type: "part",
+        conversationId: "c1",
+        messageId: "m1",
+        partId: `part-${callId}`,
+        kind: "tool_call",
+        payload: { callId, name: "bash", server: "mcp-chat", args: {}, state: "running", approval: "pending" },
+      });
+    };
+    apply({ type: "message_start", conversationId: "c1", messageId: "m1" });
+    for (const [callId, state, expected] of [
+      ["allowed-run", "running", "allowed"],
+      ["allowed-done", "completed", "allowed"],
+      ["rejected", "error", "rejected"],
+      ["stopped", "aborted", "rejected"],
+    ] as const) {
+      start(callId);
+      apply({ type: "tool", conversationId: "c1", callId, state, message: null });
+      const part = get().messages[0]!.parts.find((item) => item.id === `part-${callId}`)!;
+      expect(parsePayload(part).approval, callId).toBe(expected);
+    }
+    // A call still waiting for its answer stays pending.
+    start("waiting");
+    apply({ type: "tool", conversationId: "c1", callId: "waiting", state: "queued", message: null });
+    const waiting = get().messages[0]!.parts.find((item) => item.id === "part-waiting")!;
+    expect(parsePayload(waiting).approval).toBe("pending");
+  });
+
   it("stores a finished tool's diff on the tool_call part", () => {
     apply({ type: "message_start", conversationId: "c1", messageId: "m1" });
     apply({
