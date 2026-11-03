@@ -133,6 +133,11 @@ export interface AppStore {
 
 const MESSAGE_PAGE_SIZE = 80;
 
+// A send crosses IPC before the backend turn is registered. If the user hits
+// Stop in that window, remember it and cancel as soon as the send returns.
+let sendingConversationId: string | null = null;
+let stopRequestedFor: string | null = null;
+
 let unsubscribe: (() => void) | null = null;
 let initializing = false;
 
@@ -388,6 +393,8 @@ export const useApp = create<AppStore>()((set, get) => ({
         }),
       });
     });
+    sendingConversationId = conversationId;
+    stopRequestedFor = null;
     const optimistic: MessageWithParts = {
       id: tempId,
       conversationId,
@@ -411,6 +418,7 @@ export const useApp = create<AppStore>()((set, get) => ({
       step: null,
       limitReached: false,
     }));
+    let sent = false;
     try {
       const message = await call<MessageWithParts>("send_message", {
         conversationId,
@@ -429,6 +437,7 @@ export const useApp = create<AppStore>()((set, get) => ({
             : item,
         ),
       }));
+      sent = true;
       void get().refreshConversations();
     } catch (error) {
       set((state) => ({
@@ -439,6 +448,18 @@ export const useApp = create<AppStore>()((set, get) => ({
       get().toast(String(error), "error", [
         { label: "Retry", onClick: () => void get().sendMessage(text) },
       ]);
+    } finally {
+      if (sendingConversationId === conversationId) sendingConversationId = null;
+      if (stopRequestedFor === conversationId) {
+        stopRequestedFor = null;
+        if (sent) {
+          // The send is now registered on the backend. Queueing the stop here
+          // means a fast Escape cannot be lost in the IPC gap.
+          void call("stop_generation", { conversationId }).catch((error) =>
+            get().toast(String(error), "error"),
+          );
+        }
+      }
     }
   },
 
@@ -581,6 +602,10 @@ export const useApp = create<AppStore>()((set, get) => ({
   async stop() {
     const conversationId = get().activeId;
     if (!conversationId) return;
+    if (sendingConversationId === conversationId) {
+      stopRequestedFor = conversationId;
+      return;
+    }
     try {
       await call("stop_generation", { conversationId });
     } catch (error) {
