@@ -1,4 +1,5 @@
 pub mod approvals;
+pub mod capabilities;
 pub mod context;
 pub mod diff;
 pub mod edit;
@@ -34,6 +35,22 @@ use self::tools::ToolExecutor;
 pub struct RevertedMessage {
     pub text: String,
     pub attachments: Vec<crate::attachments::Attachment>,
+}
+
+/// Holds a conversation's turn slot while alive. See [`ChatEngine::claim_turn`].
+pub(crate) struct TurnSlot {
+    engine: Arc<ChatEngine>,
+    id: String,
+}
+
+impl Drop for TurnSlot {
+    fn drop(&mut self) {
+        self.engine
+            .turns
+            .lock()
+            .expect("turns lock")
+            .remove(&self.id);
+    }
 }
 
 pub struct ChatEngine {
@@ -389,24 +406,42 @@ impl ChatEngine {
         })
     }
 
-    fn start_turn(self: &Arc<Self>, conversation_id: &str) -> Result<()> {
+    /// Take a conversation's single turn slot, or fail with `busy` if a turn
+    /// (or a manual compaction) already holds it. Dropping the returned slot
+    /// releases it, including on early return and panic.
+    pub(crate) fn claim_turn(
+        self: &Arc<Self>,
+        conversation_id: &str,
+        busy: &str,
+    ) -> Result<(TurnSlot, CancellationToken)> {
         let token = CancellationToken::new();
-        {
-            let mut turns = self.turns.lock().expect("turns lock");
-            if turns.contains_key(conversation_id) {
-                return Err(CoreError::Message(
-                    "This conversation is already generating a response.".into(),
-                ));
-            }
-            turns.insert(conversation_id.to_owned(), token.clone());
+        let mut turns = self.turns.lock().expect("turns lock");
+        if turns.contains_key(conversation_id) {
+            return Err(CoreError::Message(busy.into()));
         }
+        turns.insert(conversation_id.to_owned(), token.clone());
+        Ok((
+            TurnSlot {
+                engine: self.clone(),
+                id: conversation_id.to_owned(),
+            },
+            token,
+        ))
+    }
+
+    fn start_turn(self: &Arc<Self>, conversation_id: &str) -> Result<()> {
+        let (slot, token) = self.claim_turn(
+            conversation_id,
+            "This conversation is already generating a response.",
+        )?;
         let engine = self.clone();
         let id = conversation_id.to_owned();
         tokio::spawn(async move {
+            // The slot is released when this task ends, however it ends.
+            let _slot = slot;
             if let Err(error) = runner::run(engine.clone(), &id, token).await {
                 tracing::debug!(conversation = %id, error = %error.user_message(), "turn ended with error");
             }
-            engine.turns.lock().expect("turns lock").remove(&id);
         });
         Ok(())
     }

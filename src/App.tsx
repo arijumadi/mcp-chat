@@ -1,10 +1,14 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { useApp } from "@/app/store";
+import { useUi } from "@/app/ui";
 import { Sidebar } from "@/components/Sidebar";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
 import { Toasts } from "@/components/Toasts";
 import { ChatView } from "@/features/chat/ChatView";
 import { ApprovalModal } from "@/features/chat/ApprovalModal";
+import { CompactDialog } from "@/features/chat/CompactDialog";
+import { CommandPalette } from "@/features/commands/CommandPalette";
+import { useGlobalShortcuts } from "@/features/commands/useShortcuts";
 import { InputRequestModal } from "@/features/chat/InputRequestModal";
 const SettingsView = lazy(() =>
   import("@/features/settings/SettingsView").then((module) => ({
@@ -22,28 +26,15 @@ export default function App() {
   const view = useApp((state) => state.view);
   const sidebarOpen = useApp((state) => state.sidebarOpen);
   const init = useApp((state) => state.init);
-  const newChat = useApp((state) => state.newChat);
-  const [quickOpen, setQuickOpen] = useState(false);
+  const quickOpen = useUi((state) => state.quickOpen);
+  const closeQuick = useUi((state) => state.closeQuick);
 
   useEffect(() => {
     void init();
   }, [init]);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const mod = event.metaKey || event.ctrlKey;
-      if (mod && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setQuickOpen(true);
-      }
-      if (mod && event.key.toLowerCase() === "n") {
-        event.preventDefault();
-        void newChat();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [newChat]);
+  // Every shortcut comes from the command registry.
+  useGlobalShortcuts();
 
   if (!booted) return <BootSkeleton />;
 
@@ -59,8 +50,10 @@ export default function App() {
           </Suspense>
         )}
       </main>
-      <QuickSwitcher open={quickOpen} onClose={() => setQuickOpen(false)} />
+      <QuickSwitcher open={quickOpen} onClose={closeQuick} />
+      <CommandPalette />
       <ApprovalModal />
+      <CompactDialog />
       <InputRequestModal />
       <Toasts />
     </div>

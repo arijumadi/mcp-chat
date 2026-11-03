@@ -50,6 +50,23 @@ Rules:
 - Write in the same language as the conversation.
 - Do not answer the conversation, call tools, or add commentary."#;
 
+/// Longest focus text accepted for a manual compaction.
+const MAX_COMPACTION_FOCUS: usize = 2_000;
+
+/// The summarizer prompt, optionally steered by a short user-written focus.
+fn compaction_prompt(focus: Option<&str>) -> String {
+    let focus = focus.map(str::trim).filter(|text| !text.is_empty());
+    match focus {
+        Some(text) => {
+            let (text, _) = crate::util::truncate_chars(text, MAX_COMPACTION_FOCUS);
+            format!(
+                "{COMPACTION_INSTRUCTION}\n\nFocus requested by the user for this summary: {text}\nKeep every section above, but give the most detail to what is relevant to this focus and compress unrelated material."
+            )
+        }
+        None => COMPACTION_INSTRUCTION.to_owned(),
+    }
+}
+
 struct Resolved {
     kind: ProviderKind,
     base_url: String,
@@ -327,6 +344,7 @@ async fn drive(
                 &cancel,
                 system.as_deref(),
                 &tool_defs,
+                None,
             )
             .await;
             let _ = engine.events.send(CoreEvent::Status {
@@ -424,6 +442,7 @@ async fn drive(
                     &cancel,
                     system.as_deref(),
                     &tool_defs,
+                    None,
                 )
                 .await;
                 let _ = engine.events.send(CoreEvent::Status {
@@ -1409,6 +1428,7 @@ async fn compact(
     cancel: &CancellationToken,
     system: Option<&str>,
     tool_defs: &[ToolDef],
+    focus: Option<&str>,
 ) -> Result<()> {
     let history = messages::list_for_conversation(&engine.db.pool, &conversation.id).await?;
     if history.len() < 4 {
@@ -1449,7 +1469,7 @@ async fn compact(
     if older_messages.is_empty() {
         return Err(CoreError::Message("Nothing to summarize.".into()));
     }
-    older_messages.push(ChatMessage::text(ChatRole::User, COMPACTION_INSTRUCTION));
+    older_messages.push(ChatMessage::text(ChatRole::User, compaction_prompt(focus)));
     let request = ChatRequest {
         kind: resolved.kind,
         base_url: resolved.base_url.clone(),
@@ -1601,18 +1621,50 @@ pub async fn context_status(
     })
 }
 
-pub async fn compact_now(engine: Arc<ChatEngine>, conversation_id: &str) -> Result<()> {
-    if engine.in_flight(conversation_id) {
-        return Err(CoreError::Message(
-            "Stop the current turn before compacting.".into(),
-        ));
-    }
+/// Compact a conversation on request. `focus` optionally tells the summarizer
+/// what to keep in detail.
+///
+/// Unlike the automatic path this runs outside a turn, so it claims the
+/// conversation's turn slot for its whole duration: nothing can be sent,
+/// regenerated or compacted again meanwhile, and Stop cancels it. It reports
+/// `Compacting` and then `Idle` so the UI shows what is happening.
+pub async fn compact_now(
+    engine: Arc<ChatEngine>,
+    conversation_id: &str,
+    focus: Option<&str>,
+) -> Result<()> {
+    let (_slot, cancel) =
+        engine.claim_turn(conversation_id, "Stop the current turn before compacting.")?;
+    let _ = engine.events.send(CoreEvent::Status {
+        conversation_id: conversation_id.to_owned(),
+        status: TurnStatus::Compacting,
+        message: None,
+    });
+    let result = compact_claimed(&engine, conversation_id, focus, &cancel).await;
+    let (message, _) = match &result {
+        Err(CoreError::Cancelled) => (Some("Stopped.".to_owned()), ()),
+        _ => (None, ()),
+    };
+    let _ = engine.events.send(CoreEvent::Status {
+        conversation_id: conversation_id.to_owned(),
+        status: TurnStatus::Idle,
+        message,
+    });
+    result
+}
+
+async fn compact_claimed(
+    engine: &Arc<ChatEngine>,
+    conversation_id: &str,
+    focus: Option<&str>,
+    cancel: &CancellationToken,
+) -> Result<()> {
     let conversation = conversations::get(&engine.db.pool, conversation_id).await?;
     let (provider, model, api_key, context_window, max_tokens) =
         engine.resolve(&conversation).await?;
     let kind = ProviderKind::parse(&provider.kind)
         .ok_or_else(|| CoreError::Message("Unknown provider kind.".into()))?;
-    let system = resolve_system_prompt(&engine, &conversation).await?;
+    let system = resolve_system_prompt(engine, &conversation).await?;
     let resolved = Resolved {
         kind,
         base_url: provider.base_url.clone(),
@@ -1622,7 +1674,7 @@ pub async fn compact_now(engine: Arc<ChatEngine>, conversation_id: &str) -> Resu
         max_tokens,
         system,
     };
-    let (registry, _, tool_defs, _, tool_mode) = load_tools(&engine, &conversation).await;
+    let (registry, _, tool_defs, _, tool_mode) = load_tools(engine, &conversation).await;
     let lazy_note = if tool_mode == "lazy" {
         lazy_tool_note(&registry)
     } else {
@@ -1641,12 +1693,13 @@ pub async fn compact_now(engine: Arc<ChatEngine>, conversation_id: &str) -> Resu
         summary.as_deref(),
     );
     compact(
-        &engine,
+        engine,
         &conversation,
         &resolved,
-        &CancellationToken::new(),
+        cancel,
         system.as_deref(),
         &tool_defs,
+        focus,
     )
     .await
 }

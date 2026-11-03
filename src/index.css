@@ -7,6 +7,34 @@
     "SFMono-Regular", ui-monospace, "Cascadia Code", "Liberation Mono", monospace;
 }
 
+/*
+ * Reading comfort. `--chat-fs` and `--chat-width` are set from the settings
+ * (see lib/appearance.ts); these are the defaults. Every chat text size is a
+ * fraction of --chat-fs over 30, so 15px gives back the original sizes exactly
+ * (14.5, 13.5, 12.5, 11.5, 10.5) without rounding.
+ */
+:root {
+  --chat-fs: 15px;
+  --chat-width: 760px;
+  --fs-user: calc(var(--chat-fs) * 29 / 30);
+  --fs-status: calc(var(--chat-fs) * 27 / 30);
+  --fs-row: calc(var(--chat-fs) * 25 / 30);
+  --fs-mono: calc(var(--chat-fs) * 23 / 30);
+  --fs-meta: calc(var(--chat-fs) * 21 / 30);
+  /* Vertical rhythm. Comfortable is the original spacing. */
+  --row-py: 4px;
+  --message-py: 8px;
+  --turn-py: 4px;
+  --status-py: 8px;
+}
+
+[data-density="compact"] {
+  --row-py: 1px;
+  --message-py: 3px;
+  --turn-py: 1px;
+  --status-py: 4px;
+}
+
 :root {
   --bg: #f5f5f2;
   --panel: #fbfbf8;
@@ -181,7 +209,7 @@ button {
 }
 
 .md {
-  font-size: 15px;
+  font-size: var(--chat-fs);
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
@@ -364,7 +392,7 @@ button {
   gap: 6px;
   border-radius: 6px;
   padding: 3px 6px 3px 2px;
-  font-size: 11.5px;
+  font-size: var(--fs-mono);
   color: var(--muted);
   cursor: pointer;
   user-select: none;
@@ -396,7 +424,7 @@ button {
   background: var(--code);
   padding: 4px 0;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-mono);
   line-height: 1.55;
   white-space: pre;
 }

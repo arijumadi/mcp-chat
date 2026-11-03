@@ -951,7 +951,7 @@ async fn manual_compaction_and_context_status() {
     assert!(status.threshold > 0 && status.threshold < status.window);
     assert!(status.keep_tokens >= 1_000);
 
-    runner::compact_now(h.engine.clone(), &h.conversation_id)
+    runner::compact_now(h.engine.clone(), &h.conversation_id, None)
         .await
         .unwrap();
     let history = h.history().await;
@@ -961,6 +961,200 @@ async fn manual_compaction_and_context_status() {
             .flat_map(|message| message.parts.iter())
             .any(|part| part.kind == "summary")
     );
+}
+
+/// The text of the last message of the last request that asked for a summary.
+fn last_compaction_prompt(h: &Harness) -> String {
+    h.provider
+        .requests()
+        .iter()
+        .rev()
+        .filter_map(|request| request["messages"].as_array()?.last().cloned())
+        .filter_map(|message| message["content"].as_str().map(str::to_owned))
+        .find(|content| content.contains("Compaction task:"))
+        .expect("a compaction request was sent")
+}
+
+#[tokio::test]
+async fn manual_compaction_passes_the_focus_to_the_summarizer() {
+    let h = Harness::new("mock-text", None, 10).await;
+    runner::compact_now(
+        h.engine.clone(),
+        &h.conversation_id,
+        Some("  keep the database migration details  "),
+    )
+    .await
+    .unwrap();
+    let prompt = last_compaction_prompt(&h);
+    assert!(
+        prompt.contains("Compaction task:"),
+        "the base instruction stays"
+    );
+    assert!(prompt.contains("keep the database migration details"));
+    assert!(prompt.contains("Focus requested by the user"));
+
+    // Without a focus, or with a blank one, the prompt is exactly the default.
+    let plain = Harness::new("mock-text", None, 10).await;
+    runner::compact_now(plain.engine.clone(), &plain.conversation_id, Some("   "))
+        .await
+        .unwrap();
+    assert!(!last_compaction_prompt(&plain).contains("Focus requested"));
+}
+
+#[tokio::test]
+async fn an_overlong_focus_is_truncated() {
+    let h = Harness::new("mock-text", None, 10).await;
+    let focus = "x".repeat(10_000);
+    runner::compact_now(h.engine.clone(), &h.conversation_id, Some(&focus))
+        .await
+        .unwrap();
+    let prompt = last_compaction_prompt(&h);
+    assert!(
+        prompt.len() < 6_000,
+        "prompt grew to {} bytes",
+        prompt.len()
+    );
+}
+
+#[tokio::test]
+async fn manual_compaction_reports_compacting_then_idle() {
+    let h = Harness::new("mock-text", None, 10).await;
+    let mut events = h.engine.subscribe();
+    runner::compact_now(h.engine.clone(), &h.conversation_id, None)
+        .await
+        .unwrap();
+    let mut statuses = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let CoreEvent::Status {
+            status, message, ..
+        } = event
+        {
+            statuses.push((status, message));
+        }
+    }
+    assert_eq!(
+        statuses,
+        vec![(TurnStatus::Compacting, None), (TurnStatus::Idle, None)]
+    );
+    assert!(
+        !h.engine.in_flight(&h.conversation_id),
+        "the slot is released"
+    );
+}
+
+#[tokio::test]
+async fn compaction_holds_the_turn_slot_and_can_be_stopped() {
+    let h = Harness::new("mock-slow-compact", None, 10).await;
+    let engine = h.engine.clone();
+    let id = h.conversation_id.clone();
+    let mut events = engine.subscribe();
+    let running = tokio::spawn({
+        let engine = engine.clone();
+        let id = id.clone();
+        async move { runner::compact_now(engine, &id, None).await }
+    });
+
+    // Wait until it is really compacting.
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("compacting status")
+            .unwrap();
+        if matches!(
+            event,
+            CoreEvent::Status {
+                status: TurnStatus::Compacting,
+                ..
+            }
+        ) {
+            break;
+        }
+    }
+    assert!(engine.in_flight(&id));
+
+    // Nothing else may start on this conversation meanwhile.
+    let second = runner::compact_now(engine.clone(), &id, None).await;
+    assert!(
+        second
+            .unwrap_err()
+            .user_message()
+            .contains("Stop the current turn")
+    );
+    let send = engine.send_message(&id, "hello").await;
+    assert!(
+        send.is_err(),
+        "a message must not interleave with compaction"
+    );
+
+    // Stop cancels it, reports it, and frees the conversation.
+    assert!(engine.stop(&id));
+    let result = tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("compaction should stop promptly")
+        .unwrap();
+    assert!(result.is_err());
+    let mut stopped = false;
+    while let Ok(event) = events.try_recv() {
+        if let CoreEvent::Status {
+            status: TurnStatus::Idle,
+            message,
+            ..
+        } = event
+        {
+            stopped = message.as_deref() == Some("Stopped.");
+        }
+    }
+    assert!(stopped, "the UI is told the compaction was stopped");
+    assert!(!engine.in_flight(&id));
+    assert!(
+        !h.history()
+            .await
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .any(|part| part.kind == "summary"),
+        "a cancelled compaction writes no summary"
+    );
+    engine
+        .send_message(&id, "can talk again")
+        .await
+        .expect("the conversation is usable after a stopped compaction");
+}
+
+#[tokio::test]
+async fn a_failed_compaction_releases_the_slot_and_reports_idle() {
+    // Too little history to compact.
+    let h = Harness::new("mock-text", None, 1).await;
+    let mut events = h.engine.subscribe();
+    let error = runner::compact_now(h.engine.clone(), &h.conversation_id, None)
+        .await
+        .unwrap_err();
+    assert!(error.user_message().contains("Not enough history"));
+    assert!(!h.engine.in_flight(&h.conversation_id));
+    let mut last = None;
+    while let Ok(event) = events.try_recv() {
+        if let CoreEvent::Status { status, .. } = event {
+            last = Some(status);
+        }
+    }
+    assert_eq!(last, Some(TurnStatus::Idle), "the spinner must not stay on");
+    h.engine
+        .send_message(&h.conversation_id, "still works")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn compaction_is_refused_while_a_turn_is_running() {
+    let h = Harness::new("mock-sleep", Some("auto"), 10).await;
+    h.engine
+        .send_message(&h.conversation_id, "sleep")
+        .await
+        .unwrap();
+    let error = runner::compact_now(h.engine.clone(), &h.conversation_id, None)
+        .await
+        .unwrap_err();
+    assert!(error.user_message().contains("Stop the current turn"));
+    h.engine.stop(&h.conversation_id);
 }
 
 #[tokio::test]

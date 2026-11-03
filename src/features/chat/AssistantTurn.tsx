@@ -125,18 +125,18 @@ export function AssistantTurn({
     Boolean(streamingMessage) && (!activeKind || activeKind === "reasoning");
 
   return (
-    <div className="animate-in py-1">
+    <div className="animate-in py-(--turn-py)">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
-        className="focus-ring mb-0.5 flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[12px] transition-colors hover:bg-[var(--panel-2)]"
-        style={{ color: "var(--muted)" }}
+        className="focus-ring mb-0.5 flex w-full items-center gap-2 rounded-md px-2 py-(--row-py) text-left transition-colors hover:bg-[var(--panel-2)]"
+        style={{ color: "var(--muted)", fontSize: "var(--chat-fs)" }}
       >
         <span className="font-medium">{summary}</span>
         {thinking ? (
-          <span className="flex items-center gap-1 text-[10.5px]">
+          <span className="flex items-center gap-1 text-[length:var(--fs-meta)]">
             <Loader2
               size={12}
               className="animate-spin"
@@ -145,7 +145,7 @@ export function AssistantTurn({
             Thinking…
           </span>
         ) : runningTool ? (
-          <span className="flex min-w-0 items-center gap-1 text-[10.5px]">
+          <span className="flex min-w-0 items-center gap-1 text-[length:var(--fs-meta)]">
             <Loader2
               size={12}
               className="animate-spin"
@@ -166,7 +166,7 @@ export function AssistantTurn({
           <AlertCircle size={12} style={{ color: "var(--danger)" }} />
         ) : null}
         <span
-          className="ml-auto flex items-center gap-1 text-[10.5px]"
+          className="ml-auto flex items-center gap-1 text-[length:var(--fs-meta)]"
           style={{ color: "var(--faint)" }}
         >
           {open ? "Hide" : "Show"}

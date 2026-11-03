@@ -87,4 +87,35 @@ describe("ApprovalModal", () => {
     render(<ApprovalModal />);
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
   });
+
+  it("tells the user, and assistive technology, which keys answer the call", () => {
+    useApp.setState({
+      activeId: "c1",
+      respondApproval: vi.fn().mockResolvedValue(undefined),
+      approvals: [
+        {
+          type: "approval",
+          conversationId: "c1",
+          callId: "call9",
+          server: "mcp-chat",
+          tool: "bash",
+          args: { command: "npm test" },
+          allowAlways: true,
+          diff: null,
+        },
+      ],
+    });
+    render(<ApprovalModal />);
+    const once = screen.getByRole("button", { name: "Allow once" });
+    expect(once).toHaveAttribute("title", expect.stringMatching(/Ctrl\+Enter|⌘↩/));
+    expect(once).toHaveAttribute("aria-keyshortcuts", expect.stringMatching(/^(Control|Meta)\+Enter$/));
+    expect(screen.getByRole("button", { name: "Always allow" })).toHaveAttribute(
+      "aria-keyshortcuts",
+      expect.stringMatching(/Shift\+Enter$/),
+    );
+    expect(screen.getByRole("button", { name: "Reject" })).toHaveAttribute(
+      "aria-keyshortcuts",
+      expect.stringMatching(/Backspace$/),
+    );
+  });
 });

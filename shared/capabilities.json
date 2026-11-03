@@ -1,0 +1,159 @@
+{
+  "version": 1,
+  "roles": {
+    "read_file": "read",
+    "search_text": "grep",
+    "find_files": "glob",
+    "create_file": "write",
+    "modify_file": "apply_patch",
+    "replace_once": "edit",
+    "shell": "bash"
+  },
+  "risks": {
+    "read_only": "allow",
+    "interactive": "allow",
+    "file_write": "ask",
+    "shell": "ask",
+    "code_exec": "ask"
+  },
+  "routes": [
+    { "task": "Baca file", "use": ["read_file"] },
+    { "task": "Cari pola/file", "use": ["search_text", "find_files"] },
+    { "task": "File baru", "use": ["create_file"] },
+    { "task": "Ubah file existing", "use": ["modify_file"] },
+    { "task": "Satu exact replacement", "use": ["replace_once"] },
+    { "task": "Build/test/git/package manager", "use": ["shell"] },
+    { "task": "Rename/move/delete massal", "use": ["shell"] },
+    { "task": "Proses/port/disk/env", "use": ["shell"] }
+  ],
+  "selfCheck": "Sebelum {shell}: apakah command ini mengubah isi file? Kalau ya, tool-nya salah.",
+  "tools": [
+    {
+      "name": "read_tool_output",
+      "label": "Read output",
+      "risk": "read_only",
+      "description": [
+        "Read a truncated tool result by call_id. Use offset for character paging, or line + maxLines for line-based paging."
+      ]
+    },
+    {
+      "name": "bash",
+      "label": "Bash",
+      "risk": "shell",
+      "output": "shell",
+      "description": [
+        "Run a shell command for build, test, lint, git, package managers, process/system/disk/network inspection, file management (rename/move/delete), or running scripts.",
+        "Do not use {shell} to read or modify file contents; use {read_file}, {create_file}, or {modify_file} instead.",
+        "Before calling {shell}, ask: does this command change the contents of a file? If yes, use a file tool."
+      ],
+      "dangerous": { "kind": "shell_command", "arg": "command" },
+      "guard": {
+        "kind": "shell_content_write",
+        "override": "allowFileWrites",
+        "overrideDescription": "Allow redirects, tee, sed -i or Set-Content to write file contents. Default false (blocked).",
+        "blockedMessage": "BLOCKED: {shell} tidak boleh mengubah isi file. Pakai {create_file} (file baru) atau {modify_file} (file existing). Untuk operasi yang memang disengaja, set {override}=true.",
+        "overrideNeedsReview": true
+      }
+    },
+    {
+      "name": "python",
+      "label": "Python",
+      "risk": "code_exec",
+      "output": "shell",
+      "description": [
+        "Run Python code through stdin, with no shell quoting. For data/spreadsheet processing and verification scripts. Starts in the workspace with a timeout; approved like a shell command."
+      ]
+    },
+    {
+      "name": "edit",
+      "label": "Edit",
+      "risk": "file_write",
+      "diff": true,
+      "description": [
+        "Replace one exact string in one existing file.",
+        "Use {replace_once} for a single exact replacement; use {modify_file} for multiple hunks, multiple files, add/delete/move, or context-anchored changes.",
+        "Matching tolerates CRLF/LF, typographic punctuation, and trailing whitespace. Outside-workspace targets need approval."
+      ],
+      "access": { "kind": "write", "arg": "filePath", "format": "path" }
+    },
+    {
+      "name": "apply_patch",
+      "label": "Patch",
+      "risk": "file_write",
+      "diff": true,
+      "description": [
+        "Apply a multi-file patch with add/update/delete/move.",
+        "Use this for existing-file changes, multiple hunks, multiple files, or context anchors.",
+        "Format: `*** Begin Patch`, Add/Update/Delete File markers, `*** End Patch`. Update hunks start with `@@` (optional context anchor); `*** End of File` anchors EOF. Context/removed/added lines use space/-/+; Add lines use +. Optional `*** Move to: path`. Outside paths need approval."
+      ],
+      "access": { "kind": "write", "arg": "patchText", "format": "patch" },
+      "dangerous": { "kind": "patch_delete", "arg": "patchText" }
+    },
+    {
+      "name": "write",
+      "label": "Write",
+      "risk": "file_write",
+      "diff": true,
+      "description": [
+        "Create a new file.",
+        "Existing files are rejected unless {override} is true.",
+        "Use {modify_file} to modify an existing file."
+      ],
+      "access": { "kind": "write", "arg": "filePath", "format": "path" },
+      "guard": {
+        "kind": "no_overwrite",
+        "override": "overwrite",
+        "overrideDescription": "Replace an existing file entirely. Default false.",
+        "blockedMessage": "File already exists. Use {modify_file} to modify it, or pass {override}: true to replace the whole file.",
+        "overrideNeedsReview": false
+      }
+    },
+    {
+      "name": "read",
+      "label": "Read",
+      "risk": "read_only",
+      "output": "read",
+      "description": [
+        "Read a text file with line numbers, or an image file as a visual attachment.",
+        "Explicit outside paths need approval unless auto mode is on. Use offset and limit for large text files."
+      ],
+      "access": { "kind": "read", "arg": "filePath", "format": "path" }
+    },
+    {
+      "name": "grep",
+      "label": "Grep",
+      "risk": "read_only",
+      "description": [
+        "Search text with a regular expression; returns path:line:text.",
+        "Explicit outside paths need approval unless auto mode is on."
+      ],
+      "access": { "kind": "read", "arg": "path", "format": "path" }
+    },
+    {
+      "name": "glob",
+      "label": "Glob",
+      "risk": "read_only",
+      "description": [
+        "Find files by glob pattern; build and dependency directories are skipped.",
+        "Explicit outside paths need approval unless auto mode is on."
+      ],
+      "access": { "kind": "read", "arg": "path", "format": "path" }
+    },
+    {
+      "name": "skill",
+      "label": "Skill",
+      "risk": "read_only",
+      "description": [
+        "Load a skill by name. Empty name lists skills. Without file, returns SKILL.md; with file, reads a file or lists a subfolder inside that skill only."
+      ]
+    },
+    {
+      "name": "question",
+      "label": "Question",
+      "risk": "interactive",
+      "description": [
+        "Ask the user one or more questions and wait for answers. Use this when a decision or missing preference cannot be inferred. Each question can offer options; the user can also type a custom answer."
+      ]
+    }
+  ]
+}

@@ -351,6 +351,7 @@ export type CoreEvent =
       progress?: number | null;
       message?: string | null;
       diff?: string | null;
+      exitCode?: number | null;
     }
   | ApprovalEvent
   | UsageEvent

@@ -18,6 +18,7 @@ import { Modal } from "@/components/Modal";
 import { cn } from "@/lib/cn";
 import { ActivityRow } from "./ActivityRow";
 import { DiffView } from "./DiffView";
+import { capabilityOf } from "@/lib/capabilities";
 import { summarizeTool, type Tone } from "./activity";
 
 const toneColor: Record<Tone, string> = {
@@ -28,9 +29,6 @@ const toneColor: Record<Tone, string> = {
 
 const IN_FLIGHT = ["streaming", "queued", "running"];
 
-// Built-in tools whose useful detail is the file change itself.
-const BUILTIN_SERVER = "mcp-chat";
-const FILE_MUTATION_TOOLS = ["write", "edit", "apply_patch"];
 
 /**
  * One tool call as a compact activity row. Collapsed it is a single line with
@@ -67,8 +65,8 @@ export function ToolCard({ part }: { part: Part }) {
   // A finished write, edit or patch opens straight onto its diff: no Arguments,
   // no Result, no second toggle. A failed call, or one without a diff, keeps the
   // regular body so its error and arguments stay visible.
-  const isFileMutation =
-    payload.server === BUILTIN_SERVER && FILE_MUTATION_TOOLS.includes(payload.name);
+  // Which tools carry a diff comes from the shared capability table.
+  const isFileMutation = capabilityOf(payload.server, payload.name)?.producesDiff === true;
   const mutationDiff = isFileMutation && state === "completed" ? diff : null;
 
   const showAll = async (offset = 0) => {
@@ -145,14 +143,14 @@ export function ToolCard({ part }: { part: Part }) {
             {summary.label}
           </span>
           <span
-            className="min-w-0 flex-1 truncate font-mono text-[11.5px]"
+            className="min-w-0 flex-1 truncate font-mono text-[length:var(--fs-mono)]"
             style={{ color: "var(--fg)" }}
           >
             {summary.target}
           </span>
           {summary.result ? (
             <span
-              className="max-w-[16rem] shrink-0 truncate text-[11.5px]"
+              className="max-w-[16rem] shrink-0 truncate text-[length:var(--fs-mono)]"
               style={{ color: toneColor[summary.tone] }}
             >
               {summary.result}
@@ -180,7 +178,7 @@ export function ToolCard({ part }: { part: Part }) {
         {open ? (
           <div
             id={bodyId}
-            className="mt-0.5 mb-2 ml-[15px] space-y-2.5 border-l pl-4 text-[12.5px]"
+            className="mt-0.5 mb-2 ml-[15px] space-y-2.5 border-l pl-4 text-[length:var(--fs-row)]"
             style={{ borderColor: "var(--border)" }}
           >
             {mutationDiff ? (
@@ -189,7 +187,7 @@ export function ToolCard({ part }: { part: Part }) {
               <>
                 <Section label="Arguments">
                   <pre
-                    className="max-h-56 overflow-auto rounded-md p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
+                    className="max-h-56 overflow-auto rounded-md p-2.5 font-mono text-[length:var(--fs-mono)] leading-relaxed whitespace-pre-wrap"
                     style={{ background: "var(--code)" }}
                   >
                     {formatJson(displayArgs)}
@@ -215,7 +213,7 @@ export function ToolCard({ part }: { part: Part }) {
                     }
                   >
                     <pre
-                      className="max-h-72 overflow-auto rounded-md p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
+                      className="max-h-72 overflow-auto rounded-md p-2.5 font-mono text-[length:var(--fs-mono)] leading-relaxed whitespace-pre-wrap"
                       style={{ background: "var(--code)" }}
                     >
                       {payload.resultPreview}
@@ -233,7 +231,7 @@ export function ToolCard({ part }: { part: Part }) {
                 {payload.error && state === "error" ? (
                   <div
                     role="alert"
-                    className="rounded-md px-2.5 py-2 text-[11.5px] whitespace-pre-wrap"
+                    className="rounded-md px-2.5 py-2 text-[length:var(--fs-mono)] whitespace-pre-wrap"
                     style={{ color: "var(--danger)", background: "var(--danger-soft)" }}
                   >
                     {payload.error}
@@ -250,7 +248,7 @@ export function ToolCard({ part }: { part: Part }) {
                         style={{ borderColor: "var(--border)" }}
                       />
                     ) : (
-                      <div className="text-[11.5px]" style={{ color: "var(--muted)" }}>
+                      <div className="text-[length:var(--fs-mono)]" style={{ color: "var(--muted)" }}>
                         Image: {image.name} ({image.mime})
                       </div>
                     )}
@@ -272,14 +270,14 @@ export function ToolCard({ part }: { part: Part }) {
         width="xl"
       >
         <pre
-          className="max-h-[60vh] overflow-auto rounded-lg border p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap"
+          className="max-h-[60vh] overflow-auto rounded-lg border p-3 font-mono text-[length:var(--fs-mono)] leading-relaxed whitespace-pre-wrap"
           style={{ borderColor: "var(--border)", background: "var(--code)" }}
         >
           {full}
         </pre>
         <div className="mt-3 flex items-center justify-between">
           <span
-            className="text-[10.5px]"
+            className="text-[length:var(--fs-meta)]"
             style={{ color: "var(--faint)" }}
             title="Counts the formatted tool output, including line numbers; it can differ from the source file size."
           >

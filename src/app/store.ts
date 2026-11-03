@@ -1,3 +1,10 @@
+import { maybeNotify, notificationsEnabled, primeNotifications } from "@/lib/notify";
+import {
+  appearanceSettings,
+  applyAppearance,
+  readAppearance,
+  type Appearance,
+} from "@/lib/appearance";
 import { create } from "zustand";
 import { call, subscribe } from "@/lib/ipc";
 import type {
@@ -19,6 +26,15 @@ import type {
 } from "@/lib/types";
 
 export type View = "chat" | "settings" | "servers";
+
+/** Statuses in which a turn (or a compaction) owns the conversation. */
+export const BUSY_STATUSES: readonly TurnStatus[] = [
+  "thinking",
+  "streaming",
+  "compacting",
+  "waiting_approval",
+  "running_tool",
+];
 export type Theme = "system" | "light" | "dark";
 
 export interface ToastAction {
@@ -58,6 +74,8 @@ export interface AppStore {
   step: { current: number; max: number } | null;
   limitReached: boolean;
   autoApprove: boolean;
+  /** Open when set. `focus` is the optional text for the summarizer. */
+  compactDialog: { focus: string } | null;
   toasts: Toast[];
   searchHits: SearchHit[];
   searching: boolean;
@@ -77,6 +95,10 @@ export interface AppStore {
   removeAttachment: (id: string) => Promise<void>;
   setDraft: (text: string) => void;
   stop: () => Promise<void>;
+  /** Ask to compact the active conversation. Opens a confirmation first. */
+  openCompact: (focus?: string) => void;
+  closeCompact: () => void;
+  compactConversation: (focus?: string) => Promise<void>;
   regenerate: () => Promise<void>;
   continueTurn: () => Promise<void>;
   setAutoApprove: (enabled: boolean) => Promise<void>;
@@ -103,11 +125,18 @@ export interface AppStore {
   ) => void;
   dismissToast: (id: string) => void;
   setTheme: (theme: Theme) => Promise<void>;
+  /** Change reading comfort settings. Applies at once and is saved. */
+  setAppearance: (change: Partial<Appearance>) => Promise<void>;
   loadOlderMessages: () => Promise<void>;
   reloadActive: () => Promise<void>;
 }
 
 const MESSAGE_PAGE_SIZE = 80;
+
+// A send crosses IPC before the backend turn is registered. If the user hits
+// Stop in that window, remember it and cancel as soon as the send returns.
+let sendingConversationId: string | null = null;
+let stopRequestedFor: string | null = null;
 
 let unsubscribe: (() => void) | null = null;
 let initializing = false;
@@ -144,6 +173,7 @@ export const useApp = create<AppStore>()((set, get) => ({
   step: null,
   limitReached: false,
   autoApprove: false,
+  compactDialog: null,
   toasts: [],
   searchHits: [],
   searching: false,
@@ -163,6 +193,7 @@ export const useApp = create<AppStore>()((set, get) => ({
         call<Conversation[]>("list_conversations", { limit: 200, offset: 0 }),
       ]);
       applyTheme((settings.theme as Theme) ?? "system");
+      applyAppearance(readAppearance(settings));
       set({
         appInfo,
         providers,
@@ -330,6 +361,9 @@ export const useApp = create<AppStore>()((set, get) => ({
       set({ view: "settings" });
       return;
     }
+    // The user is in front of the app right now, so a system permission prompt
+    // would be seen. Asking later, from a background event, would not be.
+    void primeNotifications(notificationsEnabled(get().settings));
     const tempId = `temp-${Date.now()}`;
     const parts: Part[] = [];
     if (text.trim()) {
@@ -359,6 +393,8 @@ export const useApp = create<AppStore>()((set, get) => ({
         }),
       });
     });
+    sendingConversationId = conversationId;
+    stopRequestedFor = null;
     const optimistic: MessageWithParts = {
       id: tempId,
       conversationId,
@@ -382,6 +418,7 @@ export const useApp = create<AppStore>()((set, get) => ({
       step: null,
       limitReached: false,
     }));
+    let sent = false;
     try {
       const message = await call<MessageWithParts>("send_message", {
         conversationId,
@@ -400,6 +437,7 @@ export const useApp = create<AppStore>()((set, get) => ({
             : item,
         ),
       }));
+      sent = true;
       void get().refreshConversations();
     } catch (error) {
       set((state) => ({
@@ -410,6 +448,18 @@ export const useApp = create<AppStore>()((set, get) => ({
       get().toast(String(error), "error", [
         { label: "Retry", onClick: () => void get().sendMessage(text) },
       ]);
+    } finally {
+      if (sendingConversationId === conversationId) sendingConversationId = null;
+      if (stopRequestedFor === conversationId) {
+        stopRequestedFor = null;
+        if (sent) {
+          // The send is now registered on the backend. Queueing the stop here
+          // means a fast Escape cannot be lost in the IPC gap.
+          void call("stop_generation", { conversationId }).catch((error) =>
+            get().toast(String(error), "error"),
+          );
+        }
+      }
     }
   },
 
@@ -552,8 +602,46 @@ export const useApp = create<AppStore>()((set, get) => ({
   async stop() {
     const conversationId = get().activeId;
     if (!conversationId) return;
+    if (sendingConversationId === conversationId) {
+      stopRequestedFor = conversationId;
+      return;
+    }
     try {
       await call("stop_generation", { conversationId });
+    } catch (error) {
+      get().toast(String(error), "error");
+    }
+  },
+
+  openCompact(focus = "") {
+    const state = get();
+    if (!state.activeId || state.view !== "chat") {
+      state.toast("Open a conversation to compact it.", "info");
+      return;
+    }
+    if (BUSY_STATUSES.includes(state.status)) {
+      state.toast("Stop the current turn before compacting.", "info");
+      return;
+    }
+    set({ compactDialog: { focus } });
+  },
+
+  closeCompact() {
+    set({ compactDialog: null });
+  },
+
+  async compactConversation(focus = "") {
+    const conversationId = get().activeId;
+    set({ compactDialog: null });
+    if (!conversationId) return;
+    try {
+      // Progress arrives as status events (Compacting, then Idle) and the
+      // summary as a system row, exactly like an automatic compaction.
+      await call("compact_conversation", {
+        conversationId,
+        focus: focus.trim() === "" ? null : focus.trim(),
+      });
+      get().toast("Conversation compacted.", "info");
     } catch (error) {
       get().toast(String(error), "error");
     }
@@ -811,6 +899,22 @@ export const useApp = create<AppStore>()((set, get) => ({
     set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) }));
   },
 
+  async setAppearance(change) {
+    const next = { ...readAppearance(get().settings), ...change };
+    // Normalize through the reader so an out-of-range value cannot be stored.
+    const stored = appearanceSettings(next);
+    const appearance = readAppearance(stored);
+    applyAppearance(appearance);
+    set((state) => ({ settings: { ...state.settings, ...appearanceSettings(appearance) } }));
+    try {
+      for (const [key, value] of Object.entries(appearanceSettings(appearance))) {
+        await call("set_setting", { key, value });
+      }
+    } catch (error) {
+      get().toast(String(error), "error");
+    }
+  },
+
   async setTheme(theme) {
     applyTheme(theme);
     set((state) => ({ settings: { ...state.settings, theme } }));
@@ -999,6 +1103,12 @@ export function applyCoreEvent(
             }
             if (event.state === "error" && event.message) next.error = event.message;
             if (event.diff) next.diff = event.diff;
+            if (typeof event.exitCode === "number") next.exitCode = event.exitCode;
+            // A tool that is running or finished has been answered. Without
+            // this the row kept saying "needs approval" until the next reload.
+            if (payload.approval === "pending" && event.state !== "queued" && event.state !== "streaming") {
+              next.approval = event.state === "error" || event.state === "aborted" ? "rejected" : "allowed";
+            }
             if (event.state === "completed" || event.state === "error" || event.state === "aborted") {
               next.endedAt = Date.now();
             }
@@ -1135,9 +1245,27 @@ function flushPendingDeltas(set: StoreSet, get: () => AppStore) {
   for (const event of merged) applyCoreEvent(event, set, get);
 }
 
+/**
+ * Tell the user, with a desktop notification, about an event they cannot see
+ * because the window is in the background or another chat is open.
+ */
+function announce(event: CoreEvent, get: () => AppStore): void {
+  if (event.type !== "status" && event.type !== "approval" && event.type !== "input_request") {
+    return;
+  }
+  const state = get();
+  void maybeNotify(event, {
+    enabled: notificationsEnabled(state.settings),
+    activeId: state.activeId,
+    titleOf: (id) => state.conversations.find((item) => item.id === id)?.title,
+  });
+}
+
 function handleCoreEvent(event: CoreEvent, set: StoreSet, get: () => AppStore) {
   if (event.type !== "delta") {
     flushPendingDeltas(set, get);
+    // Look at the state as it was before this event changed it.
+    announce(event, get);
     applyCoreEvent(event, set, get);
     return;
   }
