@@ -70,8 +70,10 @@ test("a tool waiting for approval is announced with its name only", async ({ pag
   await openDemo(page);
   const composer = page.getByRole("textbox", { name: "Message" });
   await composer.fill("this needs approval");
-  await composer.press("Enter");
+  // Leave before the short scripted approval delay; the event can otherwise
+  // land before the page call that flips visibility.
   await goAway(page);
+  await composer.press("Enter");
   await expect(page.getByRole("dialog", { name: /Tool permission/ })).toBeVisible();
   await expect.poll(async () => (await shown(page)).length).toBe(1);
   const [notice] = await shown(page);

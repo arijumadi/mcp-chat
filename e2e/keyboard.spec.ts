@@ -130,7 +130,10 @@ test.describe("stopping a turn", () => {
     await composer.fill("stop me");
     await composer.press("Enter");
     await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
-    await composer.press("Escape");
+    // Keep the shortcut scoped to the message box, even if a render moved focus.
+    await composer.focus();
+    await expect(composer).toBeFocused();
+    await page.keyboard.press("Escape");
     await expect(page.getByRole("button", { name: "Send message" })).toBeVisible({ timeout: 10_000 });
   });
 

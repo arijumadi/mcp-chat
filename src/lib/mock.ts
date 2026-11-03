@@ -744,6 +744,8 @@ export function installMock(): void {
    */
   async function simulateApprovalTurn(conversationId: string) {
     await delay(120);
+    // A stop can arrive while the scripted turn is waiting to start.
+    if (!generating.has(conversationId)) return;
     const assistantId = uid();
     const toolPartId = uid();
     const callId = uid();
@@ -833,6 +835,8 @@ export function installMock(): void {
 
   async function simulateTurn(conversationId: string, text: string) {
     await delay(160);
+    // A stop can arrive while the scripted turn is waiting to start.
+    if (!generating.has(conversationId)) return;
     const assistantId = uid();
     const assistant: MessageWithParts = {
       id: assistantId,
