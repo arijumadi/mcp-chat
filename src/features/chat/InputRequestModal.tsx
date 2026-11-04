@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MessageSquareQuote } from "lucide-react";
 import { useApp } from "@/app/store";
 import { Button } from "@/components/Button";
@@ -240,6 +240,11 @@ export function InputRequestModal() {
 }
 
 
+/** A question without `options` is free-form: the user just types an answer. */
+function optionsOf(question: QuestionPrompt) {
+  return question.options ?? [];
+}
+
 function QuestionRequest({
   request,
   questions,
@@ -252,11 +257,21 @@ function QuestionRequest({
     Record<number, { selected: string[]; custom: string }>
   >({});
   const [error, setError] = useState<string | null>(null);
+  const firstAnswer = useRef<HTMLInputElement>(null);
+  const opensOnFreeForm = questions[0] ? optionsOf(questions[0]).length === 0 : false;
 
   useEffect(() => {
     setValues({});
     setError(null);
   }, [request.callId]);
+
+  useEffect(() => {
+    if (!opensOnFreeForm) return;
+    // The dialog moves focus to itself on the next frame. Asking one frame
+    // later, after it has done so, leaves the cursor in the answer field.
+    const frame = requestAnimationFrame(() => firstAnswer.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [request.callId, opensOnFreeForm]);
 
   const update = (index: number, patch: Partial<{ selected: string[]; custom: string }>) => {
     setValues((current) => {
@@ -314,6 +329,8 @@ function QuestionRequest({
       <div className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
         {questions.map((question, index) => {
           const value = values[index] ?? { selected: [], custom: "" };
+          const options = optionsOf(question);
+          const freeForm = options.length === 0;
           return (
             <div
               key={`${question.header}-${index}`}
@@ -327,51 +344,64 @@ function QuestionRequest({
                 {question.header}
               </div>
               <div className="mt-1 text-[13.5px] font-medium">{question.question}</div>
-              <div className="mt-2.5 grid gap-1.5">
-                {(question.options ?? []).map((option) => {
-                  const checked = value.selected.includes(option.label);
-                  return (
-                    <label
-                      key={option.label}
-                      className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-[12.5px] transition hover:bg-[var(--panel-2)]"
-                    >
-                      <input
-                        type={question.multiple ? "checkbox" : "radio"}
-                        name={`question-${index}`}
-                        checked={checked}
-                        onChange={() => {
-                          update(index, {
-                            selected: question.multiple
-                              ? checked
-                                ? value.selected.filter((item) => item !== option.label)
-                                : [...value.selected, option.label]
-                              : [option.label],
-                          });
-                        }}
-                        className="mt-0.5"
-                      />
-                      <span className="min-w-0">
-                        <span className="block">{option.label}</span>
-                        {option.description ? (
-                          <span
-                            className="mt-0.5 block text-[10.5px] leading-snug"
-                            style={{ color: "var(--faint)" }}
-                          >
-                            {option.description}
-                          </span>
-                        ) : null}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
+              {freeForm ? null : (
+                <div className="mt-2.5 grid gap-1.5">
+                  {options.map((option) => {
+                    const checked = value.selected.includes(option.label);
+                    return (
+                      <label
+                        key={option.label}
+                        className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-[12.5px] transition hover:bg-[var(--panel-2)]"
+                      >
+                        <input
+                          type={question.multiple ? "checkbox" : "radio"}
+                          name={`question-${index}`}
+                          checked={checked}
+                          onChange={() => {
+                            update(index, {
+                              selected: question.multiple
+                                ? checked
+                                  ? value.selected.filter((item) => item !== option.label)
+                                  : [...value.selected, option.label]
+                                : [option.label],
+                            });
+                          }}
+                          className="mt-0.5"
+                        />
+                        <span className="min-w-0">
+                          <span className="block">{option.label}</span>
+                          {option.description ? (
+                            <span
+                              className="mt-0.5 block text-[10.5px] leading-snug"
+                              style={{ color: "var(--faint)" }}
+                            >
+                              {option.description}
+                            </span>
+                          ) : null}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
               <input
+                ref={index === 0 ? firstAnswer : undefined}
                 value={value.custom}
                 onChange={(event) => update(index, { custom: event.target.value })}
-                placeholder="Or type a custom answer…"
-                className={`${inputClass} mt-2`}
+                onKeyDown={(event) => {
+                  // Enter sends the answers; it must not fire while an IME is
+                  // still composing a character.
+                  if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    submit();
+                  }
+                }}
+                placeholder={freeForm ? "Type your answer…" : "Or type a custom answer…"}
+                className={`${inputClass} ${freeForm ? "mt-2.5" : "mt-2"}`}
                 style={{ borderColor: "var(--border)" }}
-                aria-label={`Custom answer for ${question.header}`}
+                aria-label={
+                  freeForm ? `Answer for ${question.header}` : `Custom answer for ${question.header}`
+                }
               />
             </div>
           );
