@@ -78,6 +78,7 @@ async fn models(State(_state): State<ProviderState>) -> Json<Value> {
             {"id": "mock-lazy"},
             {"id": "mock-batch"},
             {"id": "mock-question"},
+            {"id": "mock-question-free"},
             {"id": "mock-loop"},
             {"id": "mock-big-read"}
         ]
@@ -309,6 +310,22 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
                     {"label": "Blue", "description": "Cool and calm"},
                     {"label": "Green", "description": "Natural"}
                 ]
+            }]});
+            sse(tool_call_frames(&[(
+                0,
+                "call_question",
+                "question",
+                &questions.to_string(),
+            )]))
+        }
+        "question-free" => {
+            if tools_done {
+                return text_response("Free-form answered.");
+            }
+            // No `options`: the user answers in their own words.
+            let questions = json!({"questions": [{
+                "header": "Database",
+                "question": "Which database should I target?"
             }]});
             sse(tool_call_frames(&[(
                 0,

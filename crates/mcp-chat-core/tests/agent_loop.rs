@@ -11,7 +11,7 @@ use mcp_chat_core::models::PartPayload;
 use mcp_chat_core::secrets::{MemoryStore, SecretStore};
 use mcp_mock::mcp::{self, McpMode};
 use mcp_mock::provider;
-use serde_json::json;
+use serde_json::{Value, json};
 
 struct Harness {
     engine: Arc<ChatEngine>,
@@ -1292,15 +1292,16 @@ async fn revert_message_keeps_earlier_turns() {
     assert_eq!(remaining[1].message.role, "assistant");
 }
 
-#[tokio::test]
-async fn question_builtin_round_trip() {
-    let h = Harness::new("mock-question", None, 0).await;
+/// Run a turn whose model asks one question, answer it with `answers`, and
+/// return the request the UI received plus the harness for further checks.
+async fn ask_one_question(model: &str, answers: Value) -> (Harness, Value) {
+    let h = Harness::new(model, None, 0).await;
     let mut receiver = h.engine.subscribe();
     h.engine
         .send_message(&h.conversation_id, "ask me")
         .await
         .unwrap();
-    let call_id = loop {
+    let (call_id, asked) = loop {
         let event = tokio::time::timeout(Duration::from_secs(31), receiver.recv())
             .await
             .expect("question timed out")
@@ -1309,22 +1310,13 @@ async fn question_builtin_round_trip() {
             call_id, request, ..
         } = event
         {
-            assert!(
-                request["questions"]
-                    .as_array()
-                    .is_some_and(|items| !items.is_empty())
-            );
-            break call_id;
+            break (call_id, request);
         }
     };
     assert!(h.engine.respond_input(
         &call_id,
         InputAnswer {
-            responses: json!({"answers": [{
-                "header": "Color",
-                "question": "Which color should I use?",
-                "answer": "Blue"
-            }]}),
+            responses: json!({ "answers": answers }),
             cancelled: false,
         }
     ));
@@ -1341,9 +1333,11 @@ async fn question_builtin_round_trip() {
             break;
         }
     }
-    assert!(h.assistant_text().await.contains("Question answered."));
-    let result = h
-        .history()
+    (h, asked)
+}
+
+async fn tool_result_containing(h: &Harness, needle: &str) -> Value {
+    h.history()
         .await
         .iter()
         .filter(|message| message.message.role == "tool")
@@ -1352,10 +1346,53 @@ async fn question_builtin_round_trip() {
         .find(|payload| {
             payload["content"]
                 .as_str()
-                .is_some_and(|text| text.contains("Blue"))
+                .is_some_and(|text| text.contains(needle))
         })
-        .expect("question result");
+        .expect("question result")
+}
+
+#[tokio::test]
+async fn question_builtin_round_trip() {
+    let (h, asked) = ask_one_question(
+        "mock-question",
+        json!([{
+            "header": "Color",
+            "question": "Which color should I use?",
+            "answer": "Blue"
+        }]),
+    )
+    .await;
+    assert!(
+        asked["questions"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+    );
+    assert!(asked["questions"][0]["options"].is_array());
+    assert!(h.assistant_text().await.contains("Question answered."));
+    let result = tool_result_containing(&h, "Blue").await;
     assert_eq!(result["ok"], true);
+}
+
+#[tokio::test]
+async fn question_without_options_round_trip() {
+    let (h, asked) = ask_one_question(
+        "mock-question-free",
+        json!([{
+            "header": "Database",
+            "question": "Which database should I target?",
+            "answer": "Postgres 16"
+        }]),
+    )
+    .await;
+    // The model sent no options and the UI is told exactly that.
+    assert!(asked["questions"][0].get("options").is_none());
+    assert!(h.assistant_text().await.contains("Free-form answered."));
+    let result = tool_result_containing(&h, "Postgres 16").await;
+    assert_eq!(result["ok"], true);
+    assert_eq!(
+        result["content"],
+        "The user answered:\n- Database: Postgres 16\n  (Which database should I target?)\n"
+    );
 }
 
 #[tokio::test]
