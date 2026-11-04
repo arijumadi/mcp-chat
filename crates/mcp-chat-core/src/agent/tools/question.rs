@@ -13,12 +13,15 @@ impl ToolExecutor {
             .get("questions")
             .cloned()
             .ok_or_else(|| CoreError::invalid("questions is required"))?;
+        // Register before announcing the request. The UI can answer as soon as
+        // it sees the event; registering after the send leaves a window where
+        // that answer would be dropped.
+        let receiver = self.inputs.register(&req.call_id);
         let _ = self.events.send(CoreEvent::InputRequest {
             conversation_id: req.conversation_id.clone(),
             call_id: req.call_id.clone(),
             request: json!({"questions": questions}),
         });
-        let receiver = self.inputs.register(&req.call_id);
         let answer = tokio::select! {
             _ = req.cancel.cancelled() => {
                 self.inputs.cancel(&req.call_id);
