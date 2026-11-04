@@ -16,8 +16,8 @@ use super::workspace::{
     outside_read_target, path_is_outside, resolve_in_workspace, resolve_write_path, workspace_root,
     workspace_root_for_conversation,
 };
-use super::{Rendered, ToolExecRequest, ToolExecutor, validate_args};
-use crate::agent::approvals::{ApprovalDecision, ApprovalRegistry, InputRegistry};
+use super::{Rendered, ToolExecRequest, ToolExecResult, ToolExecutor, validate_args};
+use crate::agent::approvals::{ApprovalDecision, ApprovalRegistry, InputAnswer, InputRegistry};
 use crate::agent::file_locks::FileLocks;
 use crate::agent::permissions::Effect;
 use crate::db::Db;
@@ -1801,4 +1801,207 @@ async fn a_cancelled_approval_is_stored_as_rejected_not_pending() {
         stored_approval_after(None).await.as_deref(),
         Some("rejected")
     );
+}
+
+// ---- the question tool ----------------------------------------------------
+
+fn question_schema() -> Value {
+    builtin_tool_def("question").unwrap().input_schema
+}
+
+fn accepts(questions: Value) -> bool {
+    validate_args(&question_schema(), &json!({ "questions": questions })).is_ok()
+}
+
+#[test]
+fn a_question_without_options_is_valid_and_means_a_free_form_answer() {
+    assert!(accepts(json!([
+        {"header": "Database", "question": "Which database should I target?"}
+    ])));
+    // Only the header and the question text are required.
+    let schema = question_schema();
+    assert_eq!(
+        schema["properties"]["questions"]["items"]["required"],
+        json!(["header", "question"])
+    );
+    // Free-form and multiple-choice questions can share one call.
+    assert!(accepts(json!([
+        {"header": "Database", "question": "Which database should I target?"},
+        {
+            "header": "Format",
+            "question": "Which output format do you want?",
+            "multiple": true,
+            "options": [{"label": "Markdown"}, {"label": "JSON", "description": "Machine readable"}]
+        }
+    ])));
+}
+
+#[test]
+fn options_when_sent_need_one_to_twelve_labelled_items() {
+    let with_options =
+        |options: Value| accepts(json!([{"header": "h", "question": "q", "options": options}]));
+    assert!(with_options(json!([{"label": "A"}])));
+    let twelve: Vec<Value> = (1..=12)
+        .map(|n| json!({"label": format!("Option {n}")}))
+        .collect();
+    assert!(with_options(Value::Array(twelve)));
+
+    // An empty list is rejected: leave `options` out for a free-form answer.
+    assert!(!with_options(json!([])));
+    let thirteen: Vec<Value> = (1..=13)
+        .map(|n| json!({"label": format!("Option {n}")}))
+        .collect();
+    assert!(!with_options(Value::Array(thirteen)));
+    assert!(!with_options(json!([{"description": "no label"}])));
+    assert!(!with_options(json!([{"label": "A", "extra": true}])));
+    assert!(!with_options(json!("Blue")));
+}
+
+#[test]
+fn a_question_still_needs_a_header_and_its_text() {
+    assert!(!accepts(
+        json!([{"question": "Which database should I target?"}])
+    ));
+    assert!(!accepts(json!([{"header": "Database"}])));
+    assert!(!accepts(json!([{}])));
+    assert!(!accepts(json!([])));
+    assert!(!accepts(json!([
+        {"header": "Database", "question": "Which one?", "surprise": 1}
+    ])));
+    assert!(validate_args(&question_schema(), &json!({})).is_err());
+}
+
+#[test]
+fn a_call_holds_at_most_eight_questions() {
+    let many = |count: usize| {
+        Value::Array(
+            (1..=count)
+                .map(|n| json!({"header": format!("Q{n}"), "question": format!("Question {n}?")}))
+                .collect(),
+        )
+    };
+    assert!(accepts(many(8)));
+    assert!(!accepts(many(9)));
+}
+
+/// Run a `question` call through the executor, answer it with `responses`, and
+/// return the request the UI received together with the tool result.
+async fn ask(args: Value, responses: Value, cancelled: bool) -> (Value, ToolExecResult) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    let executor = Arc::new(test_executor(&workspace).await);
+    let mut events = executor.events.subscribe();
+    let mut req = request("question", args);
+    req.part_id = tool_call_part(&executor, "question").await;
+    let runner = executor.clone();
+    let handle = tokio::spawn(async move { runner.execute(req).await });
+    let (call_id, asked) = loop {
+        let event = tokio::time::timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("input request event")
+            .expect("event channel");
+        match event {
+            CoreEvent::InputRequest {
+                call_id, request, ..
+            } => break (call_id, request),
+            CoreEvent::Approval { .. } => panic!("a question must not ask for approval"),
+            _ => {}
+        }
+    };
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(executor.inputs.respond(
+        &call_id,
+        InputAnswer {
+            responses,
+            cancelled
+        }
+    ));
+    (asked, handle.await.unwrap())
+}
+
+#[tokio::test]
+async fn a_free_form_question_is_sent_without_options_and_a_typed_answer_comes_back() {
+    let questions = json!([{"header": "Database", "question": "Which database should I target?"}]);
+    let (asked, result) = ask(
+        json!({ "questions": questions }),
+        json!({"answers": [{
+            "header": "Database",
+            "question": "Which database should I target?",
+            "answer": "Postgres 16"
+        }]}),
+        false,
+    )
+    .await;
+    // The UI gets the question exactly as the model wrote it: no options key.
+    assert_eq!(asked, json!({ "questions": questions }));
+    assert!(asked["questions"][0].get("options").is_none());
+    assert!(result.ok, "{}", result.content);
+    assert!(result.executed);
+    assert_eq!(
+        result.content,
+        "The user answered:\n- Database: Postgres 16\n  (Which database should I target?)\n"
+    );
+}
+
+#[tokio::test]
+async fn an_answer_that_is_not_a_string_is_still_shown_to_the_model() {
+    let (_, result) = ask(
+        json!({"questions": [{
+            "header": "Format",
+            "question": "Which output format do you want?",
+            "multiple": true,
+            "options": [{"label": "Markdown"}, {"label": "JSON"}]
+        }]}),
+        json!({"answers": [{
+            "header": "Format",
+            "question": "Which output format do you want?",
+            "answer": ["Markdown", "JSON"]
+        }]}),
+        false,
+    )
+    .await;
+    assert!(result.ok, "{}", result.content);
+    assert_eq!(
+        result.content,
+        "The user answered:\n- Format: [\"Markdown\",\"JSON\"]\n  (Which output format do you want?)\n"
+    );
+}
+
+#[tokio::test]
+async fn declining_a_question_is_a_tool_error_not_an_answer() {
+    let (_, result) = ask(
+        json!({"questions": [{"header": "Database", "question": "Which database?"}]}),
+        json!({}),
+        true,
+    )
+    .await;
+    assert!(!result.ok);
+    assert_eq!(result.content, "The user cancelled the question.");
+}
+
+#[tokio::test]
+async fn an_empty_options_list_is_refused_before_the_user_is_asked() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    let executor = test_executor(&workspace).await;
+    let mut events = executor.events.subscribe();
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        executor.execute(request(
+            "question",
+            json!({"questions": [{"header": "h", "question": "q", "options": []}]}),
+        )),
+    )
+    .await
+    .expect("an invalid question should fail without waiting for an answer");
+    assert!(!result.ok);
+    assert!(!result.executed);
+    assert!(
+        result.content.starts_with("Invalid tool input:"),
+        "{}",
+        result.content
+    );
+    while let Ok(event) = events.try_recv() {
+        assert!(!matches!(event, CoreEvent::InputRequest { .. }));
+    }
 }

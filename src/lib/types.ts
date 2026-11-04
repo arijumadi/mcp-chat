@@ -264,7 +264,8 @@ export interface QuestionPrompt {
   header: string;
   question: string;
   multiple?: boolean;
-  options: QuestionOption[];
+  /** Absent for a free-form question: the user answers in their own words. */
+  options?: QuestionOption[];
 }
 
 export interface InputRequestEvent {

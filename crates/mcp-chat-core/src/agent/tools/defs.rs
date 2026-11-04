@@ -148,9 +148,9 @@ fn base_schema(name: &str) -> Value {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "header": {"type": "string", "description": "Short label for the question."},
+                            "header": {"type": "string", "description": "Short label."},
                             "question": {"type": "string", "description": "The full question text."},
-                            "multiple": {"type": "boolean", "description": "Allow selecting more than one option. Default false."},
+                            "multiple": {"type": "boolean", "description": "Allow several options. Default false."},
                             "options": {
                                 "type": "array",
                                 "minItems": 1,
@@ -166,7 +166,7 @@ fn base_schema(name: &str) -> Value {
                                 }
                             }
                         },
-                        "required": ["header", "question", "options"],
+                        "required": ["header", "question"],
                         "additionalProperties": false
                     }
                 }

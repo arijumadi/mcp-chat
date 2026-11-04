@@ -7,7 +7,8 @@
     "create_file": "write",
     "modify_file": "apply_patch",
     "replace_once": "edit",
-    "shell": "bash"
+    "shell": "bash",
+    "ask_user": "question"
   },
   "risks": {
     "read_only": "allow",
@@ -24,7 +25,8 @@
     { "task": "Satu exact replacement", "use": ["replace_once"] },
     { "task": "Build/test/git/package manager", "use": ["shell"] },
     { "task": "Rename/move/delete massal", "use": ["shell"] },
-    { "task": "Proses/port/disk/env", "use": ["shell"] }
+    { "task": "Proses/port/disk/env", "use": ["shell"] },
+    { "task": "Klarifikasi blocking", "use": ["ask_user"] }
   ],
   "selfCheck": "Sebelum {shell}: apakah command ini mengubah isi file? Kalau ya, tool-nya salah.",
   "tools": [
@@ -152,7 +154,10 @@
       "label": "Question",
       "risk": "interactive",
       "description": [
-        "Ask the user one or more questions and wait for answers. Use this when a decision or missing preference cannot be inferred. Each question can offer options; the user can also type a custom answer."
+        "Ask the user one or more blocking questions when the answer changes what you do next and cannot be inferred from the workspace.",
+        "Options are optional; omit them for free-form answers.",
+        "Do not use this for status updates, explanations, or questions you can answer yourself.",
+        "Examples: which database to target; modify the existing file or create a new one; confirm before deleting files; Markdown, JSON, or both."
       ]
     }
   ]

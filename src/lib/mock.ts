@@ -34,6 +34,7 @@ export function installMock(): void {
   const subscribers = new Set<(event: CoreEvent) => void>();
   const generating = new Set<string>();
   const approvalWaiters = new Map<string, (decision: string) => void>();
+  const inputWaiters = new Map<string, (answer: { responses: unknown; cancelled: boolean }) => void>();
   const autoApprove = new Set<string>();
   const settingsStore: Record<string, string> = {
     theme: localStorage.getItem("theme") ?? "system",
@@ -550,7 +551,9 @@ export function installMock(): void {
         generating.add(conversationId);
         void (/needs approval/i.test(text)
           ? simulateApprovalTurn(conversationId)
-          : simulateTurn(conversationId, text));
+          : /needs an answer/i.test(text)
+            ? simulateQuestionTurn(conversationId)
+            : simulateTurn(conversationId, text));
         return user;
       }
       case "regenerate":
@@ -598,8 +601,15 @@ export function installMock(): void {
         });
         return true;
       }
-      case "respond_input":
+      case "respond_input": {
+        // A scripted question turn is waiting for this answer.
+        const waiter = inputWaiters.get(String(args.callId));
+        if (waiter) {
+          inputWaiters.delete(String(args.callId));
+          waiter({ responses: args.responses, cancelled: Boolean(args.cancelled) });
+        }
         return true;
+      }
       case "read_tool_output":
         return JSON.stringify({
           content: "Full mock tool output. ".repeat(80),
@@ -826,6 +836,118 @@ export function installMock(): void {
       kind: "tool_call",
       payloadJson: JSON.stringify(finished),
     });
+    assistant.status = "completed";
+    generating.delete(conversationId);
+    emit({ type: "message_end", conversationId, messageId: assistantId, status: "completed", error: null });
+    emit({ type: "status", conversationId, status: "idle", message: null });
+    emit({ type: "conversation_updated", conversationId });
+  }
+
+  /**
+   * A turn where the model asks one free-form question (no options) and waits
+   * for the answer. A message containing "needs an answer" starts it, so the
+   * question dialog can be exercised without a real provider.
+   */
+  async function simulateQuestionTurn(conversationId: string) {
+    await delay(120);
+    // A stop can arrive while the scripted turn is waiting to start.
+    if (!generating.has(conversationId)) return;
+    const assistantId = uid();
+    const toolPartId = uid();
+    const callId = uid();
+    const startedAt = now();
+    const questions = [{ header: "Database", question: "Which database should I target?" }];
+    const assistant: MessageWithParts = {
+      id: assistantId,
+      conversationId,
+      role: "assistant",
+      createdAt: now(),
+      status: "streaming",
+      error: null,
+      parts: [],
+    };
+    addMessage(conversationId, assistant);
+    emit({ type: "message_start", conversationId, messageId: assistantId });
+    emit({ type: "status", conversationId, status: "streaming", message: null });
+    const base = {
+      callId,
+      name: "question",
+      server: "mcp-chat",
+      args: { questions },
+      startedAt,
+    };
+    emit({
+      type: "part",
+      conversationId,
+      messageId: assistantId,
+      partId: toolPartId,
+      kind: "tool_call",
+      payload: { ...base, state: "running", executed: false, approval: "allowed" },
+    });
+    emit({ type: "input_request", conversationId, callId, request: { questions } });
+
+    const answer = await new Promise<{ responses: unknown; cancelled: boolean }>((resolve) =>
+      inputWaiters.set(callId, resolve),
+    );
+    const answers = (answer.responses as { answers?: Array<{ header: string; answer: string }> })
+      .answers;
+    const answered = !answer.cancelled && Array.isArray(answers);
+    const resultPreview = answered
+      ? `The user answered: ${answers.map((item) => `${item.header}: ${item.answer}`).join("; ")}`
+      : "The user cancelled the question.";
+    const finished = answered
+      ? {
+          ...base,
+          state: "completed",
+          executed: true,
+          approval: "allowed",
+          endedAt: now(),
+          resultPreview,
+        }
+      : {
+          ...base,
+          state: "error",
+          executed: true,
+          approval: "allowed",
+          endedAt: now(),
+          error: resultPreview,
+          resultPreview,
+        };
+    emit({
+      type: "tool",
+      conversationId,
+      callId,
+      state: finished.state,
+      progress: null,
+      message: resultPreview,
+    });
+    assistant.parts.push({
+      id: toolPartId,
+      messageId: assistantId,
+      idx: 0,
+      kind: "tool_call",
+      payloadJson: JSON.stringify(finished),
+    });
+    if (answered) {
+      // The turn carries on with what the user said.
+      const reply = `Thanks. I will target ${answers.map((item) => item.answer).join(", ")}.`;
+      const textPartId = uid();
+      assistant.parts.push({
+        id: textPartId,
+        messageId: assistantId,
+        idx: 1,
+        kind: "text",
+        payloadJson: JSON.stringify({ text: reply }),
+      });
+      emit({
+        type: "part",
+        conversationId,
+        messageId: assistantId,
+        partId: textPartId,
+        kind: "text",
+        payload: { text: reply },
+      });
+    }
     assistant.status = "completed";
     generating.delete(conversationId);
     emit({ type: "message_end", conversationId, messageId: assistantId, status: "completed", error: null });
