@@ -13,14 +13,17 @@ const MAX_AGENTS_TOTAL: usize = 64_000;
 
 /// Static harness rules. The line `{routing}` is replaced with the routing
 /// table, and `{self_check}` with the one-line check, both rendered from the
-/// capability table. `{shell}` is the shell tool's name.
+/// capability table. `{shell}` and `{ask_user}` are the names of the tools
+/// filling those roles.
 const HARNESS_TEMPLATE: &str = r#"# Harness rules
 - Tool routing:
 {routing}
 - {self_check}
 - Read a file before editing it. Keep patches small, include unique context, and preserve unrelated user changes.
 - Use `skill` to load SKILL.md or reference files inside a skill; do not browse skill folders with {shell}.
-- Do not use a tool only to send a message to the user. Put explanations and conclusions in the final answer.
+- Do not use tools for status updates or chat messages. Use `{ask_user}` only for blocking input that changes the next step.
+- `{ask_user}` is for clarification that blocks the next step; options are optional and a normal explanation belongs in the final answer.
+- Ask only when the answer changes the action, file, format or target, or confirms a destructive step, and the workspace cannot answer it. A light question that does not change the next step goes in the final answer. Do not use `{ask_user}` for pleasantries, status, or anything you can read yourself.
 - Do not narrate routine tool use or write a preamble before a tool call. Call the tool directly.
 - Do not chain shell commands with separators only to print section headers; keep output clean.
 - Use the `python` tool for Python code and data/spreadsheet processing instead of embedding Python in a shell command; the tool sends the code directly through stdin.
@@ -44,6 +47,7 @@ pub fn harness_rules() -> String {
         .replace("{routing}", &routing)
         .replace("{self_check}", &table.self_check)
         .replace("{shell}", table.role("shell").unwrap_or("bash"))
+        .replace("{ask_user}", table.role("ask_user").unwrap_or("question"))
 }
 
 /// Compose the cached system prefix in order: user prompt, harness rules,
@@ -232,10 +236,13 @@ mod tests {
   - Build/test/git/package manager -> `bash`
   - Rename/move/delete massal -> `bash`
   - Proses/port/disk/env -> `bash`
+  - Klarifikasi blocking -> `question`
 - Sebelum bash: apakah command ini mengubah isi file? Kalau ya, tool-nya salah.
 - Read a file before editing it. Keep patches small, include unique context, and preserve unrelated user changes.
 - Use `skill` to load SKILL.md or reference files inside a skill; do not browse skill folders with bash.
-- Do not use a tool only to send a message to the user. Put explanations and conclusions in the final answer.
+- Do not use tools for status updates or chat messages. Use `question` only for blocking input that changes the next step.
+- `question` is for clarification that blocks the next step; options are optional and a normal explanation belongs in the final answer.
+- Ask only when the answer changes the action, file, format or target, or confirms a destructive step, and the workspace cannot answer it. A light question that does not change the next step goes in the final answer. Do not use `question` for pleasantries, status, or anything you can read yourself.
 - Do not narrate routine tool use or write a preamble before a tool call. Call the tool directly.
 - Do not chain shell commands with separators only to print section headers; keep output clean.
 - Use the `python` tool for Python code and data/spreadsheet processing instead of embedding Python in a shell command; the tool sends the code directly through stdin.
@@ -260,6 +267,7 @@ mod tests {
             "Build/test/git/package manager -> `bash`",
             "Rename/move/delete massal -> `bash`",
             "Proses/port/disk/env -> `bash`",
+            "Klarifikasi blocking -> `question`",
         ] {
             assert!(rules.contains(route), "missing route: {route}");
         }
@@ -272,6 +280,8 @@ mod tests {
             .map(|tool| tool.description.clone())
             .collect();
         assert!(!schemas.contains("Rename/move/delete massal"));
+        assert!(!schemas.contains("Klarifikasi blocking"));
+        assert_eq!(rules.matches("Klarifikasi blocking").count(), 1);
     }
 
     #[tokio::test]

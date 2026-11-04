@@ -395,7 +395,7 @@ mod tests {
     fn table_is_valid() {
         let table = load(SOURCE).expect("capabilities.json must load");
         assert_eq!(table.tools.len(), 11);
-        assert!(table.routes.len() >= 8);
+        assert_eq!(table.routes.len(), 9);
     }
 
     #[test]
@@ -459,12 +459,54 @@ mod tests {
                 "Build/test/git/package manager -> `bash`",
                 "Rename/move/delete massal -> `bash`",
                 "Proses/port/disk/env -> `bash`",
+                "Klarifikasi blocking -> `question`",
             ]
         );
         assert_eq!(
             table.self_check,
             "Sebelum bash: apakah command ini mengubah isi file? Kalau ya, tool-nya salah."
         );
+    }
+
+    #[test]
+    fn question_has_one_route_and_the_file_and_shell_routes_do_not_use_it() {
+        let table = table();
+        assert_eq!(table.role("ask_user"), Some("question"));
+        for route in &table.routes {
+            let asks = route.tools.iter().any(|tool| tool == "question");
+            assert_eq!(
+                asks,
+                route.task == "Klarifikasi blocking",
+                "route {:?} -> {:?}",
+                route.task,
+                route.tools
+            );
+        }
+        let clarify = table
+            .routes
+            .iter()
+            .find(|route| route.task == "Klarifikasi blocking")
+            .expect("a route for blocking clarification");
+        assert_eq!(clarify.tools, ["question"]);
+    }
+
+    #[test]
+    fn question_description_says_when_to_ask_and_when_not_to() {
+        let question = table().get("question").unwrap();
+        assert_eq!(question.risk, Risk::Interactive);
+        assert_eq!(question.default_effect, Effect::Allow);
+        for expected in [
+            "Ask the user one or more blocking questions when the answer changes what you do next and cannot be inferred from the workspace.",
+            "Options are optional; omit them for free-form answers.",
+            "Do not use this for status updates, explanations, or questions you can answer yourself.",
+            "Examples:",
+        ] {
+            assert!(
+                question.description.contains(expected),
+                "missing {expected:?} in {}",
+                question.description
+            );
+        }
     }
 
     #[test]
