@@ -327,6 +327,7 @@ impl ToolExecutor {
             message: None,
             diff: None,
             exit_code: None,
+            image: None,
         });
 
         let target_request = ToolExecRequest {
@@ -422,6 +423,7 @@ impl ToolExecutor {
             message: Some(format!("Running {} MCP call(s)", calls.len())),
             diff: None,
             exit_code: None,
+            image: None,
         });
 
         let futures = calls
@@ -782,6 +784,7 @@ impl ToolExecutor {
                 message: event.message,
                 diff: None,
                 exit_code: None,
+                image: None,
             });
         }))
     }

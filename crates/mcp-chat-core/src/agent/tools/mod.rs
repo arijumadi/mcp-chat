@@ -319,6 +319,7 @@ impl ToolExecutor {
             message: None,
             diff: None,
             exit_code: None,
+            image: None,
         });
 
         let outcome = if builtin {
@@ -449,7 +450,7 @@ impl ToolExecutor {
                         "fullResultRef": full_result_ref,
                         "truncated": truncated,
                         "exitCode": exit_code,
-                        "image": image,
+                        "image": image.clone(),
                         "diff": diff,
                         "error": if ok { Value::Null } else { Value::String(preview.clone()) }
                     }),
@@ -463,6 +464,7 @@ impl ToolExecutor {
                     message: Some(preview.clone()),
                     diff,
                     exit_code,
+                    image,
                 });
                 ToolExecResult {
                     call_id: req.call_id,
@@ -655,6 +657,7 @@ impl ToolExecutor {
             message: Some(message.clone()),
             diff: None,
             exit_code: None,
+            image: None,
         });
         ToolExecResult {
             call_id: req.call_id,

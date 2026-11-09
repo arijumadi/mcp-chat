@@ -101,6 +101,38 @@ describe("transcript event reducer", () => {
     expect(parsePayload(get().messages[0]!.parts[0]!).exitCode).toBe(2);
   });
 
+  it("shows a read image as soon as the call finishes", () => {
+    apply({ type: "message_start", conversationId: "c1", messageId: "m1" });
+    apply({
+      type: "part",
+      conversationId: "c1",
+      messageId: "m1",
+      partId: "read1",
+      kind: "tool_call",
+      payload: { callId: "r1", name: "read", server: "mcp-chat", args: {}, state: "running" },
+    });
+    const image = {
+      name: "pw_test.png",
+      mime: "image/png",
+      path: "/tmp/read-images/pw_test.png",
+      size: 82444,
+    };
+    apply({
+      type: "tool",
+      conversationId: "c1",
+      callId: "r1",
+      state: "completed",
+      message: "Image loaded: .mcp-chat/artifacts/pw_test.png (image/png, 82444 bytes)",
+      image,
+    });
+    const payload = parsePayload(get().messages[0]!.parts[0]!);
+    expect(payload.image).toEqual(image);
+
+    // A later event without an image does not erase the preview.
+    apply({ type: "tool", conversationId: "c1", callId: "r1", state: "completed" });
+    expect(parsePayload(get().messages[0]!.parts[0]!).image).toEqual(image);
+  });
+
   it("stops saying a tool needs approval once it has been answered", () => {
     const start = (callId: string) => {
       apply({
