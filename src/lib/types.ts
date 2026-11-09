@@ -353,6 +353,7 @@ export type CoreEvent =
       message?: string | null;
       diff?: string | null;
       exitCode?: number | null;
+      image?: ToolImage | null;
     }
   | ApprovalEvent
   | UsageEvent

@@ -130,6 +130,30 @@ describe("ToolCard", () => {
     expect(screen.queryByText("Result")).not.toBeInTheDocument();
   });
 
+  it("shows a read image in the expanded tool result", () => {
+    render(
+      <ToolCard
+        part={toolPart("i1", {
+          callId: "i1",
+          name: "read",
+          server: "mcp-chat",
+          args: { filePath: ".mcp-chat/artifacts/pw_test.png" },
+          state: "completed",
+          executed: true,
+          resultPreview: "Image loaded: .mcp-chat/artifacts/pw_test.png (image/png, 82444 bytes)",
+          image: {
+            name: "pw_test.png",
+            mime: "image/png",
+            path: "/tmp/read-images/pw_test.png",
+            size: 82444,
+          },
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+    expect(screen.getByText(/Image: pw_test\.png \(image\/png\)/)).toBeInTheDocument();
+  });
+
   it("shows every file of a multi-file patch in one open diff", () => {
     const patchDiff = [
       "--- a/a.txt",

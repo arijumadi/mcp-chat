@@ -1215,6 +1215,33 @@ async fn read_stages_images_as_visual_tool_results() {
 }
 
 #[tokio::test]
+async fn read_image_metadata_is_sent_on_the_live_tool_event() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    let file = workspace.join("pixel.png");
+    std::fs::write(&file, b"\x89PNG\r\n\x1a\npixel-bytes").unwrap();
+    let executor = test_executor(&workspace).await;
+    let mut events = executor.events.subscribe();
+    let mut req = request("read", json!({"filePath": file.to_string_lossy()}));
+    req.part_id = tool_call_part(&executor, "read").await;
+
+    let rendered = executor.run_read(&req).await.unwrap();
+    executor.finish(req, Instant::now(), Ok(rendered)).await;
+
+    let mut seen = None;
+    while let Ok(event) = events.try_recv() {
+        if let CoreEvent::Tool { state, image, .. } = event {
+            if state == "completed" {
+                seen = image;
+            }
+        }
+    }
+    let image = seen.expect("the completed event carries the image metadata");
+    assert_eq!(image["mime"], "image/png");
+    assert_eq!(image["name"], "pixel.png");
+}
+
+#[tokio::test]
 async fn shell_exit_code_is_output_not_a_tool_failure() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().canonicalize().unwrap();

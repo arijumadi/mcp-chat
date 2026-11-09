@@ -55,6 +55,10 @@ pub enum CoreEvent {
         /// tool_call part; sent live so the row does not wait for a reload.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         exit_code: Option<i64>,
+        /// Image metadata for a finished `read` call. Also stored on the
+        /// tool_call part; sent live so the preview does not wait for a reload.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        image: Option<Value>,
     },
     Approval {
         conversation_id: String,
@@ -121,19 +125,30 @@ mod tests {
             message: None,
             diff: None,
             exit_code: None,
+            image: None,
         };
         let value = serde_json::to_value(&event).unwrap();
         assert!(value.get("diff").is_none());
         assert!(value.get("exitCode").is_none());
+        assert!(value.get("image").is_none());
         if let CoreEvent::Tool { diff, .. } = &mut event {
             *diff = Some("-old\n+new\n".into());
         }
         if let CoreEvent::Tool { exit_code, .. } = &mut event {
             *exit_code = Some(2);
         }
+        if let CoreEvent::Tool { image, .. } = &mut event {
+            *image = Some(json!({
+                "name": "screenshot.png",
+                "mime": "image/png",
+                "path": "/tmp/screenshot.png",
+                "size": 42
+            }));
+        }
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["diff"], "-old\n+new\n");
         assert_eq!(value["exitCode"], 2);
+        assert_eq!(value["image"]["mime"], "image/png");
         // Events without the field still deserialize.
         let legacy: CoreEvent = serde_json::from_value(
             json!({"type": "tool", "conversationId": "c1", "callId": "x", "state": "running", "progress": null, "message": null}),

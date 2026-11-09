@@ -116,7 +116,7 @@
       "risk": "read_only",
       "output": "read",
       "description": [
-        "Read a text file with line numbers, or an image file as a visual attachment.",
+        "Read a text file with line numbers, or an image shown in the tool card.",
         "Explicit outside paths need approval unless auto mode is on. Use offset and limit for large text files."
       ],
       "access": { "kind": "read", "arg": "filePath", "format": "path" }
