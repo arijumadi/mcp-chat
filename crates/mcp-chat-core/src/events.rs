@@ -67,6 +67,14 @@ pub enum CoreEvent {
         tool: String,
         args: Value,
         allow_always: bool,
+        #[serde(default)]
+        action: String,
+        #[serde(default)]
+        resource: String,
+        /// The rule resource that "Always allow" will save. For shell calls this
+        /// can be a conservative prefix pattern rather than the exact command.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        save_pattern: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         diff: Option<String>,
     },
@@ -188,12 +196,18 @@ mod tests {
             tool: "echo".into(),
             args: json!({"text": "hi"}),
             allow_always: true,
+            action: "mcp.mock.echo".into(),
+            resource: "hi".into(),
+            save_pattern: Some("hi".into()),
             diff: None,
         };
         let value = serde_json::to_value(approval).unwrap();
         assert_eq!(value["callId"], "call1");
         assert_eq!(value["conversationId"], "c1");
         assert_eq!(value["allowAlways"], true);
+        assert_eq!(value["action"], "mcp.mock.echo");
+        assert_eq!(value["resource"], "hi");
+        assert_eq!(value["savePattern"], "hi");
 
         let usage = CoreEvent::Usage {
             conversation_id: "c1".into(),

@@ -21,7 +21,7 @@ use crate::agent::approvals::{ApprovalDecision, ApprovalRegistry, InputAnswer, I
 use crate::agent::file_locks::FileLocks;
 use crate::agent::permissions::Effect;
 use crate::db::Db;
-use crate::db::repo::{conversations, messages, settings};
+use crate::db::repo::{conversations, messages, permissions as rules_repo, settings};
 use crate::events::CoreEvent;
 use crate::mcp::manager::McpManager;
 use crate::models::PartPayload;
@@ -1810,6 +1810,54 @@ async fn an_approved_call_is_stored_as_allowed() {
             .as_deref(),
         Some("allowed")
     );
+}
+
+#[tokio::test]
+async fn always_allow_saves_the_previewed_shell_pattern() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    let executor = Arc::new(test_executor(&workspace).await);
+    let mut events = executor.events.subscribe();
+    let mut req = request("bash", json!({"command": "echo hi"}));
+    req.part_id = tool_call_part(&executor, "bash").await;
+    let runner = executor.clone();
+    let handle = tokio::spawn(async move { runner.execute(req).await });
+
+    let call_id = loop {
+        let event = tokio::time::timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("approval event")
+            .expect("event channel");
+        if let CoreEvent::Approval {
+            call_id,
+            action,
+            resource,
+            save_pattern,
+            ..
+        } = event
+        {
+            assert_eq!(action, "builtin.bash");
+            assert_eq!(resource, "echo hi");
+            assert_eq!(save_pattern.as_deref(), Some("echo *"));
+            break call_id;
+        }
+    };
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(executor.approvals.respond(
+        &call_id,
+        crate::agent::approvals::ApprovalAnswer {
+            decision: ApprovalDecision::Always,
+            feedback: None,
+        }
+    ));
+    handle.await.unwrap();
+
+    let rules = rules_repo::list(&executor.db.pool).await.unwrap();
+    let saved = rules
+        .iter()
+        .find(|rule| rule.action == "builtin.bash")
+        .expect("saved bash rule");
+    assert_eq!(saved.resource, "echo *");
 }
 
 #[tokio::test]

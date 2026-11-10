@@ -145,6 +145,18 @@ test.describe("stopping a turn", () => {
 });
 
 test.describe("approvals", () => {
+  test("shows the rule that Always allow will save", async ({ page }) => {
+    await openChat(page);
+    const { dialog } = await askForApproval(page);
+    const rule = dialog.getByTestId("approval-rule");
+    await expect(rule).toContainText("Always allow will save");
+    await expect(rule).toContainText("builtin.bash");
+    await expect(dialog.getByTestId("approval-pattern")).toHaveText("npm test");
+    await expect(rule).toContainText("Exact rule");
+    await dialog.getByRole("button", { name: "Always allow" }).click();
+    await expect(dialog).toHaveCount(0);
+  });
+
   test("Ctrl+Enter allows the call once", async ({ page }) => {
     await openChat(page);
     const { dialog } = await askForApproval(page);

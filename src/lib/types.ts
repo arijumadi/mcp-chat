@@ -256,6 +256,9 @@ export interface ApprovalEvent {
   tool: string;
   args: Record<string, unknown>;
   allowAlways: boolean;
+  action?: string;
+  resource?: string;
+  savePattern?: string | null;
   diff?: string | null;
 }
 

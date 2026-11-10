@@ -815,6 +815,9 @@ export function installMock(): void {
       tool: "bash",
       args: base.args,
       allowAlways: true,
+      action: "builtin.bash",
+      resource: "npm test",
+      savePattern: "npm test",
       diff: null,
     });
     emit({ type: "status", conversationId, status: "waiting_approval", message: null });

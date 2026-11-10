@@ -1,4 +1,5 @@
 use globset::GlobBuilder;
+use serde_json::Value;
 
 use crate::models::PermissionRule;
 
@@ -84,6 +85,188 @@ pub fn permission_resource(args: &serde_json::Value) -> String {
     "*".into()
 }
 
+/// What an "Always allow" click should save. Shell commands may use a
+/// conservative prefix pattern; everything else keeps the exact resource.
+pub fn save_pattern(action: &str, resource: &str, args: &Value) -> String {
+    if action == "builtin.bash" {
+        if let Some(command) = args.get("command").and_then(Value::as_str) {
+            if let Some(pattern) = shell_save_pattern(command) {
+                if pattern.chars().count() <= 200 && glob_match(&pattern, resource) {
+                    return pattern;
+                }
+            }
+        }
+    }
+    resource.to_owned()
+}
+
+fn shell_save_pattern(command: &str) -> Option<String> {
+    let command = command.trim();
+    if command.is_empty() || has_shell_control(command) {
+        return None;
+    }
+    let words = command_words(command)?;
+    let first = words.first()?.to_ascii_lowercase();
+    let count = pattern_word_count(&first, &words)?;
+    if words.len() < count {
+        return None;
+    }
+    let prefix = &words[..count];
+    if prefix.iter().any(|word| {
+        word.is_empty()
+            || word
+                .chars()
+                .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}' | '$' | '`'))
+    }) {
+        return None;
+    }
+    Some(format!("{} *", prefix.join(" ")))
+}
+
+fn pattern_word_count(first: &str, words: &[String]) -> Option<usize> {
+    const SIMPLE: &[&str] = &[
+        "cat", "head", "tail", "wc", "stat", "file", "ls", "tree", "du", "grep", "rg", "which",
+        "where", "whoami", "pwd", "date", "uname", "df", "free", "ps", "echo",
+    ];
+    if SIMPLE.contains(&first) {
+        return Some(1);
+    }
+    let second = words.get(1)?.to_ascii_lowercase();
+    match first {
+        "git" => matches!(
+            second.as_str(),
+            "status"
+                | "diff"
+                | "log"
+                | "show"
+                | "rev-parse"
+                | "ls-files"
+                | "grep"
+                | "blame"
+                | "shortlog"
+                | "describe"
+        )
+        .then_some(2),
+        "npm" | "pnpm" | "yarn" | "bun" => {
+            if matches!(second.as_str(), "run" | "exec" | "dlx") {
+                Some(3)
+            } else if matches!(
+                second.as_str(),
+                "test" | "ls" | "list" | "view" | "info" | "outdated" | "why" | "audit"
+            ) {
+                Some(2)
+            } else {
+                None
+            }
+        }
+        "cargo" => matches!(
+            second.as_str(),
+            "build" | "check" | "test" | "clippy" | "fmt" | "metadata" | "tree" | "bench"
+        )
+        .then_some(2),
+        "go" => matches!(second.as_str(), "build" | "test" | "vet" | "list").then_some(2),
+        "docker" => matches!(
+            second.as_str(),
+            "ps" | "images" | "logs" | "inspect" | "version" | "info"
+        )
+        .then_some(2),
+        "kubectl" => matches!(
+            second.as_str(),
+            "get" | "describe" | "logs" | "version" | "explain"
+        )
+        .then_some(2),
+        "terraform" => {
+            if matches!(second.as_str(), "plan" | "show" | "validate" | "output") {
+                Some(2)
+            } else if second == "state" {
+                Some(3)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn has_shell_control(command: &str) -> bool {
+    command.chars().any(|ch| {
+        matches!(
+            ch,
+            ';' | '|'
+                | '&'
+                | '<'
+                | '>'
+                | '`'
+                | '$'
+                | '('
+                | ')'
+                | '{'
+                | '}'
+                | '\n'
+                | '\r'
+                | '*'
+                | '?'
+                | '['
+                | ']'
+        )
+    })
+}
+
+fn command_words(command: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut started = false;
+    for ch in command.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            started = true;
+            continue;
+        }
+        match quote {
+            Some(active) => {
+                if ch == active {
+                    quote = None;
+                } else if ch == '\\' && active == '"' {
+                    escaped = true;
+                } else {
+                    current.push(ch);
+                }
+                started = true;
+            }
+            None => match ch {
+                '\'' | '"' => {
+                    quote = Some(ch);
+                    started = true;
+                }
+                '\\' => {
+                    escaped = true;
+                    started = true;
+                }
+                ch if ch.is_whitespace() => {
+                    if started {
+                        words.push(std::mem::take(&mut current));
+                        started = false;
+                    }
+                }
+                _ => {
+                    current.push(ch);
+                    started = true;
+                }
+            },
+        }
+    }
+    if escaped || quote.is_some() {
+        return None;
+    }
+    if started {
+        words.push(current);
+    }
+    Some(words)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,6 +311,49 @@ mod tests {
         assert_eq!(
             permission_resource(&serde_json::json!({"url": "https://example.com/path"})),
             "example.com"
+        );
+    }
+
+    fn shell_pattern(command: &str) -> String {
+        save_pattern(
+            "builtin.bash",
+            command,
+            &serde_json::json!({"command": command}),
+        )
+    }
+
+    #[test]
+    fn shell_always_allow_uses_a_safe_prefix() {
+        assert_eq!(shell_pattern("cat /logs/log_1.log"), "cat *");
+        assert_eq!(shell_pattern("git status --short"), "git status *");
+        assert_eq!(shell_pattern("npm run test --watch"), "npm run test *");
+        assert_eq!(shell_pattern("cat \"a file.txt\""), "cat *");
+        assert_eq!(shell_pattern("echo hello"), "echo *");
+    }
+
+    #[test]
+    fn risky_or_unknown_commands_keep_the_exact_command() {
+        for command in [
+            "git reset --hard",
+            "rm -rf /tmp/x",
+            "cat a && rm b",
+            "cat *.log",
+            "mycli do-something",
+            "cat",
+        ] {
+            assert_eq!(shell_pattern(command), command, "{command}");
+        }
+    }
+
+    #[test]
+    fn non_shell_permissions_keep_the_exact_resource() {
+        assert_eq!(
+            save_pattern(
+                "builtin.edit",
+                "src/app.ts",
+                &serde_json::json!({"filePath": "src/app.ts"})
+            ),
+            "src/app.ts"
         );
     }
 }

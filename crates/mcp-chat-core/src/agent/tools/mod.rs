@@ -538,6 +538,7 @@ impl ToolExecutor {
         let diff = self
             .approval_diff(conversation_id, server_id, tool_name, args)
             .await;
+        let save_pattern = allow_always.then(|| permissions::save_pattern(action, resource, args));
         let _ = self.events.send(CoreEvent::Approval {
             conversation_id: conversation_id.to_owned(),
             call_id: call_id.to_owned(),
@@ -545,6 +546,9 @@ impl ToolExecutor {
             tool: tool_name.to_owned(),
             args: args.clone(),
             allow_always,
+            action: action.to_owned(),
+            resource: resource.to_owned(),
+            save_pattern: save_pattern.clone(),
             diff,
         });
         let receiver = self.approvals.register(call_id);
@@ -567,8 +571,8 @@ impl ToolExecutor {
             ApprovalDecision::Once => Ok(()),
             ApprovalDecision::Always => {
                 let server_id = (!server_id.is_empty()).then_some(server_id);
-                let _ =
-                    rules_repo::create(&self.db.pool, server_id, action, resource, "allow").await;
+                let saved = save_pattern.as_deref().unwrap_or(resource);
+                let _ = rules_repo::create(&self.db.pool, server_id, action, saved, "allow").await;
                 Ok(())
             }
             ApprovalDecision::Reject => {
