@@ -75,6 +75,29 @@ test("revert moves a user message back into the composer", async ({ page }) => {
   await expect(page.getByTestId("user-message")).toHaveCount(0);
 });
 
+test("adds a local npx MCP server over stdio", async ({ page }) => {
+  await page.goto("/?mock=1");
+  await page.getByRole("complementary").getByRole("button", { name: "MCP servers" }).click();
+  await page.getByRole("button", { name: "Add server" }).click();
+  const dialog = page.getByRole("dialog");
+
+  await dialog.getByRole("textbox", { name: "Name" }).fill("Local files");
+  await dialog.getByRole("combobox", { name: "Transport" }).selectOption("stdio");
+  await expect(dialog.getByRole("textbox", { name: "Command" })).toHaveValue("npx");
+  await dialog
+    .getByRole("textbox", { name: "Arguments (one per line)" })
+    .fill("-y\n@modelcontextprotocol/server-filesystem\n/tmp");
+  await dialog.getByRole("button", { name: "Test connection" }).click();
+  await expect(dialog.getByText(/mock-stdio/)).toBeVisible();
+  await expect(dialog.getByText(/stdio · 1 tools/)).toBeVisible();
+
+  await dialog.getByRole("button", { name: "Add server" }).click();
+  await expect(page.getByText("Local files").first()).toBeVisible();
+  await expect(
+    page.getByText("npx -y @modelcontextprotocol/server-filesystem /tmp").first(),
+  ).toBeVisible();
+});
+
 test("captures README screenshots", async ({ page }) => {
   await page.goto("/?mock=1");
   await page.getByText("Welcome to Jarvis").first().click();

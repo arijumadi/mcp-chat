@@ -17,6 +17,10 @@ fn config(url: &str, transport: Option<TransportKind>) -> ClientConfig {
         transport,
         headers: HashMap::new(),
         bearer: None,
+        command: String::new(),
+        args: Vec::new(),
+        env: HashMap::new(),
+        cwd: None,
     }
 }
 

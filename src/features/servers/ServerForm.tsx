@@ -7,6 +7,26 @@ import { Button } from "@/components/Button";
 import { Modal } from "@/components/Modal";
 import { inputClass, hintClass } from "@/components/ui";
 
+function argsFromJson(json: string | null | undefined): string[] {
+  try {
+    const value = JSON.parse(json ?? "[]") as unknown;
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function argsJsonFromText(text: string): string {
+  return JSON.stringify(
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean),
+  );
+}
+
 export function ServerForm({
   server,
   open,
@@ -27,7 +47,12 @@ export function ServerForm({
     bearer: "",
     apiKey: "",
     transport: "streamable_http",
+    command: "",
+    argsJson: "[]",
+    envJson: "{}",
+    cwd: "",
   });
+  const [argsText, setArgsText] = useState("");
   const [report, setReport] = useState<ConnectionReport | null>(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -38,16 +63,25 @@ export function ServerForm({
     setReport(null);
     setError(null);
     if (server) {
+      const transport =
+        server.transport === "sse" || server.transport === "stdio"
+          ? server.transport
+          : "streamable_http";
       setForm({
         name: server.name,
         url: server.url,
-        authKind: server.authKind,
+        authKind: transport === "stdio" ? "none" : server.authKind,
         headersJson: server.headersJson,
         policy: server.policy,
         bearer: "",
         apiKey: "",
-        transport: server.transport === "sse" ? "sse" : "streamable_http",
+        transport,
+        command: server.command,
+        argsJson: server.argsJson,
+        envJson: server.envJson,
+        cwd: server.cwd,
       });
+      setArgsText(argsFromJson(server.argsJson).join("\n"));
     } else {
       setForm({
         name: "",
@@ -58,12 +92,43 @@ export function ServerForm({
         bearer: "",
         apiKey: "",
         transport: "streamable_http",
+        command: "",
+        argsJson: "[]",
+        envJson: "{}",
+        cwd: "",
       });
+      setArgsText("");
     }
   }, [open, server]);
 
   const set = <K extends keyof ServerInput>(key: K, value: ServerInput[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
+
+  const isStdio = form.transport === "stdio";
+  const endpointReady = isStdio ? Boolean(form.command?.trim()) : Boolean(form.url.trim());
+
+  const changeTransport = (transport: string) => {
+    setForm((current) => ({
+      ...current,
+      transport,
+      authKind: transport === "stdio" ? "none" : current.authKind,
+      command:
+        transport === "stdio" && !current.command?.trim() ? "npx" : current.command,
+    }));
+  };
+
+  const serverInput = (): ServerInput => ({
+    ...form,
+    url: isStdio ? "" : form.url.trim(),
+    authKind: isStdio ? "none" : form.authKind,
+    headersJson: isStdio ? "{}" : form.headersJson.trim() || "{}",
+    command: isStdio ? form.command?.trim() : "",
+    argsJson: isStdio ? argsJsonFromText(argsText) : "[]",
+    envJson: isStdio ? form.envJson?.trim() || "{}" : "{}",
+    cwd: isStdio ? form.cwd?.trim() : "",
+    bearer: form.bearer?.trim() || undefined,
+    apiKey: form.apiKey?.trim() || undefined,
+  });
 
   const test = async () => {
     setTesting(true);
@@ -71,14 +136,9 @@ export function ServerForm({
     setReport(null);
     try {
       const input: TestServerInput = {
+        ...serverInput(),
         serverId: server?.id,
         name: form.name || "Test server",
-        url: form.url,
-        authKind: form.authKind,
-        headersJson: form.headersJson,
-        bearer: form.bearer,
-        apiKey: form.apiKey,
-        transport: form.transport,
       };
       const result = await call<ConnectionReport>("test_server", { input });
       setReport(result);
@@ -97,12 +157,7 @@ export function ServerForm({
     setSaving(true);
     setError(null);
     try {
-      const input = {
-        ...form,
-        headersJson: form.headersJson.trim() || "{}",
-        bearer: form.bearer?.trim() || undefined,
-        apiKey: form.apiKey?.trim() || undefined,
-      };
+      const input = serverInput();
       if (server) {
         await call("update_server", { serverId: server.id, input });
       } else {
@@ -127,7 +182,11 @@ export function ServerForm({
       onClose={onClose}
       width="lg"
       title={server ? "Edit MCP server" : "Add MCP server"}
-      subtitle="Remote Streamable HTTP is preferred; legacy handshake and HTTP+SSE are detected automatically."
+      subtitle={
+        isStdio
+          ? "Run a local MCP server over stdio, for example through npx."
+          : "Remote Streamable HTTP is preferred; legacy handshake and HTTP+SSE are detected automatically."
+      }
       footer={
         <>
           <Button size="sm" variant="ghost" onClick={onClose}>
@@ -139,7 +198,7 @@ export function ServerForm({
             icon={<PlugZap size={12} />}
             loading={testing}
             onClick={() => void test()}
-            disabled={!form.url.trim()}
+            disabled={!endpointReady}
           >
             Test connection
           </Button>
@@ -148,7 +207,7 @@ export function ServerForm({
             variant="primary"
             loading={saving}
             onClick={() => void save()}
-            disabled={!form.name.trim() || !form.url.trim()}
+            disabled={!form.name.trim() || !endpointReady}
           >
             {server ? "Save changes" : "Add server"}
           </Button>
@@ -187,105 +246,192 @@ export function ServerForm({
           </label>
         </div>
 
-        <label className="block">
-          <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
-            Server URL
-          </span>
-          <input
-            value={form.url}
-            onChange={(event) => set("url", event.target.value)}
-            placeholder="https://example.com/mcp or http://127.0.0.1:8787/mcp"
-            className={inputClass}
-            style={{ borderColor: "var(--border)" }}
-          />
-          <span className={hintClass} style={{ color: "var(--faint)" }}>
-            HTTPS only, except localhost for development.
-          </span>
-        </label>
-
         <div className="grid grid-cols-2 gap-3">
-          <label className="block">
-            <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
-              Auth
-            </span>
-            <select
-              value={form.authKind}
-              onChange={(event) => set("authKind", event.target.value)}
-              className={inputClass}
-              style={{ borderColor: "var(--border)", background: "var(--panel)" }}
-            >
-              <option value="none">None</option>
-              <option value="api_key">API key header (X-API-Key)</option>
-              <option value="bearer">Static bearer token</option>
-              <option value="oauth" disabled>
-                OAuth (next milestone)
-              </option>
-            </select>
-          </label>
           <label className="block">
             <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
               Transport
             </span>
             <select
               value={form.transport}
-              onChange={(event) => set("transport", event.target.value)}
+              onChange={(event) => changeTransport(event.target.value)}
               className={inputClass}
               style={{ borderColor: "var(--border)", background: "var(--panel)" }}
             >
-              <option value="streamable_http">Auto-detect (HTTP POST)</option>
-              <option value="sse">HTTP+SSE (legacy /sse URL)</option>
+              <option value="streamable_http">Remote HTTP (auto-detect)</option>
+              <option value="sse">Remote HTTP+SSE (legacy /sse URL)</option>
+              <option value="stdio">Local command (stdio / npx)</option>
             </select>
           </label>
+          {isStdio ? (
+            <div
+              className="rounded-lg border px-3 py-2 text-[11.5px]"
+              style={{ borderColor: "var(--border)", color: "var(--muted)" }}
+            >
+              Runs as a child process with your user permissions.
+            </div>
+          ) : (
+            <label className="block">
+              <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
+                Auth
+              </span>
+              <select
+                value={form.authKind}
+                onChange={(event) => set("authKind", event.target.value)}
+                className={inputClass}
+                style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+              >
+                <option value="none">None</option>
+                <option value="api_key">API key header (X-API-Key)</option>
+                <option value="bearer">Static bearer token</option>
+                <option value="oauth" disabled>
+                  OAuth (next milestone)
+                </option>
+              </select>
+            </label>
+          )}
         </div>
 
-        {form.authKind === "bearer" || form.authKind === "api_key" ? (
-          <label className="block">
-            <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
-              {form.authKind === "api_key" ? "X-API-Key value" : "Bearer token"}
-            </span>
-            <input
-              type="password"
-              value={form.authKind === "api_key" ? (form.apiKey ?? "") : (form.bearer ?? "")}
-              onChange={(event) =>
-                set(form.authKind === "api_key" ? "apiKey" : "bearer", event.target.value)
-              }
-              placeholder={
-                form.authKind === "api_key"
-                  ? server?.hasApiKey
-                    ? "Saved — leave blank to keep"
-                    : "key from stock.arjum.com"
-                  : server?.hasBearer
-                    ? "Saved — leave blank to keep"
-                    : "token"
-              }
-              className={inputClass}
-              style={{ borderColor: "var(--border)" }}
-              autoComplete="off"
-            />
-            <span className={hintClass} style={{ color: "var(--faint)" }}>
-              Stored in the OS keychain, never in SQLite.
-              {form.authKind === "api_key"
-                ? " Sent as the X-API-Key header on every MCP request."
-                : ""}
-            </span>
-          </label>
-        ) : null}
+        {isStdio ? (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
+                  Command
+                </span>
+                <input
+                  value={form.command ?? ""}
+                  onChange={(event) => set("command", event.target.value)}
+                  placeholder="npx"
+                  className={inputClass}
+                  style={{ borderColor: "var(--border)" }}
+                  spellCheck={false}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
+                  Working directory (optional)
+                </span>
+                <input
+                  value={form.cwd ?? ""}
+                  onChange={(event) => set("cwd", event.target.value)}
+                  placeholder="/path/to/project"
+                  className={inputClass}
+                  style={{ borderColor: "var(--border)" }}
+                  spellCheck={false}
+                />
+              </label>
+            </div>
 
-        <details className="rounded-lg border px-3 py-2" style={{ borderColor: "var(--border)" }}>
-          <summary className="cursor-pointer text-[11.5px]" style={{ color: "var(--muted)" }}>
-            Advanced: custom headers (JSON)
-          </summary>
-          <textarea
-            value={form.headersJson}
-            onChange={(event) => set("headersJson", event.target.value)}
-            className={inputClass}
-            style={{ borderColor: "var(--border)", minHeight: 80, marginTop: 8 }}
-            placeholder='{"X-Client": "mcp-chat"}'
-          />
-          <span className={hintClass} style={{ color: "var(--faint)" }}>
-            Authorization, Content-Type, Accept and Mcp-* headers are managed by the app.
-          </span>
-        </details>
+            <label className="block">
+              <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
+                Arguments (one per line)
+              </span>
+              <textarea
+                value={argsText}
+                onChange={(event) => setArgsText(event.target.value)}
+                className={inputClass}
+                style={{ borderColor: "var(--border)", minHeight: 96 }}
+                placeholder={"-y\n@modelcontextprotocol/server-filesystem\n/path/to/folder"}
+                spellCheck={false}
+              />
+              <span className={hintClass} style={{ color: "var(--faint)" }}>
+                Example: npx with <code>-y</code> and the MCP package name. Use one line per argument.
+              </span>
+            </label>
+
+            <details className="rounded-lg border px-3 py-2" style={{ borderColor: "var(--border)" }}>
+              <summary className="cursor-pointer text-[11.5px]" style={{ color: "var(--muted)" }}>
+                Environment variables (JSON)
+              </summary>
+              <textarea
+                value={form.envJson ?? "{}"}
+                onChange={(event) => set("envJson", event.target.value)}
+                className={inputClass}
+                style={{ borderColor: "var(--border)", minHeight: 80, marginTop: 8 }}
+                placeholder='{"GITHUB_TOKEN": "..."}'
+                spellCheck={false}
+              />
+              <span className={hintClass} style={{ color: "var(--faint)" }}>
+                Stored in the local SQLite database. The process inherits the app environment too.
+              </span>
+            </details>
+
+            <div
+              className="rounded-lg border px-3 py-2 text-[11.5px]"
+              style={{ borderColor: "var(--warn)", color: "var(--warn)" }}
+            >
+              Only run packages and commands you trust. A local MCP server can read and write files as
+              your user.
+            </div>
+          </>
+        ) : (
+          <>
+            <label className="block">
+              <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
+                Server URL
+              </span>
+              <input
+                value={form.url}
+                onChange={(event) => set("url", event.target.value)}
+                placeholder="https://example.com/mcp or http://127.0.0.1:8787/mcp"
+                className={inputClass}
+                style={{ borderColor: "var(--border)" }}
+              />
+              <span className={hintClass} style={{ color: "var(--faint)" }}>
+                HTTPS only, except localhost for development.
+              </span>
+            </label>
+
+            {form.authKind === "bearer" || form.authKind === "api_key" ? (
+              <label className="block">
+                <span className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
+                  {form.authKind === "api_key" ? "X-API-Key value" : "Bearer token"}
+                </span>
+                <input
+                  type="password"
+                  value={form.authKind === "api_key" ? (form.apiKey ?? "") : (form.bearer ?? "")}
+                  onChange={(event) =>
+                    set(form.authKind === "api_key" ? "apiKey" : "bearer", event.target.value)
+                  }
+                  placeholder={
+                    form.authKind === "api_key"
+                      ? server?.hasApiKey
+                        ? "Saved — leave blank to keep"
+                        : "key from stock.arjum.com"
+                      : server?.hasBearer
+                        ? "Saved — leave blank to keep"
+                        : "token"
+                  }
+                  className={inputClass}
+                  style={{ borderColor: "var(--border)" }}
+                  autoComplete="off"
+                />
+                <span className={hintClass} style={{ color: "var(--faint)" }}>
+                  Stored in the OS keychain, never in SQLite.
+                  {form.authKind === "api_key"
+                    ? " Sent as the X-API-Key header on every MCP request."
+                    : ""}
+                </span>
+              </label>
+            ) : null}
+
+            <details className="rounded-lg border px-3 py-2" style={{ borderColor: "var(--border)" }}>
+              <summary className="cursor-pointer text-[11.5px]" style={{ color: "var(--muted)" }}>
+                Advanced: custom headers (JSON)
+              </summary>
+              <textarea
+                value={form.headersJson}
+                onChange={(event) => set("headersJson", event.target.value)}
+                className={inputClass}
+                style={{ borderColor: "var(--border)", minHeight: 80, marginTop: 8 }}
+                placeholder='{"X-Client": "mcp-chat"}'
+              />
+              <span className={hintClass} style={{ color: "var(--faint)" }}>
+                Authorization, Content-Type, Accept and Mcp-* headers are managed by the app.
+              </span>
+            </details>
+          </>
+        )}
 
         {error ? (
           <div

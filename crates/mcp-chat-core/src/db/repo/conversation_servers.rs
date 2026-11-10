@@ -62,25 +62,29 @@ mod tests {
             .unwrap();
         let a = servers::create(
             &db.pool,
-            "A",
-            "a",
-            "https://a.example/mcp",
-            "streamable_http",
-            "none",
-            "{}",
-            "ask",
+            &servers::ServerConfig::http(
+                "A",
+                "a",
+                "https://a.example/mcp",
+                "streamable_http",
+                "none",
+                "{}",
+                "ask",
+            ),
         )
         .await
         .unwrap();
         let b = servers::create(
             &db.pool,
-            "B",
-            "b",
-            "https://b.example/mcp",
-            "streamable_http",
-            "none",
-            "{}",
-            "ask",
+            &servers::ServerConfig::http(
+                "B",
+                "b",
+                "https://b.example/mcp",
+                "streamable_http",
+                "none",
+                "{}",
+                "ask",
+            ),
         )
         .await
         .unwrap();

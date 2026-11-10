@@ -13,13 +13,15 @@ async fn api_key_header_is_sent_from_the_keychain() {
     let secrets = Arc::new(MemoryStore::default());
     let server = servers::create(
         &db.pool,
-        "IDX",
-        "idx",
-        &mock.url,
-        "streamable_http",
-        "api_key",
-        "{}",
-        "ask",
+        &servers::ServerConfig::http(
+            "IDX",
+            "idx",
+            &mock.url,
+            "streamable_http",
+            "api_key",
+            "{}",
+            "ask",
+        ),
     )
     .await
     .unwrap();
@@ -33,13 +35,15 @@ async fn api_key_header_is_sent_from_the_keychain() {
 
     let without = servers::create(
         &db.pool,
-        "IDX missing",
-        "idx_missing",
-        &mock.url,
-        "streamable_http",
-        "api_key",
-        "{}",
-        "ask",
+        &servers::ServerConfig::http(
+            "IDX missing",
+            "idx_missing",
+            &mock.url,
+            "streamable_http",
+            "api_key",
+            "{}",
+            "ask",
+        ),
     )
     .await
     .unwrap();

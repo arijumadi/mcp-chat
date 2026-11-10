@@ -3,32 +3,69 @@ use sqlx::SqlitePool;
 use crate::models::Server;
 use crate::{Result, new_id, now_ms};
 
-#[allow(clippy::too_many_arguments)]
-pub async fn create(
-    pool: &SqlitePool,
-    name: &str,
-    slug: &str,
-    url: &str,
-    transport: &str,
-    auth_kind: &str,
-    headers_json: &str,
-    policy: &str,
-) -> Result<Server> {
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    pub name: String,
+    pub slug: String,
+    pub url: String,
+    pub transport: String,
+    pub command: String,
+    pub args_json: String,
+    pub env_json: String,
+    pub cwd: String,
+    pub auth_kind: String,
+    pub headers_json: String,
+    pub policy: String,
+}
+
+impl ServerConfig {
+    /// A remote HTTP server. Local stdio fields keep their empty defaults.
+    pub fn http(
+        name: impl Into<String>,
+        slug: impl Into<String>,
+        url: impl Into<String>,
+        transport: impl Into<String>,
+        auth_kind: impl Into<String>,
+        headers_json: impl Into<String>,
+        policy: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            slug: slug.into(),
+            url: url.into(),
+            transport: transport.into(),
+            command: String::new(),
+            args_json: "[]".into(),
+            env_json: "{}".into(),
+            cwd: String::new(),
+            auth_kind: auth_kind.into(),
+            headers_json: headers_json.into(),
+            policy: policy.into(),
+        }
+    }
+}
+
+pub async fn create(pool: &SqlitePool, config: &ServerConfig) -> Result<Server> {
     let id = new_id();
     let row = sqlx::query_as::<_, Server>(
         r#"INSERT INTO servers
-           (id, name, slug, url, transport, auth_kind, headers_json, enabled, policy, created_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9)
+           (id, name, slug, url, transport, command, args_json, env_json, cwd,
+            auth_kind, headers_json, enabled, policy, created_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13)
            RETURNING *"#,
     )
     .bind(&id)
-    .bind(name)
-    .bind(slug)
-    .bind(url)
-    .bind(transport)
-    .bind(auth_kind)
-    .bind(headers_json)
-    .bind(policy)
+    .bind(&config.name)
+    .bind(&config.slug)
+    .bind(&config.url)
+    .bind(&config.transport)
+    .bind(&config.command)
+    .bind(&config.args_json)
+    .bind(&config.env_json)
+    .bind(&config.cwd)
+    .bind(&config.auth_kind)
+    .bind(&config.headers_json)
+    .bind(&config.policy)
     .bind(now_ms())
     .fetch_one(pool)
     .await?;
@@ -67,30 +104,31 @@ pub async fn get_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<Server>
     Ok(row)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn update(
     pool: &SqlitePool,
     id: &str,
-    name: &str,
-    url: &str,
-    auth_kind: &str,
-    headers_json: &str,
-    policy: &str,
+    config: &ServerConfig,
     enabled: bool,
 ) -> Result<Server> {
     let row = sqlx::query_as::<_, Server>(
         r#"UPDATE servers SET
-             name = ?2, url = ?3, auth_kind = ?4, headers_json = ?5,
-             policy = ?6, enabled = ?7
+             name = ?2, url = ?3, transport = ?4, command = ?5, args_json = ?6,
+             env_json = ?7, cwd = ?8, auth_kind = ?9, headers_json = ?10,
+             policy = ?11, enabled = ?12
            WHERE id = ?1
            RETURNING *"#,
     )
     .bind(id)
-    .bind(name)
-    .bind(url)
-    .bind(auth_kind)
-    .bind(headers_json)
-    .bind(policy)
+    .bind(&config.name)
+    .bind(&config.url)
+    .bind(&config.transport)
+    .bind(&config.command)
+    .bind(&config.args_json)
+    .bind(&config.env_json)
+    .bind(&config.cwd)
+    .bind(&config.auth_kind)
+    .bind(&config.headers_json)
+    .bind(&config.policy)
     .bind(enabled as i64)
     .fetch_optional(pool)
     .await?
@@ -223,13 +261,15 @@ mod tests {
         let db = Db::open_memory().await.unwrap();
         let s = create(
             &db.pool,
-            "Mock",
-            "mock",
-            "http://127.0.0.1:8787/mcp",
-            "streamable_http",
-            "none",
-            "{}",
-            "ask",
+            &ServerConfig::http(
+                "Mock",
+                "mock",
+                "http://127.0.0.1:8787/mcp",
+                "streamable_http",
+                "none",
+                "{}",
+                "ask",
+            ),
         )
         .await
         .unwrap();
@@ -262,5 +302,59 @@ mod tests {
         let loaded = get(&db.pool, &s.id).await.unwrap();
         assert_eq!(loaded.protocol_version.as_deref(), Some("2026-07-28"));
         assert_eq!(loaded.last_status.as_deref(), Some("connected"));
+    }
+
+    #[tokio::test]
+    async fn stdio_server_fields_roundtrip() {
+        let db = Db::open_memory().await.unwrap();
+        let created = create(
+            &db.pool,
+            &ServerConfig {
+                name: "Local".into(),
+                slug: "local".into(),
+                url: String::new(),
+                transport: "stdio".into(),
+                command: "npx".into(),
+                args_json: r#"["-y","pkg"]"#.into(),
+                env_json: r#"{"TOKEN":"value"}"#.into(),
+                cwd: "/tmp".into(),
+                auth_kind: "none".into(),
+                headers_json: "{}".into(),
+                policy: "ask".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.transport, "stdio");
+        assert_eq!(created.command, "npx");
+        assert_eq!(created.args_json, r#"["-y","pkg"]"#);
+        assert_eq!(created.env_json, r#"{"TOKEN":"value"}"#);
+        assert_eq!(created.cwd, "/tmp");
+
+        let mut config = ServerConfig {
+            name: "Local edited".into(),
+            slug: "local".into(),
+            url: String::new(),
+            transport: "stdio".into(),
+            command: "uvx".into(),
+            args_json: r#"["server"]"#.into(),
+            env_json: "{}".into(),
+            cwd: String::new(),
+            auth_kind: "none".into(),
+            headers_json: "{}".into(),
+            policy: "auto".into(),
+        };
+        let updated = update(&db.pool, &created.id, &config, true).await.unwrap();
+        assert_eq!(updated.name, "Local edited");
+        assert_eq!(updated.command, "uvx");
+        assert_eq!(updated.policy, "auto");
+
+        config.transport = "streamable_http".into();
+        config.url = "https://example.com/mcp".into();
+        config.command.clear();
+        let updated = update(&db.pool, &created.id, &config, true).await.unwrap();
+        assert_eq!(updated.transport, "streamable_http");
+        assert_eq!(updated.url, "https://example.com/mcp");
+        assert!(updated.command.is_empty());
     }
 }

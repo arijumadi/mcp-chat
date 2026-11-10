@@ -7,7 +7,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::db::Db;
 use crate::db::repo::servers;
-use crate::mcp::client::{ClientConfig, McpClient, McpConnection, ProgressFn, headers_from_json};
+use crate::mcp::client::{
+    ClientConfig, McpClient, McpConnection, ProgressFn, args_from_json, env_from_json,
+    headers_from_json,
+};
 use crate::mcp::types::{ServerCapabilities, ServerInfo, ToolInfo, TransportKind};
 use crate::models::Server;
 use crate::secrets::{SecretStore, server_api_key_account, server_bearer_account};
@@ -50,7 +53,7 @@ impl McpManager {
         bearer: Option<String>,
         transport: Option<TransportKind>,
     ) -> Result<ConnectionReport> {
-        let config = ClientConfig {
+        self.test_config(ClientConfig {
             server_id: "test".into(),
             server_name: name.into(),
             server_slug: slug.into(),
@@ -58,7 +61,41 @@ impl McpManager {
             transport,
             headers,
             bearer,
-        };
+            command: String::new(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            cwd: None,
+        })
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn test_stdio(
+        &self,
+        name: &str,
+        slug: &str,
+        command: &str,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+        cwd: Option<String>,
+    ) -> Result<ConnectionReport> {
+        self.test_config(ClientConfig {
+            server_id: "test".into(),
+            server_name: name.into(),
+            server_slug: slug.into(),
+            url: String::new(),
+            transport: Some(TransportKind::Stdio),
+            headers: HashMap::new(),
+            bearer: None,
+            command: command.into(),
+            args,
+            env,
+            cwd,
+        })
+        .await
+    }
+
+    async fn test_config(&self, config: ClientConfig) -> Result<ConnectionReport> {
         let connection = McpClient::connect(config, CancellationToken::new()).await?;
         let tools = connection
             .client
@@ -75,11 +112,15 @@ impl McpManager {
     }
 
     pub async fn connect_server(&self, server: &Server) -> Result<Arc<McpConnection>> {
-        if let Some(connection) = self.connections.read().await.get(&server.id) {
-            return Ok(connection.clone());
+        if let Some(connection) = self.connections.read().await.get(&server.id).cloned() {
+            if !connection.client.is_closed() {
+                return Ok(connection);
+            }
+            self.connections.write().await.remove(&server.id);
         }
         let mut config = self.client_config(server).await?;
-        let cached_legacy = server.protocol_version.as_deref() == Some(MCP_LEGACY_VERSION);
+        let cached_legacy = server.transport != "stdio"
+            && server.protocol_version.as_deref() == Some(MCP_LEGACY_VERSION);
         if cached_legacy && config.transport.is_none() {
             config.transport = Some(TransportKind::LegacyHttp);
         }
@@ -133,6 +174,21 @@ impl McpManager {
     }
 
     async fn client_config(&self, server: &Server) -> Result<ClientConfig> {
+        if server.transport == "stdio" {
+            return Ok(ClientConfig {
+                server_id: server.id.clone(),
+                server_name: server.name.clone(),
+                server_slug: server.slug.clone(),
+                url: String::new(),
+                transport: Some(TransportKind::Stdio),
+                headers: HashMap::new(),
+                bearer: None,
+                command: server.command.clone(),
+                args: args_from_json(&server.args_json)?,
+                env: env_from_json(&server.env_json)?,
+                cwd: Some(server.cwd.clone()).filter(|cwd| !cwd.trim().is_empty()),
+            });
+        }
         let mut headers = headers_from_json(&server.headers_json)?;
         let bearer = match server.auth_kind.as_str() {
             "none" => None,
@@ -186,6 +242,10 @@ impl McpManager {
             transport,
             headers,
             bearer,
+            command: String::new(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            cwd: None,
         })
     }
 
