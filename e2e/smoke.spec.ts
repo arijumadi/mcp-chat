@@ -98,6 +98,21 @@ test("adds a local npx MCP server over stdio", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("a long path without spaces wraps inside the user bubble", async ({ page }) => {
+  await page.goto("/?mock=1");
+  await page.getByRole("button", { name: "New chat" }).first().click();
+  const composer = page.getByRole("textbox", { name: "Message" });
+  const longPath = `C:\\Users\\ari\\${"a".repeat(240)}.png`;
+  await composer.fill(longPath);
+  await composer.press("Enter");
+
+  const bubble = page.getByTestId("user-text").last();
+  await expect(bubble).toBeVisible();
+  await expect(bubble).toHaveText(longPath);
+  const overflow = await bubble.evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+});
+
 test("captures README screenshots", async ({ page }) => {
   await page.goto("/?mock=1");
   await page.getByText("Welcome to Jarvis").first().click();
