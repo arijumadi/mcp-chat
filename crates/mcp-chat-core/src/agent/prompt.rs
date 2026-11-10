@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use sqlx::SqlitePool;
 
@@ -100,6 +101,7 @@ pub async fn runtime_context(
     let scratch = workspace.join(".mcp-chat").join("tmp");
     let _ = tokio::fs::create_dir_all(&artifacts).await;
     let _ = tokio::fs::create_dir_all(&scratch).await;
+    ensure_git_excludes(&workspace);
     let mut parts = vec![environment_block(&workspace, &artifacts, &scratch)];
     if let Some(instructions) = agents_block(&workspace, output_dir) {
         parts.push(instructions);
@@ -120,6 +122,94 @@ pub async fn runtime_context(
         parts.push(lines.join("\n"));
     }
     Ok(parts.join("\n\n"))
+}
+
+const JARVIS_EXCLUDE_MARKER: &str = "# Jarvis local runtime";
+const JARVIS_EXCLUDES: [&str; 2] = ["**/.mcp-chat/artifacts/", "**/.mcp-chat/tmp/"];
+static EXCLUDE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Keep runtime output out of the workspace repo without touching a tracked
+/// `.gitignore`. The rules live in `.git/info/exclude`, which is local to this
+/// clone; `.mcp-chat/skills` and `.mcp-chat/AGENTS.md` stay committable.
+fn ensure_git_excludes(workspace: &Path) {
+    let Some(exclude) = git_exclude_path(workspace) else {
+        return;
+    };
+    let _guard = EXCLUDE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let existing = std::fs::read_to_string(&exclude).unwrap_or_default();
+    let mut additions = Vec::new();
+    if !existing
+        .lines()
+        .any(|line| line.trim() == JARVIS_EXCLUDE_MARKER)
+    {
+        additions.push(JARVIS_EXCLUDE_MARKER);
+    }
+    for pattern in JARVIS_EXCLUDES {
+        if !existing.lines().any(|line| line.trim() == pattern) {
+            additions.push(pattern);
+        }
+    }
+    if additions.is_empty() {
+        return;
+    }
+    let mut content = existing;
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    for line in additions {
+        content.push_str(line);
+        content.push('\n');
+    }
+    if let Some(parent) = exclude.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    let _ = std::fs::write(&exclude, content);
+}
+
+fn git_exclude_path(workspace: &Path) -> Option<PathBuf> {
+    let start = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    let mut directory = start.as_path();
+    loop {
+        let dot_git = directory.join(".git");
+        if let Ok(metadata) = std::fs::metadata(&dot_git) {
+            if metadata.is_dir() {
+                return Some(dot_git.join("info").join("exclude"));
+            }
+            if metadata.is_file() {
+                let contents = std::fs::read_to_string(&dot_git).ok()?;
+                let git_dir = contents
+                    .lines()
+                    .find_map(|line| line.trim().strip_prefix("gitdir:"))
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .map(PathBuf::from)?;
+                let git_dir = if git_dir.is_absolute() {
+                    git_dir
+                } else {
+                    directory.join(git_dir)
+                };
+                let common = std::fs::read_to_string(git_dir.join("commondir"))
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .lines()
+                            .next()
+                            .map(str::trim)
+                            .filter(|path| !path.is_empty())
+                            .map(|path| git_dir.join(path))
+                    })
+                    .unwrap_or(git_dir);
+                return Some(common.join("info").join("exclude"));
+            }
+        }
+        directory = directory.parent()?;
+    }
 }
 
 fn environment_block(workspace: &Path, artifacts: &Path, scratch: &Path) -> String {
@@ -208,6 +298,59 @@ mod tests {
     use super::*;
     use crate::db::Db;
     use crate::db::repo::settings;
+
+    #[test]
+    fn git_excludes_ignore_runtime_dirs_idempotently() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path();
+        std::fs::create_dir_all(repo.join(".git/info")).unwrap();
+        std::fs::write(repo.join(".git/info/exclude"), "*.log\n").unwrap();
+        let workspace = repo.join("nested").join("project");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        ensure_git_excludes(&workspace);
+        let exclude = repo.join(".git/info/exclude");
+        let content = std::fs::read_to_string(&exclude).unwrap();
+        assert!(content.contains("*.log"));
+        assert!(content.contains(JARVIS_EXCLUDE_MARKER));
+        assert!(content.contains("**/.mcp-chat/artifacts/"));
+        assert!(content.contains("**/.mcp-chat/tmp/"));
+        assert!(!content.contains(".mcp-chat/skills"));
+
+        ensure_git_excludes(&workspace);
+        let again = std::fs::read_to_string(exclude).unwrap();
+        assert_eq!(again, content);
+    }
+
+    #[test]
+    fn a_non_git_workspace_is_left_alone() {
+        let root = tempfile::tempdir().unwrap();
+        ensure_git_excludes(root.path());
+        assert!(!root.path().join(".git").exists());
+    }
+
+    #[test]
+    fn a_linked_worktree_uses_the_common_git_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let main = root.path().join("main");
+        std::fs::create_dir_all(main.join(".git/info")).unwrap();
+        let worktree_git = main.join(".git/worktrees/wt");
+        std::fs::create_dir_all(&worktree_git).unwrap();
+        std::fs::write(worktree_git.join("commondir"), "../..\n").unwrap();
+
+        let worktree = root.path().join("worktree");
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", worktree_git.display()),
+        )
+        .unwrap();
+
+        ensure_git_excludes(&worktree);
+        let content = std::fs::read_to_string(main.join(".git/info/exclude")).unwrap();
+        assert!(content.contains("**/.mcp-chat/artifacts/"));
+        assert!(content.contains("**/.mcp-chat/tmp/"));
+    }
 
     #[test]
     fn system_parts_keep_a_stable_order() {
