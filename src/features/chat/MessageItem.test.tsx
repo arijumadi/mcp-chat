@@ -77,6 +77,20 @@ describe("MessageItem", () => {
     expect(revertMessage).toHaveBeenCalledWith("m1");
   });
 
+  it("wraps a long path without spaces inside the user bubble", () => {
+    useApp.setState({ status: "idle" });
+    const longPath = `C:\\Users\\ari\\${"a".repeat(240)}.png`;
+    const item = message("user", [part("text", "text", { text: longPath })]);
+    render(<MessageItem message={item} canRetry={false} />);
+
+    const bubble = screen.getByTestId("user-text");
+    expect(bubble).toHaveTextContent(longPath);
+    expect(bubble).toHaveStyle({
+      overflowWrap: "anywhere",
+      wordBreak: "break-word",
+    });
+  });
+
   it("renders a file attachment on a user message", () => {
     useApp.setState({ status: "idle" });
     const item = message("user", [

@@ -59,8 +59,13 @@ export function MessageItem({
           ) : null}
           {text ? (
             <div
-              className="max-w-full rounded-2xl rounded-br-md px-4 py-2.5 text-[length:var(--fs-user)] whitespace-pre-wrap"
-              style={{ background: "var(--user)" }}
+              data-testid="user-text"
+              className="min-w-0 max-w-full rounded-2xl rounded-br-md px-4 py-2.5 text-[length:var(--fs-user)] whitespace-pre-wrap"
+              style={{
+                background: "var(--user)",
+                overflowWrap: "anywhere",
+                wordBreak: "break-word",
+              }}
             >
               {text}
             </div>
