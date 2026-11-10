@@ -91,7 +91,7 @@ export function ApprovalModal() {
                 size="sm"
                 variant="secondary"
                 onClick={() => void respond(approval.callId, "always")}
-                {...shortcutProps("approval.always", "Adds a saved rule for this tool")}
+                {...shortcutProps("approval.always", "Saves the rule shown above")}
               >
                 Always allow
               </Button>
@@ -120,6 +120,34 @@ export function ApprovalModal() {
           <span className="font-medium">{overrideParam(approval.server, approval.tool)} is on.</span>{" "}
           This command may write file contents directly. Normally that goes through{" "}
           {toolForRole("create_file")} or {toolForRole("modify_file")}.
+        </div>
+      ) : null}
+      {approval.allowAlways && approval.savePattern ? (
+        <div
+          data-testid="approval-rule"
+          className="mb-3 rounded-lg border px-3 py-2"
+          style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+        >
+          <div className="text-[11.5px] font-medium" style={{ color: "var(--muted)" }}>
+            Always allow will save
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[12px]">
+            <span style={{ color: "var(--muted)" }}>
+              {approval.action || approval.tool}
+            </span>
+            <span style={{ color: "var(--faint)" }}>→</span>
+            <code data-testid="approval-pattern" className="break-all" style={{ color: "var(--fg)" }}>
+              {approval.savePattern}
+            </code>
+          </div>
+          <p className="mt-1.5 text-[11.5px]" style={{ color: "var(--muted)" }}>
+            {approval.savePattern === approval.resource
+              ? "Exact rule: other arguments will still ask for approval."
+              : "Pattern rule: other commands matching this pattern will also be allowed. Use Allow once for this call only."}
+          </p>
+          <p className="mt-1 text-[11px]" style={{ color: "var(--faint)" }}>
+            Saved rules apply across chats.
+          </p>
         </div>
       ) : null}
       {approval.diff ? (

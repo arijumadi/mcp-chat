@@ -44,6 +44,35 @@ describe("ApprovalModal", () => {
     expect(screen.getByRole("button", { name: "Allow once" })).toBeInTheDocument();
   });
 
+  it("shows the exact pattern that Always allow will save", () => {
+    useApp.setState({
+      activeId: "c1",
+      respondApproval: vi.fn().mockResolvedValue(undefined),
+      approvals: [
+        {
+          type: "approval",
+          conversationId: "c1",
+          callId: "call-pattern",
+          server: "mcp-chat",
+          tool: "bash",
+          args: { command: "cat /logs/log_1.log" },
+          allowAlways: true,
+          action: "builtin.bash",
+          resource: "cat /logs/log_1.log",
+          savePattern: "cat *",
+          diff: null,
+        },
+      ],
+    });
+    render(<ApprovalModal />);
+    const rule = screen.getByTestId("approval-rule");
+    expect(rule).toHaveTextContent("Always allow will save");
+    expect(rule).toHaveTextContent("builtin.bash");
+    expect(screen.getByTestId("approval-pattern")).toHaveTextContent("cat *");
+    expect(rule).toHaveTextContent("Pattern rule");
+    expect(rule).toHaveTextContent("Saved rules apply across chats");
+  });
+
   it("calls out a bash command that is allowed to write file contents", () => {
     useApp.setState({
       activeId: "c1",

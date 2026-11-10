@@ -100,7 +100,7 @@ outcome
 
 Settlement invariant: every tool call gets exactly one terminal result, including unknown tools, schema failures, JSON-RPC errors, user rejection, cancellation, missing provider results and crash recovery. Startup `sweep_interrupted` marks dangling parts `aborted`; the context builder also synthesizes a tool result for any historic call that lacks one, so a crash never produces a transcript the provider rejects.
 
-Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*` globs on action (`mcp.<slug>.<tool>`) and a normalized resource (URL host/path/channel or `*`). “Always allow” appends a saved rule. Rejections with feedback become tool errors the model can read.
+Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*` globs on action (`mcp.<slug>.<tool>`) and a normalized resource (URL host/path/channel or `*`). “Always allow” appends a saved rule and the approval event carries the action, exact resource, and the pattern that will be saved. Shell calls use a conservative prefix (`cat *`, `git status *`, `npm run test *`) only for simple known-safe commands; compound, globbed, unknown, or risky commands keep the exact command. Rejections with feedback become tool errors the model can read.
 
 ## Decisions log
 
