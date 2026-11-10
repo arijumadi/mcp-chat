@@ -1,6 +1,6 @@
 # Jarvis
 
-A local-first desktop chat app for OpenAI-compatible and Anthropic models, with **remote MCP tools**, explicit approvals, and no telemetry.
+A local-first desktop chat app for OpenAI-compatible and Anthropic models, with **remote and local stdio MCP tools**, explicit approvals, and no telemetry.
 
 ![Chat with a tool card](docs/screenshots/chat.png)
 
@@ -9,6 +9,7 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 - Streaming chat from any OpenAI-compatible `/chat/completions` endpoint and from Anthropic `/v1/messages`.
 - Local SQLite transcripts with full-text search, inline rename, delete, regenerate and stop.
 - Remote MCP over **Streamable HTTP 2026-07-28** (stateless headers, `server/discover`, request-scoped SSE progress, MRTR input), with legacy **2025-11-25** `initialize` fallback and deprecated **HTTP+SSE** fallback.
+- Local MCP servers over **stdio**, including `npx` packages. Add a command, one argument per line, an optional working directory and optional environment variables; Jarvis keeps the child process alive between tool calls and stops it when the server is disabled, edited or deleted.
 - The model can call discovered MCP tools inside a normal turn. Tool calls and reasoning are grouped into a collapsible activity summary with the final answer below; detail cards stream live (`queued → running → ok / error`) and run in parallel (max 4). Any text the model emits before a tool call stays in the stored message for context but is not rendered as an interim note — detail cards show only thoughts and tools.
 - Per-chat MCP server selection with **lazy catalog + call** delivery. The MCP popover only selects which servers are active; there is no direct-schema mode. A compact server/tool/argument catalog goes in the system prompt, and the model calls `mcp_call_tool` directly (`mcp_get_tool_schema` only when it needs full JSON Schema; `mcp_search_tools` only when the catalog is truncated). `mcp_execute` runs up to 8 independent MCP calls in one step (4 in flight), so a multi-tool answer does not need many model round trips. Approval and policy checks still apply to each real target.
 - The model picker sits in the composer footer; the trigger shows only the model name after the final `/`, provider choices show only the provider name, and long model lists are searchable. Export conversation lives in Settings → Export conversation.
@@ -72,7 +73,7 @@ If you built this on a headless server and need to move it to a desktop, follow 
 Then in the app:
 
 1. **Settings → Add provider.** For a local OpenAI-compatible server use e.g. `http://127.0.0.1:11434/v1` and a model name; keys are optional for localhost.
-2. **MCP servers → Add server.** Use an HTTPS MCP endpoint (or localhost during development), choose a policy and run **Test connection**.
+2. **MCP servers → Add server.** Use an HTTPS MCP endpoint (or localhost during development), choose a policy and run **Test connection**. For a local server choose **Local command (stdio / npx)**, set Command to `npx`, then add the package and arguments one per line, for example `-y`, `@modelcontextprotocol/server-filesystem`, `/path/to/folder`.
 3. Create a chat and ask the model to use one of the server's tools.
 
 ## Mock server walkthrough
@@ -167,7 +168,7 @@ The approval shortcuts never fire while you are typing in a text field, so writi
 - All network I/O happens in Rust. The webview never calls LLM or MCP endpoints.
 - API keys and MCP bearer tokens are stored in the OS keychain (`com.mcpchat.app`), not SQLite or `localStorage`.
 - Markdown raw HTML is disabled, links are opened in the system browser, and remote images are not loaded.
-- MCP server URLs must be HTTPS, except loopback for development.
+- MCP server URLs must be HTTPS, except loopback for development. Local stdio servers run as child processes with your user permissions; only add commands and packages you trust. Stdio environment values are stored in the local SQLite database.
 - Request logs never include message content; `Authorization`/`Cookie` values are not logged.
 - CSP is strict and `connect-src` is limited to Tauri IPC. The only deviation from the prompt's CSP is the required `ipc:` / `http://ipc.localhost` entries for Tauri's invoke bridge; it is documented in `ARCHITECTURE.md`.
 

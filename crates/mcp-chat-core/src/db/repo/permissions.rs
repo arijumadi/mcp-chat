@@ -72,13 +72,15 @@ mod tests {
         let db = Db::open_memory().await.unwrap();
         let server = servers::create(
             &db.pool,
-            "Mock",
-            "mock",
-            "http://127.0.0.1:8787/mcp",
-            "streamable_http",
-            "none",
-            "{}",
-            "ask",
+            &servers::ServerConfig::http(
+                "Mock",
+                "mock",
+                "http://127.0.0.1:8787/mcp",
+                "streamable_http",
+                "none",
+                "{}",
+                "ask",
+            ),
         )
         .await
         .unwrap();

@@ -67,6 +67,10 @@ export function installMock(): void {
       slug: "mock",
       url: "http://127.0.0.1:8787/mcp",
       transport: "streamable_http",
+      command: "",
+      argsJson: "[]",
+      envJson: "{}",
+      cwd: "",
       authKind: "none",
       headersJson: "{}",
       enabled: true,
@@ -694,6 +698,11 @@ export function installMock(): void {
           name: String(input.name ?? "New MCP server"),
           slug: String(input.name ?? "server").toLowerCase().replace(/[^a-z0-9]+/g, "_"),
           url: String(input.url ?? ""),
+          transport: String(input.transport ?? "streamable_http"),
+          command: String(input.command ?? ""),
+          argsJson: String(input.argsJson ?? "[]"),
+          envJson: String(input.envJson ?? "{}"),
+          cwd: String(input.cwd ?? ""),
           policy: String(input.policy ?? "ask"),
           authKind: String(input.authKind ?? "none"),
           headersJson: String(input.headersJson ?? "{}"),
@@ -712,7 +721,18 @@ export function installMock(): void {
         return null;
       case "delete_server":
         return null;
-      case "test_server":
+      case "test_server": {
+        const input = (args.input ?? {}) as Record<string, unknown>;
+        const stdio = input.transport === "stdio";
+        return {
+          protocolVersion: stdio ? "2025-11-25" : "2026-07-28",
+          transport: stdio ? "stdio" : "streamable_http",
+          serverInfo: { name: stdio ? "mock-stdio" : "mock-modern", version: "1.0.0" },
+          capabilities: { tools: {} },
+          instructions: "Mock MCP server for mcp-chat tests",
+          tools: [TOOL],
+        } satisfies ConnectionReport;
+      }
       case "refresh_server":
         return {
           protocolVersion: "2026-07-28",

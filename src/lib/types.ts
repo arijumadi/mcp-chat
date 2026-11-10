@@ -101,7 +101,7 @@ export interface ProviderView extends Provider {
 
 export type ServerPolicy = "auto" | "ask" | "deny";
 export type AuthKind = "none" | "bearer" | "api_key" | "oauth";
-export type TransportKind = "streamable_http" | "legacy_http" | "sse";
+export type TransportKind = "streamable_http" | "legacy_http" | "sse" | "stdio";
 
 export interface Server {
   id: string;
@@ -109,6 +109,10 @@ export interface Server {
   slug: string;
   url: string;
   transport: TransportKind | string;
+  command: string;
+  argsJson: string;
+  envJson: string;
+  cwd: string;
   authKind: AuthKind | string;
   headersJson: string;
   enabled: boolean;
@@ -417,6 +421,10 @@ export interface ServerInput {
   bearer?: string;
   apiKey?: string;
   transport?: string;
+  command?: string;
+  argsJson?: string;
+  envJson?: string;
+  cwd?: string;
 }
 
 export interface TestServerInput {
@@ -428,4 +436,8 @@ export interface TestServerInput {
   bearer?: string;
   apiKey?: string;
   transport?: string;
+  command?: string;
+  argsJson?: string;
+  envJson?: string;
+  cwd?: string;
 }

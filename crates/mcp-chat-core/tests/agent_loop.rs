@@ -64,13 +64,15 @@ impl Harness {
         if let Some(policy) = server_policy {
             servers::create(
                 &db.pool,
-                "Mock MCP",
-                "mock",
-                &mcp.url,
-                "streamable_http",
-                "none",
-                "{}",
-                policy,
+                &servers::ServerConfig::http(
+                    "Mock MCP",
+                    "mock",
+                    &mcp.url,
+                    "streamable_http",
+                    "none",
+                    "{}",
+                    policy,
+                ),
             )
             .await
             .unwrap();

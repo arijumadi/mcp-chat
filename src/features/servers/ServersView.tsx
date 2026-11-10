@@ -19,6 +19,20 @@ import { formatJson } from "@/lib/format";
 import { inputClass } from "@/components/ui";
 import { ServerForm } from "./ServerForm";
 
+function commandLine(server: ServerView): string {
+  if (server.transport !== "stdio") return server.url;
+  let args: string[] = [];
+  try {
+    const parsed = JSON.parse(server.argsJson) as unknown;
+    if (Array.isArray(parsed)) {
+      args = parsed.filter((item): item is string => typeof item === "string");
+    }
+  } catch {
+    // The form reports invalid JSON; the card still shows the command.
+  }
+  return [server.command, ...args].filter(Boolean).join(" ");
+}
+
 export function ServersView() {
   const servers = useApp((state) => state.servers);
   const refreshServers = useApp((state) => state.refreshServers);
@@ -144,7 +158,7 @@ export function ServersView() {
         <div className="ml-1">
           <div className="text-[14px] font-medium">MCP servers</div>
           <div className="text-[10.5px]" style={{ color: "var(--faint)" }}>
-            remote Streamable HTTP · manual approval by default
+            remote HTTP + local stdio (npx) · manual approval by default
           </div>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
@@ -183,7 +197,7 @@ export function ServersView() {
               </div>
               <h2 className="text-[16px] font-medium">No MCP servers yet</h2>
               <p className="mt-1 max-w-sm text-[12.5px]" style={{ color: "var(--muted)" }}>
-                Connect a remote MCP server to expose its tools to the model. Tools stay hidden
+                Connect a remote MCP server, or run a local one through npx/stdio. Tools stay hidden
                 until the server answers discovery.
               </p>
               <Button
@@ -223,7 +237,7 @@ export function ServersView() {
                           className="mt-0.5 truncate font-mono text-[10.5px]"
                           style={{ color: "var(--faint)" }}
                         >
-                          {server.url}
+                          {commandLine(server)}
                         </div>
                         <div
                           className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px]"
@@ -236,12 +250,16 @@ export function ServersView() {
                           <span>
                             {server.transport === "sse"
                               ? "HTTP+SSE"
-                              : "streamable HTTP"}
+                              : server.transport === "stdio"
+                                ? "local stdio"
+                                : "streamable HTTP"}
                             {server.protocolVersion ? ` · ${server.protocolVersion}` : ""}
                           </span>
                           <span style={{ color: "var(--faint)" }}>·</span>
                           <span>
-                            auth: {server.authKind}
+                            {server.transport === "stdio"
+                              ? "local process"
+                              : `auth: ${server.authKind}`}
                             {server.authKind === "bearer" && !server.hasBearer
                               ? " (missing token)"
                               : ""}
@@ -393,8 +411,8 @@ export function ServersView() {
         }
       >
         <p className="text-[13.5px]" style={{ color: "var(--muted)" }}>
-          Its cached tools, permission rules and bearer token will be removed. Conversations keep
-          their transcripts.
+          Its cached tools, permission rules and stored credentials will be removed. A running
+          local process is stopped. Conversations keep their transcripts.
         </p>
       </Modal>
 

@@ -141,6 +141,7 @@ pub enum TransportKind {
     StreamableHttp,
     LegacyHttp,
     Sse,
+    Stdio,
 }
 
 impl TransportKind {
@@ -149,6 +150,7 @@ impl TransportKind {
             Self::StreamableHttp => "streamable_http",
             Self::LegacyHttp => "legacy_http",
             Self::Sse => "sse",
+            Self::Stdio => "stdio",
         }
     }
 
@@ -157,6 +159,7 @@ impl TransportKind {
             "streamable_http" => Some(Self::StreamableHttp),
             "legacy_http" => Some(Self::LegacyHttp),
             "sse" => Some(Self::Sse),
+            "stdio" => Some(Self::Stdio),
             _ => None,
         }
     }

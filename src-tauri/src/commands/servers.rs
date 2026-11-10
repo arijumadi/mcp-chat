@@ -1,12 +1,12 @@
-use std::collections::HashMap;
-
 use serde::Deserialize;
 use serde_json::Value;
 use tauri::State;
 use tokio_util::sync::CancellationToken;
 
 use mcp_chat_core::db::repo::{permissions, servers};
-use mcp_chat_core::mcp::client::{headers_from_json, validate_server_url};
+use mcp_chat_core::mcp::client::{
+    args_from_json, env_from_json, headers_from_json, validate_server_url,
+};
 use mcp_chat_core::mcp::manager::ConnectionReport;
 use mcp_chat_core::mcp::types::{CallToolResult, TransportKind};
 use mcp_chat_core::models::{AuthKind, Server, ServerPolicy, ServerView};
@@ -27,6 +27,10 @@ pub struct ServerInput {
     pub bearer: Option<String>,
     pub api_key: Option<String>,
     pub transport: Option<String>,
+    pub command: Option<String>,
+    pub args_json: Option<String>,
+    pub env_json: Option<String>,
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,30 +44,79 @@ pub struct TestServerInput {
     pub bearer: Option<String>,
     pub api_key: Option<String>,
     pub transport: Option<String>,
+    pub command: Option<String>,
+    pub args_json: Option<String>,
+    pub env_json: Option<String>,
+    pub cwd: Option<String>,
 }
 
-fn validate(
-    input: &ServerInput,
-) -> CmdResult<(String, HashMap<String, String>, String, TransportKind)> {
+struct ValidServer {
+    name: String,
+    url: String,
+    transport: TransportKind,
+    auth_kind: String,
+    headers_json: String,
+    policy: String,
+    command: String,
+    args_json: String,
+    env_json: String,
+    cwd: String,
+}
+
+fn validate(input: &ServerInput) -> CmdResult<ValidServer> {
     if input.name.trim().is_empty() {
         return Err("Server name is required".into());
-    }
-    validate_server_url(&input.url).map_err(cmd_err)?;
-    if AuthKind::parse(&input.auth_kind).is_none() {
-        return Err("Unknown auth kind".into());
     }
     if ServerPolicy::parse(&input.policy).is_none() {
         return Err("Unknown policy".into());
     }
-    let headers_json = input.headers_json.clone().unwrap_or_else(|| "{}".into());
-    let headers = headers_from_json(&headers_json).map_err(cmd_err)?;
     let transport = match input.transport.as_deref() {
         Some(value) => {
             TransportKind::parse(value).ok_or_else(|| "Unknown transport".to_string())?
         }
         None => TransportKind::StreamableHttp,
     };
-    Ok((headers_json, headers, input.policy.clone(), transport))
+    if transport == TransportKind::Stdio {
+        let command = input.command.clone().unwrap_or_default();
+        if command.trim().is_empty() {
+            return Err("A command is required for a local MCP server".into());
+        }
+        let args_json = input.args_json.clone().unwrap_or_else(|| "[]".into());
+        args_from_json(&args_json).map_err(cmd_err)?;
+        let env_json = input.env_json.clone().unwrap_or_else(|| "{}".into());
+        env_from_json(&env_json).map_err(cmd_err)?;
+        return Ok(ValidServer {
+            name: input.name.trim().to_owned(),
+            url: String::new(),
+            transport,
+            auth_kind: "none".into(),
+            headers_json: "{}".into(),
+            policy: input.policy.clone(),
+            command: command.trim().to_owned(),
+            args_json,
+            env_json,
+            cwd: input.cwd.clone().unwrap_or_default().trim().to_owned(),
+        });
+    }
+
+    validate_server_url(&input.url).map_err(cmd_err)?;
+    if AuthKind::parse(&input.auth_kind).is_none() {
+        return Err("Unknown auth kind".into());
+    }
+    let headers_json = input.headers_json.clone().unwrap_or_else(|| "{}".into());
+    headers_from_json(&headers_json).map_err(cmd_err)?;
+    Ok(ValidServer {
+        name: input.name.trim().to_owned(),
+        url: input.url.trim().to_owned(),
+        transport,
+        auth_kind: input.auth_kind.clone(),
+        headers_json,
+        policy: input.policy.clone(),
+        command: String::new(),
+        args_json: "[]".into(),
+        env_json: "{}".into(),
+        cwd: String::new(),
+    })
 }
 
 async fn unique_slug(state: &AppState, name: &str) -> String {
@@ -134,8 +187,8 @@ pub async fn create_server(
     state: State<'_, AppState>,
     input: ServerInput,
 ) -> CmdResult<ServerView> {
-    let (headers_json, _headers, policy, transport) = validate(&input)?;
-    if input.auth_kind == "oauth" {
+    let valid = validate(&input)?;
+    if valid.auth_kind == "oauth" {
         return Err(
             "OAuth servers are set up in the OAuth milestone; use a bearer token or none for now."
                 .into(),
@@ -144,17 +197,23 @@ pub async fn create_server(
     let slug = unique_slug(&state, &input.name).await;
     let server = servers::create(
         &state.db.pool,
-        input.name.trim(),
-        &slug,
-        input.url.trim(),
-        transport.as_str(),
-        &input.auth_kind,
-        &headers_json,
-        &policy,
+        &servers::ServerConfig {
+            name: valid.name,
+            slug,
+            url: valid.url,
+            transport: valid.transport.as_str().into(),
+            command: valid.command,
+            args_json: valid.args_json,
+            env_json: valid.env_json,
+            cwd: valid.cwd,
+            auth_kind: valid.auth_kind.clone(),
+            headers_json: valid.headers_json,
+            policy: valid.policy,
+        },
     )
     .await
     .map_err(cmd_err)?;
-    if input.auth_kind == "bearer" {
+    if valid.auth_kind == "bearer" {
         if let Some(token) = input
             .bearer
             .as_deref()
@@ -167,7 +226,7 @@ pub async fn create_server(
                 .map_err(cmd_err)?;
         }
     }
-    if input.auth_kind == "api_key" {
+    if valid.auth_kind == "api_key" {
         if let Some(token) = input
             .api_key
             .as_deref()
@@ -193,31 +252,34 @@ pub async fn update_server(
     server_id: String,
     input: ServerInput,
 ) -> CmdResult<ServerView> {
-    let (headers_json, _headers, policy, transport) = validate(&input)?;
-    if input.auth_kind == "oauth" {
+    let valid = validate(&input)?;
+    if valid.auth_kind == "oauth" {
         return Err("OAuth servers are set up in the OAuth milestone.".into());
     }
     let existing = servers::get(&state.db.pool, &server_id)
         .await
         .map_err(cmd_err)?;
-    let server = servers::update(
+    servers::update(
         &state.db.pool,
         &server_id,
-        input.name.trim(),
-        input.url.trim(),
-        &input.auth_kind,
-        &headers_json,
-        &policy,
+        &servers::ServerConfig {
+            name: valid.name,
+            slug: existing.slug.clone(),
+            url: valid.url,
+            transport: valid.transport.as_str().into(),
+            command: valid.command,
+            args_json: valid.args_json,
+            env_json: valid.env_json,
+            cwd: valid.cwd,
+            auth_kind: valid.auth_kind.clone(),
+            headers_json: valid.headers_json,
+            policy: valid.policy,
+        },
         existing.enabled,
     )
     .await
     .map_err(cmd_err)?;
-    if server.transport != transport.as_str() {
-        servers::set_transport(&state.db.pool, &server_id, transport.as_str())
-            .await
-            .map_err(cmd_err)?;
-    }
-    if input.auth_kind == "bearer" {
+    if valid.auth_kind == "bearer" {
         if let Some(token) = input
             .bearer
             .as_deref()
@@ -230,7 +292,7 @@ pub async fn update_server(
                 .map_err(cmd_err)?;
         }
     }
-    if input.auth_kind == "api_key" {
+    if valid.auth_kind == "api_key" {
         if let Some(token) = input
             .api_key
             .as_deref()
@@ -243,13 +305,13 @@ pub async fn update_server(
                 .map_err(cmd_err)?;
         }
     }
-    if input.auth_kind != "bearer" {
+    if valid.auth_kind != "bearer" {
         let _ = state
             .secrets
             .delete(&server_bearer_account(&server_id))
             .await;
     }
-    if input.auth_kind != "api_key" {
+    if valid.auth_kind != "api_key" {
         let _ = state
             .secrets
             .delete(&server_api_key_account(&server_id))
@@ -322,6 +384,34 @@ pub async fn test_server(
     state: State<'_, AppState>,
     input: TestServerInput,
 ) -> CmdResult<ConnectionReport> {
+    let transport = input.transport.as_deref().and_then(TransportKind::parse);
+    if transport == Some(TransportKind::Stdio) {
+        let command = input.command.clone().unwrap_or_default();
+        if command.trim().is_empty() {
+            return Err("A command is required for a local MCP server".into());
+        }
+        let args_json = input.args_json.clone().unwrap_or_else(|| "[]".into());
+        let args = args_from_json(&args_json).map_err(cmd_err)?;
+        let env_json = input.env_json.clone().unwrap_or_else(|| "{}".into());
+        let env = env_from_json(&env_json).map_err(cmd_err)?;
+        let cwd = input
+            .cwd
+            .clone()
+            .map(|cwd| cwd.trim().to_owned())
+            .filter(|cwd| !cwd.is_empty());
+        return state
+            .mcp
+            .test_stdio(
+                &input.name,
+                &slugify(&input.name),
+                command.trim(),
+                args,
+                env,
+                cwd,
+            )
+            .await
+            .map_err(cmd_err);
+    }
     validate_server_url(&input.url).map_err(cmd_err)?;
     let headers_json = input.headers_json.clone().unwrap_or_else(|| "{}".into());
     let mut headers = headers_from_json(&headers_json).map_err(cmd_err)?;
@@ -361,7 +451,6 @@ pub async fn test_server(
     if input.auth_kind == "oauth" {
         return Err("OAuth servers are set up in the OAuth milestone.".into());
     }
-    let transport = input.transport.as_deref().and_then(TransportKind::parse);
     state
         .mcp
         .test(

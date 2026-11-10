@@ -57,6 +57,7 @@ Synthetic user messages (continue prompts, max-step notices) are ordinary rows w
 | Legacy `initialize` fails with 404/405/transport error, or the URL ends in `/sse` | Deprecated HTTP+SSE: GET the URL, wait for the `endpoint` event, POST to it, correlate responses from the long-lived GET stream. |
 | Any modern error such as `-32020` header mismatch or `-32021` missing capability | No fallback; humanized error surface. |
 | Cached `2025-11-25` protocol in SQLite | Try legacy directly; on failure clear the assumption and re-probe. |
+| Transport is `stdio` | Spawn the configured command, exchange newline-delimited JSON-RPC over stdin/stdout, run the `2025-11-25` `initialize` handshake once, and keep the child process alive until the server is edited, disabled or deleted. `npx`/`npm`/`pnpm`/`yarn`/`bunx`/`uvx` are wrapped through `cmd.exe` on Windows. Stderr is drained to the app log. |
 
 Tool mapping:
 
@@ -133,6 +134,7 @@ Per-server policy defaults to `ask`; rules are evaluated last-match-wins with `*
 | MCP modern | discover, tools/list, tools/call, headers, `_meta`, progress, MRTR, x-mcp-header, 50 KB payload |
 | MCP legacy | fallback initialize, session header, tools |
 | MCP HTTP+SSE | endpoint event, GET response correlation, tools call |
+| MCP stdio | newline JSON-RPC handshake, tools/list, tools/call, progress, missing command, args/env validation |
 | Namespacing | sanitize, collisions, remote-name mapping |
 | Permissions | last-match-wins, glob, default policy, resource normalization |
 | Agent | text, tool loop, parallel, invalid args, unknown tool, policy deny, approval/rejection/always, auto-approve, per-chat server gating, lazy catalog/schema/call, batch execute, read_tool_output paging, built-in file/shell/search/skill/question tools, skill references and outside-workspace read-only access, shell labels/echo handling, loop guard, steering, optional max steps, continue-turn resume, layered prompt/AGENTS/skill catalog, default time/Jarvis prompt, cache-stable system prompt, length, cut, overflow, manual compaction/context status, guided/cache-aware compaction, unknown finish, retries, spill/paging |
@@ -175,6 +177,7 @@ Notifications are decided in `lib/notifications.ts` (pure: given an event and wh
 - **M6 OAuth is not implemented.** Static bearer tokens and per-server `X-API-Key` headers (value in the OS keychain) work; the OAuth option is disabled. `oauth_issuer`/`oauth_client_id` columns are reserved, and `McpManager` already looks up tokens by issuer, but there is no DCR/PKCE/loopback/refresh flow yet.
 - **Native installers are built on the target OS.** `tauri.conf.json`, platform icons, NSIS artwork and packaging scripts are in the repository, but no Windows/macOS/Linux bundle was produced on the headless host. Follow `PACKAGING.md` on a desktop or CI runner. Automatic updates and MSIX are not implemented.
 - **Legacy Streamable HTTP does not open the optional GET notification stream.** Responses to POST requests are handled; server-initiated messages on a legacy GET stream are not consumed.
+- **Stdio servers cannot open client-side elicitation/sampling/roots handlers.** Notifications and progress are handled, but server-initiated requests are declined with JSON-RPC `-32601`; the stdio `initialize` therefore advertises no client capabilities.
 - **`subscriptions/listen` is not implemented.** The `MCP_SUBSCRIPTIONS=1` path and `toolsListChanged` invalidation are deferred.
 - **Background compaction is not implemented.** Compaction runs before a step or on context overflow; it is not precomputed at ~85% like OpenCode V2’s experimental background mode.
 - **Real keychain, real API key and native window were not exercised.** Keyring is behind the `SecretStore` trait and is replaced with an in-memory store in tests. The UI screenshots use the mock IPC bridge.
