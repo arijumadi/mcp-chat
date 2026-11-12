@@ -22,6 +22,7 @@ import type {
   SearchHit,
   ServerView,
   TurnStatus,
+  UpdateInfo,
   UsageEvent,
 } from "@/lib/types";
 
@@ -64,6 +65,9 @@ export interface AppStore {
   servers: ServerView[];
   settings: Record<string, string>;
   appInfo: AppInfo | null;
+  updateInfo: UpdateInfo | null;
+  updateChecking: boolean;
+  updateError: string | null;
   view: View;
   sidebarOpen: boolean;
   status: TurnStatus;
@@ -85,6 +89,7 @@ export interface AppStore {
   refreshProviders: () => Promise<void>;
   refreshServers: () => Promise<void>;
   refreshSettings: () => Promise<void>;
+  checkForUpdate: (manual?: boolean) => Promise<void>;
   openConversation: (id: string) => Promise<void>;
   newChat: (seed?: string) => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
@@ -163,6 +168,9 @@ export const useApp = create<AppStore>()((set, get) => ({
   servers: [],
   settings: {},
   appInfo: null,
+  updateInfo: null,
+  updateChecking: false,
+  updateError: null,
   view: "chat",
   sidebarOpen: true,
   status: "idle",
@@ -204,6 +212,9 @@ export const useApp = create<AppStore>()((set, get) => ({
         conversationHasMore: conversations.length >= 200,
         booted: true,
       });
+      if (settings["update.check_on_startup"] !== "0") {
+        void get().checkForUpdate(false);
+      }
     } catch (error) {
       set({ booted: true });
       get().toast(String(error), "error");
@@ -270,6 +281,36 @@ export const useApp = create<AppStore>()((set, get) => ({
       set({ settings: await call<Record<string, string>>("list_settings") });
     } catch (error) {
       get().toast(String(error), "error");
+    }
+  },
+
+  async checkForUpdate(manual = false) {
+    if (get().updateChecking) return;
+    set({
+      updateChecking: true,
+      ...(manual ? { updateError: null, updateInfo: null } : {}),
+    });
+    try {
+      const info = await call<UpdateInfo>("check_for_update");
+      set({ updateInfo: info, updateChecking: false, updateError: null });
+      if (info.available) {
+        get().toast(`Jarvis ${info.latestVersion} is available.`, "info", [
+          {
+            label: "View release",
+            onClick: () => {
+              void call("open_external", { url: info.url }).catch((error) =>
+                get().toast(String(error), "error"),
+              );
+            },
+          },
+        ]);
+      } else if (manual) {
+        get().toast(`Jarvis ${info.currentVersion} is up to date.`, "info");
+      }
+    } catch (error) {
+      const message = String(error);
+      set({ updateChecking: false, updateError: message });
+      if (manual) get().toast(message, "error");
     }
   },
 

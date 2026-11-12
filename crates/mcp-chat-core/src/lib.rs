@@ -7,6 +7,7 @@ pub mod llm;
 pub mod mcp;
 pub mod models;
 pub mod secrets;
+pub mod updates;
 pub mod util;
 
 pub use error::{CoreError, Result};

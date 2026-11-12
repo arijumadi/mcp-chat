@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyCoreEvent, parsePayload, useApp, type AppStore } from "./store";
 import type { CoreEvent } from "@/lib/types";
 
@@ -23,6 +23,10 @@ beforeEach(() => {
     inputRequests: [],
     status: "idle",
     streamingMessageId: null,
+    updateInfo: null,
+    updateChecking: false,
+    updateError: null,
+    toasts: [],
   });
 });
 
@@ -373,6 +377,34 @@ describe("transcript event reducer", () => {
     });
     expect(get().messages[0]!.parts[0]!.payloadJson).toContain("the answer");
     expect(get().messages[0]!.status).toBe("completed");
+  });
+
+  it("checks for updates and surfaces an available release", async () => {
+    const invoke = vi.fn(async (command: string) => {
+      if (command === "check_for_update") {
+        return {
+          currentVersion: "0.3.23",
+          latestVersion: "0.3.24",
+          available: true,
+          name: "Jarvis 0.3.24",
+          notes: "Update notes",
+          url: "https://github.com/arijumadi/mcp-chat/releases/tag/v0.3.24",
+          publishedAt: null,
+        };
+      }
+      return [];
+    });
+    window.__MCP_CHAT_MOCK__ = {
+      invoke: invoke as never,
+      subscribe: () => () => undefined,
+    };
+
+    await get().checkForUpdate(true);
+
+    expect(get().updateInfo?.latestVersion).toBe("0.3.24");
+    expect(get().updateChecking).toBe(false);
+    expect(get().toasts[0]?.text).toContain("Jarvis 0.3.24 is available");
+    expect(get().toasts[0]?.actions?.[0]?.label).toBe("View release");
   });
 
   it("keeps the open conversation when a list refresh misses it", async () => {
