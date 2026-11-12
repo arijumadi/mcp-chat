@@ -4,6 +4,7 @@ import {
   Check,
   ChevronDown,
   Database,
+  Download,
   ExternalLink,
   FileJson,
   FileText,
@@ -36,8 +37,11 @@ export function SettingsView() {
   const appInfo = useApp((state) => state.appInfo);
   const updateInfo = useApp((state) => state.updateInfo);
   const updateChecking = useApp((state) => state.updateChecking);
+  const updateInstalling = useApp((state) => state.updateInstalling);
+  const updateProgress = useApp((state) => state.updateProgress);
   const updateError = useApp((state) => state.updateError);
   const checkForUpdate = useApp((state) => state.checkForUpdate);
+  const installUpdate = useApp((state) => state.installUpdate);
   const providers = useApp((state) => state.providers);
   const settings = useApp((state) => state.settings);
   const refreshProviders = useApp((state) => state.refreshProviders);
@@ -70,6 +74,7 @@ export function SettingsView() {
   );
   const [savingContext, setSavingContext] = useState(false);
   const [savingUpdateSetting, setSavingUpdateSetting] = useState(false);
+  const [savingAutoInstall, setSavingAutoInstall] = useState(false);
   const [exportId, setExportId] = useState(activeId ?? conversations[0]?.id ?? "");
   const compactionKeepSetting = settings["compaction.keep_tokens"];
   const compactionBufferSetting = settings["compaction.buffer"];
@@ -94,6 +99,7 @@ export function SettingsView() {
 
   const theme = (settings.theme as "system" | "light" | "dark") ?? "system";
   const checkOnStartup = settings["update.check_on_startup"] !== "0";
+  const autoInstall = settings["update.auto_install"] === "1";
 
   const setUpdateCheckOnStartup = async (enabled: boolean) => {
     setSavingUpdateSetting(true);
@@ -107,6 +113,21 @@ export function SettingsView() {
       toast(String(error), "error");
     } finally {
       setSavingUpdateSetting(false);
+    }
+  };
+
+  const setUpdateAutoInstall = async (enabled: boolean) => {
+    setSavingAutoInstall(true);
+    try {
+      await call("set_setting", {
+        key: "update.auto_install",
+        value: enabled ? "1" : "0",
+      });
+      await refreshSettings();
+    } catch (error) {
+      toast(String(error), "error");
+    } finally {
+      setSavingAutoInstall(false);
     }
   };
 
@@ -612,6 +633,23 @@ export function SettingsView() {
                 Check for updates on startup
               </label>
 
+              {appInfo?.autoUpdate ? (
+                <label className="mt-1.5 flex items-center gap-2 text-[11.5px]" style={{ color: "var(--muted)" }}>
+                  <input
+                    type="checkbox"
+                    checked={autoInstall}
+                    disabled={savingAutoInstall}
+                    onChange={(event) => void setUpdateAutoInstall(event.target.checked)}
+                    style={{ accentColor: "var(--accent)" }}
+                  />
+                  Install updates automatically after the startup check
+                </label>
+              ) : (
+                <div className="mt-1.5 text-[11px]" style={{ color: "var(--faint)" }}>
+                  Automatic install is unavailable for this package. Use View release to download it.
+                </div>
+              )}
+
               {updateInfo?.available ? (
                 <div
                   className="mt-3 rounded-lg border px-3 py-3"
@@ -623,19 +661,39 @@ export function SettingsView() {
                         Jarvis {updateInfo.latestVersion} is available
                       </div>
                       <div className="mt-0.5 text-[11.5px]" style={{ color: "var(--muted)" }}>
-                        You are on {updateInfo.currentVersion}. Review the release, then download
-                        and install it manually.
+                        You are on {updateInfo.currentVersion}. Review the release, then{" "}
+                        {appInfo?.autoUpdate ? "install it here." : "download and install it manually."}
                       </div>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      icon={<ExternalLink size={12} />}
-                      onClick={openUpdateRelease}
-                    >
-                      View release
-                    </Button>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {appInfo?.autoUpdate ? (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          icon={<Download size={12} />}
+                          loading={updateInstalling}
+                          onClick={() => void installUpdate()}
+                        >
+                          {updateInstalling ? "Installing…" : "Install update"}
+                        </Button>
+                      ) : null}
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        icon={<ExternalLink size={12} />}
+                        onClick={openUpdateRelease}
+                      >
+                        View release
+                      </Button>
+                    </div>
                   </div>
+                  {updateInstalling ? (
+                    <div className="mt-2 text-[11px]" style={{ color: "var(--accent)" }}>
+                      {updateProgress != null
+                        ? `Downloading update… ${Math.round(updateProgress * 100)}%`
+                        : "Preparing update…"}
+                    </div>
+                  ) : null}
                   {updateInfo.notes ? (
                     <details className="mt-2">
                       <summary

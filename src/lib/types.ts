@@ -381,6 +381,7 @@ export interface AppInfo {
   dataDir: string;
   workspaceDir: string;
   platform: string;
+  autoUpdate: boolean;
 }
 
 export interface UpdateInfo {

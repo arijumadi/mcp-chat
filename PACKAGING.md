@@ -118,6 +118,47 @@ Install the NSIS setup on a clean Windows VM or another user account, then verif
 
 If you want to remove local data before uninstalling, use **Settings → Delete all data** first.
 
+## Updates and updater signing
+
+The Tauri updater requires a signing key even though the app also has an optional OS code-signing certificate. Generate the updater key once and keep it safe:
+
+```bash
+pnpm tauri signer generate -w ~/.tauri/jarvis-updater.key
+```
+
+- Put the **private** key content in the GitHub secret `TAURI_SIGNING_PRIVATE_KEY`.
+- Keep the public key at `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
+- Never commit the private key or its password.
+- Losing the private key means existing installations cannot receive signed updates.
+
+The build sets `bundle.createUpdaterArtifacts` and produces `.sig` files for Windows NSIS and Linux AppImage. Linux `.deb` is not self-updatable; it is still published for manual installation.
+
+On a `v*` tag, GitHub Actions builds the artifacts, signs them, creates a **draft** release, and attaches:
+
+- Windows NSIS `.exe` + `.exe.sig`
+- Linux `.deb`
+- Linux `.AppImage` + `.AppImage.sig`
+- `latest.json`
+- `SHA256SUMS.txt`
+
+Edit the draft release notes and publish it. The updater endpoint is:
+
+```text
+https://github.com/arijumadi/mcp-chat/releases/latest/download/latest.json
+```
+
+To generate `latest.json` manually from downloaded artifacts:
+
+```bash
+node scripts/latest-json.mjs \
+  --version 0.3.24 \
+  --windows Jarvis_0.3.24_x64-setup.exe \
+  --windows-sig Jarvis_0.3.24_x64-setup.exe.sig \
+  --linux Jarvis_0.3.24_amd64.AppImage \
+  --linux-sig Jarvis_0.3.24_amd64.AppImage.sig \
+  --output latest.json
+```
+
 ## macOS
 
 Build on macOS with the Tauri prerequisites:
@@ -159,7 +200,6 @@ Regenerate or replace those separately if the brand changes.
 
 ## Not included yet
 
-- automatic download/install and Tauri updater signatures (check-only update notices are implemented);
+- self-update for Linux `.deb` (the package manager owns it; use the AppImage for auto-update);
 - Microsoft Store MSIX packaging;
-- a hosted CI release pipeline;
 - notarized macOS builds (the configuration is prepared, but a certificate is required).

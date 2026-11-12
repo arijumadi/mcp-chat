@@ -20,6 +20,8 @@ jobs:
   windows:
     name: Windows NSIS installer
     runs-on: windows-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -60,13 +62,17 @@ jobs:
           name: jarvis-windows-nsis
           path: |
             target/release/bundle/nsis/*.exe
+            target/release/bundle/nsis/*.exe.sig
             src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sig
           if-no-files-found: error
           retention-days: 14
 
   linux-deb:
-    name: Linux .deb package
+    name: Linux .deb and AppImage packages
     runs-on: ubuntu-24.04
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -109,8 +115,8 @@ jobs:
       - name: Verify versions
         run: pnpm version:check
 
-      - name: Build .deb package
-        run: pnpm tauri build --bundles deb
+      - name: Build .deb and AppImage packages
+        run: pnpm tauri build --bundles deb,appimage
 
       - name: Upload Debian package
         uses: actions/upload-artifact@v7
@@ -121,3 +127,77 @@ jobs:
             src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v7
+        with:
+          name: jarvis-linux-appimage
+          path: |
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/appimage/*.AppImage.sig
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/appimage/*.AppImage.sig
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Prepare draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux-deb]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: jarvis-windows-nsis
+          path: downloaded/windows
+
+      - name: Download Debian artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: jarvis-linux-deb
+          path: downloaded/deb
+
+      - name: Download AppImage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: jarvis-linux-appimage
+          path: downloaded/appimage
+
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          WIN=$(find downloaded/windows -type f -name 'Jarvis_*_x64-setup.exe' | head -n1)
+          APP=$(find downloaded/appimage -type f -name 'Jarvis_*.AppImage' | head -n1)
+          DEB=$(find downloaded/deb -type f -name 'Jarvis_*.deb' | head -n1)
+          test -n "$WIN" && test -n "$APP" && test -n "$DEB"
+          cp "$WIN" "$WIN.sig" "$APP" "$APP.sig" "$DEB" release/
+          node scripts/latest-json.mjs \
+            --version "$GITHUB_REF_NAME" \
+            --windows "$WIN" \
+            --windows-sig "$WIN.sig" \
+            --linux "$APP" \
+            --linux-sig "$APP.sig" \
+            --repo "$GITHUB_REPOSITORY" \
+            --output release/latest.json
+          cd release
+          sha256sum Jarvis_*.exe Jarvis_*.deb Jarvis_*.AppImage > SHA256SUMS.txt
+
+      - name: Create draft release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --title "Jarvis ${GITHUB_REF_NAME#v}" \
+              --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" release/* --clobber

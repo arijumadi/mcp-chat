@@ -1,0 +1,4 @@
+# The app requires Rust 1.90 for the updater plugin, but the existing source
+# intentionally avoids let-chain churn. Keep Clippy's lint suggestions at the
+# older style baseline until that syntax is adopted separately.
+msrv = "1.85"
