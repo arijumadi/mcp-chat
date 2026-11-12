@@ -8,6 +8,7 @@ import type {
   ProviderView,
   ServerView,
   ToolInfo,
+  UpdateInfo,
 } from "./types";
 import type { MockBridge } from "./ipc";
 
@@ -342,6 +343,16 @@ export function installMock(): void {
           workspaceDir: "/home/you/project",
           platform: "linux",
         };
+      case "check_for_update":
+        return {
+          currentVersion: "0.1.0-mock",
+          latestVersion: "0.1.0-mock",
+          available: false,
+          name: null,
+          notes: null,
+          url: "",
+          publishedAt: null,
+        } satisfies UpdateInfo;
       case "list_settings":
         return { ...settingsStore };
       case "set_setting":

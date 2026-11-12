@@ -139,6 +139,7 @@ pub fn run() {
             commands::settings::delete_all_data,
             commands::settings::open_external,
             commands::settings::open_data_dir,
+            commands::updates::check_for_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running mcp-chat");

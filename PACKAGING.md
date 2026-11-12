@@ -159,7 +159,7 @@ Regenerate or replace those separately if the brand changes.
 
 ## Not included yet
 
-- automatic updates / Tauri updater signatures;
+- automatic download/install and Tauri updater signatures (check-only update notices are implemented);
 - Microsoft Store MSIX packaging;
 - a hosted CI release pipeline;
 - notarized macOS builds (the configuration is prepared, but a certificate is required).

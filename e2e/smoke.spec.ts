@@ -47,6 +47,8 @@ test("settings and MCP screens render", async ({ page }) => {
   await page.getByRole("complementary").getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "Providers" })).toBeVisible();
   await expect(page.getByText("Mock provider")).toBeVisible();
+  await page.getByRole("button", { name: "Check for updates" }).click();
+  await expect(page.getByText("You're up to date.")).toBeVisible();
 
   await page.getByRole("complementary").getByRole("button", { name: "MCP servers" }).click();
   await expect(page.getByText("Mock MCP").first()).toBeVisible();

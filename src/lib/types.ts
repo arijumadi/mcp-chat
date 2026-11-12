@@ -383,6 +383,16 @@ export interface AppInfo {
   platform: string;
 }
 
+export interface UpdateInfo {
+  currentVersion: string;
+  latestVersion: string;
+  available: boolean;
+  name: string | null;
+  notes: string | null;
+  url: string;
+  publishedAt: string | null;
+}
+
 export interface KeyTest {
   ok: boolean;
   models: string[];

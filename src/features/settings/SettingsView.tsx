@@ -14,6 +14,7 @@ import {
   Moon,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   ShieldCheck,
   Sun,
@@ -33,6 +34,10 @@ import { DEFAULT_SYSTEM_PROMPT } from "@/lib/defaults";
 
 export function SettingsView() {
   const appInfo = useApp((state) => state.appInfo);
+  const updateInfo = useApp((state) => state.updateInfo);
+  const updateChecking = useApp((state) => state.updateChecking);
+  const updateError = useApp((state) => state.updateError);
+  const checkForUpdate = useApp((state) => state.checkForUpdate);
   const providers = useApp((state) => state.providers);
   const settings = useApp((state) => state.settings);
   const refreshProviders = useApp((state) => state.refreshProviders);
@@ -64,6 +69,7 @@ export function SettingsView() {
     Number(settings["compaction.buffer"] ?? 0),
   );
   const [savingContext, setSavingContext] = useState(false);
+  const [savingUpdateSetting, setSavingUpdateSetting] = useState(false);
   const [exportId, setExportId] = useState(activeId ?? conversations[0]?.id ?? "");
   const compactionKeepSetting = settings["compaction.keep_tokens"];
   const compactionBufferSetting = settings["compaction.buffer"];
@@ -87,6 +93,29 @@ export function SettingsView() {
   }, [compactionKeepSetting, compactionBufferSetting]);
 
   const theme = (settings.theme as "system" | "light" | "dark") ?? "system";
+  const checkOnStartup = settings["update.check_on_startup"] !== "0";
+
+  const setUpdateCheckOnStartup = async (enabled: boolean) => {
+    setSavingUpdateSetting(true);
+    try {
+      await call("set_setting", {
+        key: "update.check_on_startup",
+        value: enabled ? "1" : "0",
+      });
+      await refreshSettings();
+    } catch (error) {
+      toast(String(error), "error");
+    } finally {
+      setSavingUpdateSetting(false);
+    }
+  };
+
+  const openUpdateRelease = () => {
+    if (!updateInfo?.url) return;
+    void call("open_external", { url: updateInfo.url }).catch((error) =>
+      toast(String(error), "error"),
+    );
+  };
 
   const test = async (provider: ProviderView) => {
     setTesting(provider.id);
@@ -534,13 +563,115 @@ export function SettingsView() {
             </div>
           </Section>
 
-          <Section id="about" title="About" description="">
+          <Section
+            id="about"
+            title="About"
+            description="Version information and manual update checks. Jarvis does not download or install an update without you."
+          >
             <div className="flex items-start gap-2 text-[12.5px]" style={{ color: "var(--muted)" }}>
               <ShieldCheck size={15} className="mt-0.5 shrink-0" style={{ color: "var(--accent)" }} />
               <div>
                 Jarvis {appInfo?.version ?? "0.1.0"} · no telemetry, no accounts, no cloud sync.
                 Message content is not logged; API keys live in the OS keychain.
               </div>
+            </div>
+
+            <div
+              className="mt-4 rounded-xl border px-3.5 py-3"
+              style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+            >
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12.5px] font-medium">
+                    Jarvis {appInfo?.version ?? "0.1.0"}
+                  </div>
+                  <div className="text-[11.5px]" style={{ color: "var(--muted)" }}>
+                    Update checks read the public GitHub release page. Nothing is downloaded
+                    automatically.
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<RefreshCw size={12} />}
+                  loading={updateChecking}
+                  onClick={() => void checkForUpdate(true)}
+                >
+                  Check for updates
+                </Button>
+              </div>
+
+              <label className="mt-3 flex items-center gap-2 text-[11.5px]" style={{ color: "var(--muted)" }}>
+                <input
+                  type="checkbox"
+                  checked={checkOnStartup}
+                  disabled={savingUpdateSetting}
+                  onChange={(event) => void setUpdateCheckOnStartup(event.target.checked)}
+                  style={{ accentColor: "var(--accent)" }}
+                />
+                Check for updates on startup
+              </label>
+
+              {updateInfo?.available ? (
+                <div
+                  className="mt-3 rounded-lg border px-3 py-3"
+                  style={{ borderColor: "var(--accent)", background: "var(--panel-2)" }}
+                >
+                  <div className="flex flex-wrap items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[12.5px] font-medium">
+                        Jarvis {updateInfo.latestVersion} is available
+                      </div>
+                      <div className="mt-0.5 text-[11.5px]" style={{ color: "var(--muted)" }}>
+                        You are on {updateInfo.currentVersion}. Review the release, then download
+                        and install it manually.
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      icon={<ExternalLink size={12} />}
+                      onClick={openUpdateRelease}
+                    >
+                      View release
+                    </Button>
+                  </div>
+                  {updateInfo.notes ? (
+                    <details className="mt-2">
+                      <summary
+                        className="cursor-pointer text-[11px]"
+                        style={{ color: "var(--faint)" }}
+                      >
+                        Release notes
+                      </summary>
+                      <pre
+                        className="mt-1 max-h-56 overflow-auto rounded-md p-2 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap"
+                        style={{ background: "var(--code)", color: "var(--muted)" }}
+                      >
+                        {updateInfo.notes}
+                      </pre>
+                    </details>
+                  ) : null}
+                </div>
+              ) : updateInfo ? (
+                <div
+                  className="mt-2 text-[11.5px]"
+                  role="status"
+                  style={{ color: "var(--accent)" }}
+                >
+                  You're up to date.
+                </div>
+              ) : null}
+
+              {updateError ? (
+                <div
+                  className="mt-2 rounded-lg px-2.5 py-2 text-[11.5px]"
+                  role="alert"
+                  style={{ background: "var(--danger-soft)", color: "var(--danger)" }}
+                >
+                  {updateError}
+                </div>
+              ) : null}
             </div>
           </Section>
         </div>

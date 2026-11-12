@@ -35,6 +35,7 @@ export function Sidebar() {
   const search = useApp((state) => state.search);
   const searching = useApp((state) => state.searching);
   const clearSearch = useApp((state) => state.clearSearch);
+  const updateAvailable = useApp((state) => state.updateInfo?.available === true);
 
   const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -285,6 +286,14 @@ export function Sidebar() {
         >
           <Settings size={14} />
           <span className="flex-1">Settings</span>
+          {updateAvailable ? (
+            <span
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ background: "var(--accent)" }}
+              title="Update available"
+              aria-label="Update available"
+            />
+          ) : null}
         </button>
       </div>
 

@@ -3,3 +3,4 @@ pub mod chat;
 pub mod providers;
 pub mod servers;
 pub mod settings;
+pub mod updates;
