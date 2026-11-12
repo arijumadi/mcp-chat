@@ -31,3 +31,5 @@ tracing-subscriber.workspace = true
 url.workspace = true
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-notification = "2.8.0"
+tauri-plugin-updater = "2.14.1"
+tauri-plugin-process = "2.4.0"

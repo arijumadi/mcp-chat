@@ -21,6 +21,7 @@ pub struct AppInfo {
     pub data_dir: String,
     pub workspace_dir: String,
     pub platform: String,
+    pub auto_update: bool,
 }
 
 #[tauri::command]
@@ -34,6 +35,9 @@ pub async fn app_info(state: State<'_, AppState>) -> CmdResult<AppInfo> {
             .map(|path| path.display().to_string())
             .unwrap_or_default(),
         platform: std::env::consts::OS.into(),
+        auto_update: cfg!(windows)
+            || cfg!(target_os = "macos")
+            || (cfg!(target_os = "linux") && std::env::var_os("APPIMAGE").is_some()),
     })
 }
 

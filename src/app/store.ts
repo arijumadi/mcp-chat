@@ -67,6 +67,8 @@ export interface AppStore {
   appInfo: AppInfo | null;
   updateInfo: UpdateInfo | null;
   updateChecking: boolean;
+  updateInstalling: boolean;
+  updateProgress: number | null;
   updateError: string | null;
   view: View;
   sidebarOpen: boolean;
@@ -90,6 +92,7 @@ export interface AppStore {
   refreshServers: () => Promise<void>;
   refreshSettings: () => Promise<void>;
   checkForUpdate: (manual?: boolean) => Promise<void>;
+  installUpdate: () => Promise<void>;
   openConversation: (id: string) => Promise<void>;
   newChat: (seed?: string) => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
@@ -170,6 +173,8 @@ export const useApp = create<AppStore>()((set, get) => ({
   appInfo: null,
   updateInfo: null,
   updateChecking: false,
+  updateInstalling: false,
+  updateProgress: null,
   updateError: null,
   view: "chat",
   sidebarOpen: true,
@@ -304,6 +309,13 @@ export const useApp = create<AppStore>()((set, get) => ({
             },
           },
         ]);
+        if (
+          !manual &&
+          get().settings["update.auto_install"] === "1" &&
+          get().appInfo?.autoUpdate
+        ) {
+          void get().installUpdate();
+        }
       } else if (manual) {
         get().toast(`Jarvis ${info.currentVersion} is up to date.`, "info");
       }
@@ -311,6 +323,45 @@ export const useApp = create<AppStore>()((set, get) => ({
       const message = String(error);
       set({ updateChecking: false, updateError: message });
       if (manual) get().toast(message, "error");
+    }
+  },
+
+  async installUpdate() {
+    if (get().updateInstalling) return;
+    if (!get().appInfo?.autoUpdate) {
+      get().toast(
+        "Automatic install is not available for this package. Download the update from the release page.",
+        "info",
+      );
+      return;
+    }
+    set({ updateInstalling: true, updateProgress: null, updateError: null });
+    try {
+      const { check } = await import("@tauri-apps/plugin-updater");
+      const update = await check();
+      if (!update) {
+        get().toast("No update is available from the update server.", "info");
+        return;
+      }
+      let total = 0;
+      let downloaded = 0;
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength ?? 0;
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          set({ updateProgress: total > 0 ? Math.min(1, downloaded / total) : null });
+        }
+      });
+      get().toast("Update installed. Restarting Jarvis…", "info");
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      await relaunch();
+    } catch (error) {
+      const message = String(error);
+      set({ updateError: message });
+      get().toast(message, "error");
+    } finally {
+      set({ updateInstalling: false, updateProgress: null });
     }
   },
 

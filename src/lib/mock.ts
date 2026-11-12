@@ -342,6 +342,7 @@ export function installMock(): void {
           dataDir: "/home/you/.local/share/com.mcpchat.app",
           workspaceDir: "/home/you/project",
           platform: "linux",
+          autoUpdate: false,
         };
       case "check_for_update":
         return {
