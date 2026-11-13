@@ -157,6 +157,8 @@ pub fn run() {
             commands::settings::delete_all_data,
             commands::settings::open_external,
             commands::settings::open_data_dir,
+            commands::skills::list_skills,
+            commands::skills::set_skill_enabled,
             commands::updates::check_for_update,
         ])
         .run(tauri::generate_context!())

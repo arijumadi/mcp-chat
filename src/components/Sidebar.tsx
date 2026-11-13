@@ -8,6 +8,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { useApp } from "@/app/store";
@@ -274,6 +275,18 @@ export function Sidebar() {
           <span className="flex items-center gap-0.5 text-[10.5px]" style={{ color: "var(--faint)" }}>
             <Lock size={10} /> local
           </span>
+        </button>
+        <button
+          onClick={() => setView("skills")}
+          className={cn(
+            "focus-ring flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] transition",
+            view === "skills"
+              ? "bg-[var(--panel-2)]"
+              : "hover:bg-[var(--panel-2)]",
+          )}
+        >
+          <Sparkles size={14} />
+          <span className="flex-1">Skills</span>
         </button>
         <button
           onClick={() => setView("settings")}

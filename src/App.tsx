@@ -20,6 +20,11 @@ const ServersView = lazy(() =>
     default: module.ServersView,
   })),
 );
+const SkillsView = lazy(() =>
+  import("@/features/skills/SkillsView").then((module) => ({
+    default: module.SkillsView,
+  })),
+);
 
 export default function App() {
   const booted = useApp((state) => state.booted);
@@ -46,7 +51,13 @@ export default function App() {
           <ChatView />
         ) : (
           <Suspense fallback={<ViewSkeleton />}>
-            {view === "settings" ? <SettingsView /> : <ServersView />}
+            {view === "settings" ? (
+              <SettingsView />
+            ) : view === "servers" ? (
+              <ServersView />
+            ) : (
+              <SkillsView />
+            )}
           </Suspense>
         )}
       </main>
