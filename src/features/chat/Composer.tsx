@@ -8,6 +8,7 @@ import { cn } from "@/lib/cn";
 import { formatTokens } from "@/lib/format";
 import type { Conversation } from "@/lib/types";
 import { ModelPicker } from "./ModelPicker";
+import { ReasoningPicker } from "./ReasoningPicker";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { AutoApproveButton } from "./AutoApproveButton";
 import { AttachmentGrid } from "./Attachments";
@@ -320,6 +321,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
               )}
             </button>
             <ModelPicker conversation={conversation} disabled={active} />
+            <ReasoningPicker conversation={conversation} disabled={active} />
             <WorkspacePicker conversation={conversation} disabled={active} />
             <AutoApproveButton />
             <div className="ml-auto flex items-center gap-2">

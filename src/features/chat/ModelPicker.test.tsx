@@ -30,6 +30,7 @@ const conversation: Conversation = {
   updatedAt: 0,
   providerId: "p1",
   model: "deepseek/deepseek-v4.1-flash",
+  reasoningEffort: "default",
   workspaceRoot: "/tmp",
   systemPrompt: null,
   archived: false,

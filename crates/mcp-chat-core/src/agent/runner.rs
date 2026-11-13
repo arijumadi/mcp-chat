@@ -393,6 +393,8 @@ async fn drive(
             tool_choice,
             max_tokens: resolved.max_tokens,
             temperature: None,
+            reasoning_effort: (conversation.reasoning_effort != "default")
+                .then(|| conversation.reasoning_effort.clone()),
         };
 
         let mut run = run_stream(
@@ -1481,6 +1483,7 @@ async fn compact(
         tool_choice: ToolChoice::None,
         max_tokens: resolved.max_tokens.min(2048),
         temperature: None,
+        reasoning_effort: None,
     };
     let summary = llm::complete(resolved.kind, request, cancel.clone()).await?;
     if summary.trim().is_empty() {

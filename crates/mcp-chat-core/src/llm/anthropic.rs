@@ -325,6 +325,20 @@ fn json_fallback(body: &str) -> Result<DeltaStream> {
     Ok(Box::pin(futures::stream::iter(deltas)))
 }
 
+fn thinking_budget(effort: &str, max_tokens: i64) -> Option<i64> {
+    if max_tokens <= 1024 {
+        return None;
+    }
+    let budget = match effort {
+        "low" => max_tokens.saturating_mul(1) / 4,
+        "medium" => max_tokens.saturating_mul(2) / 4,
+        "high" => max_tokens.saturating_mul(3) / 4,
+        "max" => max_tokens.saturating_mul(9) / 10,
+        _ => return None,
+    };
+    Some(budget.clamp(1024, max_tokens - 1))
+}
+
 fn build_body(req: &ChatRequest) -> Result<Value> {
     let mut messages: Vec<Value> = Vec::new();
     for message in &req.messages {
@@ -422,6 +436,11 @@ fn build_body(req: &ChatRequest) -> Result<Value> {
     if let Some(temperature) = req.temperature {
         body["temperature"] = json!(temperature);
     }
+    if let Some(effort) = req.reasoning_effort.as_deref() {
+        if let Some(budget) = thinking_budget(effort, req.max_tokens) {
+            body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
+        }
+    }
     if !req.tools.is_empty() {
         body["tools"] = Value::Array(
             req.tools
@@ -483,6 +502,7 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             max_tokens: 1024,
             temperature: None,
+            reasoning_effort: None,
         };
         let body = build_body(&request).unwrap();
         let content = &body["messages"][0]["content"];
@@ -490,5 +510,32 @@ mod tests {
         assert_eq!(content[1]["type"], "image");
         assert_eq!(content[1]["source"]["media_type"], "image/jpeg");
         assert_eq!(content[1]["source"]["data"], "BBBB");
+    }
+
+    #[test]
+    fn reasoning_effort_maps_to_a_thinking_budget() {
+        let request = ChatRequest {
+            kind: ProviderKind::Anthropic,
+            base_url: "https://example.invalid".into(),
+            api_key: None,
+            model: "reasoning-model".into(),
+            system: None,
+            messages: vec![ChatMessage::text(ChatRole::User, "Think")],
+            tools: Vec::new(),
+            tool_choice: ToolChoice::Auto,
+            max_tokens: 8192,
+            temperature: None,
+            reasoning_effort: Some("high".into()),
+        };
+        let body = build_body(&request).unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 6144);
+
+        let request = ChatRequest {
+            reasoning_effort: Some("max".into()),
+            ..request
+        };
+        let body = build_body(&request).unwrap();
+        assert_eq!(body["thinking"]["budget_tokens"], 7372);
     }
 }

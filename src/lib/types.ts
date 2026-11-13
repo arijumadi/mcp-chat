@@ -1,5 +1,7 @@
 export type Iso = number;
 
+export type ReasoningEffort = "default" | "low" | "medium" | "high" | "max";
+
 export interface Conversation {
   id: string;
   title: string;
@@ -7,6 +9,7 @@ export interface Conversation {
   updatedAt: number;
   providerId: string | null;
   model: string | null;
+  reasoningEffort: ReasoningEffort;
   workspaceRoot: string | null;
   systemPrompt: string | null;
   archived: boolean;

@@ -42,6 +42,18 @@ test("quick switcher finds the demo conversation", async ({ page }) => {
   await expect(page.getByText("What can you do with MCP tools?")).toBeVisible();
 });
 
+test("changes the reasoning effort for a chat", async ({ page }) => {
+  await page.goto("/?mock=1");
+  await page.getByRole("button", { name: "New chat" }).first().click();
+  const trigger = page.getByRole("button", { name: "Reasoning effort: Default" });
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  await page.getByRole("option", { name: /Max/ }).click();
+  await expect(
+    page.getByRole("button", { name: "Reasoning effort: Max" }),
+  ).toBeVisible();
+});
+
 test("settings, MCP, and skills screens render", async ({ page }) => {
   await page.goto("/?mock=1");
   await page.getByRole("complementary").getByRole("button", { name: "Settings" }).click();

@@ -68,6 +68,8 @@ pub struct ChatRequest {
     pub tool_choice: ToolChoice,
     pub max_tokens: i64,
     pub temperature: Option<f64>,
+    /// Provider-specific reasoning effort. `None` means the provider default.
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
