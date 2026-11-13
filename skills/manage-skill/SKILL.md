@@ -59,6 +59,8 @@ Short instructions, workflow, and safety notes.
 5. Create the file with `write(filePath="<global-skills>/my-skill/SKILL.md",
    content="...")`. Add helper files the same way.
 6. Verify with the `skill` tool: load `my-skill`, then load a reference file.
+   The **Skills** page lists the effective catalog and its enabled state; use
+   it to confirm the new entry or refresh after adding files.
 
 The `description` is what appears in the system prompt, so make it specific:
 say what the skill does and when to use it. Keep it to one line.
