@@ -165,6 +165,11 @@ export function summarizeTool(payload: ToolCallPayload): ToolSummary {
         break;
       case "subagent":
         target = str(args.description) || keyValues(args).join(" ");
+        if (payload.subagentState === "running") result = "running";
+        else if (payload.subagentState === "failed") {
+          result = "failed";
+          tone = "danger";
+        } else if (payload.subagentState === "completed") result = "completed";
         break;
       case "mcp_execute": {
         const calls = Array.isArray(args.calls) ? (args.calls as Record<string, unknown>[]) : [];

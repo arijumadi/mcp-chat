@@ -64,6 +64,7 @@ export interface AppStore {
   draft: string;
   providers: ProviderView[];
   servers: ServerView[];
+  subagents: Record<string, Conversation>;
   settings: Record<string, string>;
   appInfo: AppInfo | null;
   updateInfo: UpdateInfo | null;
@@ -171,6 +172,7 @@ export const useApp = create<AppStore>()((set, get) => ({
   draft: "",
   providers: [],
   servers: [],
+  subagents: {},
   settings: {},
   appInfo: null,
   updateInfo: null,
@@ -369,6 +371,22 @@ export const useApp = create<AppStore>()((set, get) => ({
 
   async openConversation(id) {
     discardStaged(get().pendingAttachments);
+    let known =
+      get().conversations.find((item) => item.id === id) ?? get().subagents[id];
+    if (!known) {
+      try {
+        const fetched = await call<Conversation>("get_conversation", {
+          conversationId: id,
+        });
+        set((state) => ({
+          subagents: { ...state.subagents, [id]: fetched },
+        }));
+        known = fetched;
+      } catch (error) {
+        get().toast(String(error), "error");
+        return;
+      }
+    }
     set({
       activeId: id,
       messages: [],
@@ -411,7 +429,8 @@ export const useApp = create<AppStore>()((set, get) => ({
       conversationId: id,
     }).catch(() => false);
     if (get().activeId === id) set({ autoApprove });
-    const conversation = get().conversations.find((item) => item.id === id);
+    const conversation =
+      known ?? get().conversations.find((item) => item.id === id);
     if (conversation) {
       document.title = `${conversation.title} · Jarvis`;
     }
@@ -419,7 +438,9 @@ export const useApp = create<AppStore>()((set, get) => ({
 
   async newChat(seed = "") {
     try {
-      const current = get().conversations.find((item) => item.id === get().activeId);
+      const current =
+        get().conversations.find((item) => item.id === get().activeId) ??
+        (get().activeId ? get().subagents[get().activeId!] : undefined);
       const conversation = await call<Conversation>("create_conversation", {
         input: {
           workspaceRoot: current?.workspaceRoot ?? null,

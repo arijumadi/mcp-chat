@@ -21,23 +21,30 @@ impl ToolExecutor {
         if prompt.chars().count() > 100_000 {
             return Err(CoreError::invalid("prompt is too long"));
         }
+        let session_id = req
+            .args
+            .get("sessionID")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
         let engine =
             self.subagent_host.get().cloned().ok_or_else(|| {
                 CoreError::Message("The subagent runner is not available.".into())
             })?;
-        let (session_id, report) = engine
+        let (subagent_id, content) = engine
             .run_subagent(
                 &req.conversation_id,
                 description,
                 prompt,
-                req.cancel.clone(),
+                session_id,
+                &req.part_id,
             )
             .await?;
         Ok(Rendered {
-            content: report,
+            content,
             structured: Some(json!({
-                "sessionId": session_id,
-                "status": "completed"
+                "sessionId": subagent_id,
+                "status": "running"
             })),
             ok: true,
         })

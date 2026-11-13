@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clock3,
   Copy,
+  ExternalLink,
   Loader2,
   XCircle,
 } from "lucide-react";
@@ -55,10 +56,13 @@ export function ToolCard({ part }: { part: Part }) {
   const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const toast = useApp((store) => store.toast);
+  const openConversation = useApp((store) => store.openConversation);
   const [copied, setCopied] = useState(false);
 
   const summary = summarizeTool(payload);
   const inFlight = IN_FLIGHT.includes(state);
+  const subagentRunning = payload.subagentState === "running";
+  const subagentFailed = payload.subagentState === "failed";
   // The diff only exists once the tool has finished; never show an empty one.
   const diff = typeof payload.diff === "string" && payload.diff !== "" && !inFlight ? payload.diff : null;
   const resultIsError = state === "error" && payload.resultPreview === payload.error;
@@ -115,7 +119,15 @@ export function ToolCard({ part }: { part: Part }) {
     <>
       <div className="my-px" data-tool-state={state} data-tool-name={payload.name}>
         <ActivityRow
-          icon={<StatusIcon state={state} nonzeroExit={nonzeroExit} />}
+          icon={
+            subagentRunning ? (
+              <Loader2 size={13} className="animate-spin" aria-label="subagent running" />
+            ) : subagentFailed ? (
+              <XCircle size={13} aria-label="subagent failed" role="img" style={{ color: "var(--danger)" }} />
+            ) : (
+              <StatusIcon state={state} nonzeroExit={nonzeroExit} />
+            )
+          }
           expanded={open}
           onToggle={() => setOpen((value) => !value)}
           controlsId={bodyId}
@@ -235,6 +247,19 @@ export function ToolCard({ part }: { part: Part }) {
                     style={{ color: "var(--danger)", background: "var(--danger-soft)" }}
                   >
                     {payload.error}
+                  </div>
+                ) : null}
+
+                {payload.subagentSessionId ? (
+                  <div className="flex justify-end">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      icon={<ExternalLink size={12} />}
+                      onClick={() => void openConversation(payload.subagentSessionId!)}
+                    >
+                      Open subagent
+                    </Button>
                   </div>
                 ) : null}
 

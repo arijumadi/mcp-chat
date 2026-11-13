@@ -1468,18 +1468,64 @@ async fn continue_turn_adds_a_hidden_resume_prompt() {
 #[tokio::test]
 async fn subagent_runs_in_a_child_conversation() {
     let h = Harness::new("mock-subagent", None, 0).await;
-    let events = h
-        .send_and_wait("delegate this", ApprovalDecision::Once, None, "ari")
-        .await;
-    assert!(events.iter().any(|event| matches!(
-        event,
-        CoreEvent::Approval { tool, .. } if tool == "subagent"
-    )));
-    assert!(
-        h.assistant_text()
+    let mut receiver = h.engine.subscribe();
+    h.engine
+        .send_message(&h.conversation_id, "delegate this")
+        .await
+        .unwrap();
+
+    let mut saw_launch = false;
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(31), receiver.recv())
             .await
-            .contains("Parent got the subagent report.")
-    );
+            .expect("subagent timed out")
+            .expect("event channel");
+        match &event {
+            CoreEvent::Approval { call_id, tool, .. } => {
+                if tool == "subagent" {
+                    saw_launch = true;
+                }
+                h.engine.respond_approval(
+                    call_id,
+                    ApprovalAnswer {
+                        decision: ApprovalDecision::Once,
+                        feedback: None,
+                    },
+                );
+            }
+            CoreEvent::InputRequest { call_id, .. } => {
+                h.engine.respond_input(
+                    call_id,
+                    InputAnswer {
+                        responses: json!({
+                            "answer": {
+                                "action": "accept",
+                                "content": {"name": "ari"}
+                            }
+                        }),
+                        cancelled: false,
+                    },
+                );
+            }
+            CoreEvent::Status {
+                conversation_id,
+                status: TurnStatus::Idle | TurnStatus::Error,
+                ..
+            } => {
+                if conversation_id != &h.conversation_id {
+                    continue;
+                }
+                if h.assistant_text()
+                    .await
+                    .contains("Parent got the subagent report.")
+                {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_launch, "the subagent launch was not approved");
 
     let all = conversations::list_all(&h.db.pool).await.unwrap();
     let child = all
@@ -1504,6 +1550,19 @@ async fn subagent_runs_in_a_child_conversation() {
         .join("");
     assert!(child_text.contains("Subagent report"));
 
+    let parent_history = h.history().await;
+    let linked = parent_history.iter().any(|message| {
+        message.parts.iter().any(|part| {
+            let payload = part.payload();
+            payload.get("subagentSessionId").and_then(Value::as_str) == Some(child.id.as_str())
+                && payload.get("subagentState").and_then(Value::as_str) == Some("completed")
+        })
+    });
+    assert!(
+        linked,
+        "the parent tool call does not link to the completed child"
+    );
+
     let requests = h.provider.requests();
     assert!(requests.len() >= 3);
     let child_request = requests
@@ -1521,6 +1580,56 @@ async fn subagent_runs_in_a_child_conversation() {
         .filter_map(|tool| tool["function"]["name"].as_str())
         .collect::<Vec<_>>();
     assert!(!child_tools.contains(&"subagent"));
+}
+
+#[tokio::test]
+async fn subagent_follow_up_uses_session_id() {
+    let h = Harness::new("mock-subagent", None, 0).await;
+    let (child_id, content) = h
+        .engine
+        .launch_subagent(
+            &h.conversation_id,
+            "Inspect workspace",
+            "Initial task",
+            None,
+            "",
+        )
+        .await
+        .unwrap();
+    assert!(content.contains("running in the background"));
+    wait_for_child_assistants(&h, &child_id, 1).await;
+
+    let (same_id, content) = h
+        .engine
+        .launch_subagent(
+            &h.conversation_id,
+            "Inspect workspace",
+            "Follow-up: check again",
+            Some(&child_id),
+            "",
+        )
+        .await
+        .unwrap();
+    assert_eq!(same_id, child_id);
+    assert!(content.contains("Follow-up sent"));
+    wait_for_child_assistants(&h, &child_id, 2).await;
+}
+
+async fn wait_for_child_assistants(h: &Harness, child_id: &str, expected: usize) {
+    for _ in 0..200 {
+        let history = messages::list_for_conversation(&h.db.pool, child_id)
+            .await
+            .unwrap();
+        let count = history
+            .iter()
+            .filter(|message| message.message.role == "assistant")
+            .count();
+        if count >= expected {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("subagent did not produce {expected} assistant messages");
 }
 
 #[tokio::test]

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyCoreEvent, parsePayload, useApp, type AppStore } from "./store";
-import type { CoreEvent } from "@/lib/types";
+import type { Conversation, CoreEvent } from "@/lib/types";
 
 const set = (partial: Partial<AppStore> | ((state: AppStore) => Partial<AppStore>)) =>
   useApp.setState(partial as Partial<AppStore>);
@@ -18,6 +18,7 @@ beforeEach(() => {
   useApp.setState({
     activeId: "c1",
     conversations: [],
+    subagents: {},
     messages: [],
     approvals: [],
     inputRequests: [],
@@ -289,6 +290,41 @@ describe("transcript event reducer", () => {
     expect(get().activeId).toBe("c2");
     expect(get().status).toBe("waiting_approval");
     expect(get().approvals).toHaveLength(1);
+  });
+
+  it("fetches a hidden subagent conversation before opening it", async () => {
+    const child: Conversation = {
+      id: "child",
+      title: "Inspect workspace",
+      createdAt: 0,
+      updatedAt: 0,
+      providerId: null,
+      model: null,
+      reasoningEffort: "default",
+      parentId: "parent",
+      workspaceRoot: "/tmp",
+      systemPrompt: null,
+      archived: false,
+      pinned: false,
+      maxSteps: 30,
+      toolMode: "lazy",
+      serversConfigured: false,
+    };
+    window.__MCP_CHAT_MOCK__ = {
+      invoke: async <T,>(command: string) => {
+        if (command === "get_conversation") return child as T;
+        if (command === "get_messages_page") {
+          return { messages: [], hasMore: false } as T;
+        }
+        if (command === "is_generating") return false as T;
+        if (command === "get_auto_approve") return false as T;
+        return [] as unknown as T;
+      },
+      subscribe: () => () => undefined,
+    };
+    await get().openConversation("child");
+    expect(get().activeId).toBe("child");
+    expect(get().subagents.child?.parentId).toBe("parent");
   });
 
   it("drops stale approvals when the chat is no longer generating", async () => {

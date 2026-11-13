@@ -84,7 +84,8 @@ pub trait SubagentHost: Send + Sync {
         parent_id: &'a str,
         description: &'a str,
         prompt: &'a str,
-        cancel: tokio_util::sync::CancellationToken,
+        session_id: Option<&'a str>,
+        part_id: &'a str,
     ) -> BoxFuture<'a, crate::Result<(String, String)>>;
 }
 

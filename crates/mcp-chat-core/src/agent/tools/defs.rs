@@ -142,7 +142,8 @@ fn base_schema(name: &str) -> Value {
             "type": "object",
             "properties": {
                 "description": {"type": "string", "description": "Short 3-5 word label for the task."},
-                "prompt": {"type": "string", "description": "Complete task for the child agent. It does not see the parent conversation."}
+                "prompt": {"type": "string", "description": "Complete task for the child agent. It does not see the parent conversation."},
+                "sessionID": {"type": "string", "description": "Optional child session id returned by an earlier subagent call. Use it to send a follow-up."}
             },
             "required": ["description", "prompt"],
             "additionalProperties": false

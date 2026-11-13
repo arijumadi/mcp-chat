@@ -265,10 +265,12 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
         "text" => text_response("Hello from the mock provider."),
         "subagent" => {
             let last = last_user_text(&messages);
-            if last.contains("You are a subagent spawned") {
+            if last.contains("You are a subagent spawned") || last.contains("Follow-up:") {
                 text_response("Subagent report: the workspace looks healthy.")
-            } else if tools_done {
+            } else if messages.to_string().contains("<subagent state=") {
                 text_response("Parent got the subagent report.")
+            } else if tools_done {
+                text_response("Subagent launched in the background.")
             } else {
                 sse(tool_call_frames(&[(
                     0,

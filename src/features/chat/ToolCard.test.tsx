@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ToolCard } from "./ToolCard";
+import { useApp } from "@/app/store";
 import type { Part } from "@/lib/types";
 
 function toolPart(id: string, payload: Record<string, unknown>): Part {
@@ -49,6 +50,20 @@ const edit = toolPart("p3", {
   diff: DIFF,
 });
 
+const subagent = toolPart("p4", {
+  callId: "call4",
+  name: "subagent",
+  server: "mcp-chat",
+  args: { description: "Inspect workspace", prompt: "Look around" },
+  state: "completed",
+  startedAt: 1000,
+  endedAt: 1010,
+  executed: true,
+  resultPreview: "The subagent is running in the background.",
+  subagentSessionId: "child-1",
+  subagentState: "running",
+});
+
 afterEach(cleanup);
 
 describe("ToolCard", () => {
@@ -75,6 +90,17 @@ describe("ToolCard", () => {
     expect(screen.getByText(/"text": "hi"/)).toBeInTheDocument();
     expect(screen.getByText("echo: hi")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Changes/ })).not.toBeInTheDocument();
+  });
+
+  it("links a background subagent to its child conversation", () => {
+    const openConversation = vi.fn().mockResolvedValue(undefined);
+    useApp.setState({ openConversation });
+    render(<ToolCard part={subagent} />);
+    const row = screen.getByRole("button", { name: /Subagent/ });
+    expect(row).toHaveTextContent("Inspect workspace");
+    fireEvent.click(row);
+    fireEvent.click(screen.getByRole("button", { name: "Open subagent" }));
+    expect(openConversation).toHaveBeenCalledWith("child-1");
   });
 
   it("previews an edit with its change counts without showing the diff", () => {
