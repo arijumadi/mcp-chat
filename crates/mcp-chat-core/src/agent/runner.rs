@@ -393,7 +393,7 @@ async fn drive(
             tool_choice,
             max_tokens: resolved.max_tokens,
             temperature: None,
-            reasoning_effort: (conversation.reasoning_effort != "auto")
+            reasoning_effort: (conversation.reasoning_effort != "default")
                 .then(|| conversation.reasoning_effort.clone()),
         };
 

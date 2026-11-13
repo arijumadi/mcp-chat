@@ -11,7 +11,7 @@ const conversation: Conversation = {
   updatedAt: 0,
   providerId: "p1",
   model: "mock",
-  reasoningEffort: "auto",
+  reasoningEffort: "default",
   workspaceRoot: "/home/you/project",
   systemPrompt: null,
   archived: false,
@@ -53,19 +53,19 @@ afterEach(() => {
 });
 
 describe("ReasoningPicker", () => {
-  it("shows Auto and saves another effort", async () => {
+  it("shows Default and saves another effort", async () => {
     render(<Harness />);
-    const trigger = screen.getByRole("button", { name: "Reasoning effort: Auto" });
+    const trigger = screen.getByRole("button", { name: "Reasoning effort: Default" });
     fireEvent.click(trigger);
 
     expect(screen.getByRole("listbox", { name: "Reasoning effort" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("option", { name: /High/ }));
+    fireEvent.click(screen.getByRole("option", { name: /^Max/ }));
 
     await waitFor(() =>
-      expect(calls).toEqual([{ conversationId: "c1", effort: "high" }]),
+      expect(calls).toEqual([{ conversationId: "c1", effort: "max" }]),
     );
     expect(
-      screen.getByRole("button", { name: "Reasoning effort: High" }),
+      screen.getByRole("button", { name: "Reasoning effort: Max" }),
     ).toBeInTheDocument();
   });
 });

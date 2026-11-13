@@ -1,6 +1,6 @@
 export type Iso = number;
 
-export type ReasoningEffort = "auto" | "low" | "medium" | "high";
+export type ReasoningEffort = "default" | "low" | "medium" | "high" | "max";
 
 export interface Conversation {
   id: string;

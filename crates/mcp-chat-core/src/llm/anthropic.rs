@@ -329,13 +329,13 @@ fn thinking_budget(effort: &str, max_tokens: i64) -> Option<i64> {
     if max_tokens <= 1024 {
         return None;
     }
-    let quarter = match effort {
-        "low" => 1,
-        "medium" => 2,
-        "high" => 3,
+    let budget = match effort {
+        "low" => max_tokens.saturating_mul(1) / 4,
+        "medium" => max_tokens.saturating_mul(2) / 4,
+        "high" => max_tokens.saturating_mul(3) / 4,
+        "max" => max_tokens.saturating_mul(9) / 10,
         _ => return None,
     };
-    let budget = max_tokens.saturating_mul(quarter) / 4;
     Some(budget.clamp(1024, max_tokens - 1))
 }
 
@@ -530,5 +530,12 @@ mod tests {
         let body = build_body(&request).unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
         assert_eq!(body["thinking"]["budget_tokens"], 6144);
+
+        let request = ChatRequest {
+            reasoning_effort: Some("max".into()),
+            ..request
+        };
+        let body = build_body(&request).unwrap();
+        assert_eq!(body["thinking"]["budget_tokens"], 7372);
     }
 }

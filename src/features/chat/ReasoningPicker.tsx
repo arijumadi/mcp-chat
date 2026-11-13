@@ -8,10 +8,11 @@ const OPTIONS: Array<{
   label: string;
   hint: string;
 }> = [
-  { value: "auto", label: "Auto", hint: "Provider default; no extra parameter" },
+  { value: "default", label: "Default", hint: "Provider default; no extra parameter" },
   { value: "low", label: "Low", hint: "Faster, less reasoning" },
   { value: "medium", label: "Medium", hint: "Balanced" },
   { value: "high", label: "High", hint: "More reasoning, usually slower" },
+  { value: "max", label: "Max", hint: "Highest effort supported by the model" },
 ];
 
 export function ReasoningPicker({
@@ -24,7 +25,7 @@ export function ReasoningPicker({
   const setReasoningEffort = useApp((state) => state.setReasoningEffort);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const current = conversation.reasoningEffort ?? "auto";
+  const current = conversation.reasoningEffort ?? "default";
   const selected = OPTIONS.find((option) => option.value === current) ?? OPTIONS[0]!;
 
   useEffect(() => {
@@ -68,7 +69,7 @@ export function ReasoningPicker({
         >
           <div className="mb-1 text-[12.5px] font-medium">Reasoning effort</div>
           <div className="mb-2 text-[10.5px] leading-relaxed" style={{ color: "var(--faint)" }}>
-            Auto sends no extra parameter. Other levels depend on model support.
+            Default sends no extra parameter. Other levels depend on model support.
           </div>
           <div role="listbox" aria-label="Reasoning effort">
             {OPTIONS.map((option) => {

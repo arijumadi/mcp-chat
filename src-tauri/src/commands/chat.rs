@@ -204,7 +204,10 @@ pub async fn set_conversation_reasoning_effort(
     conversation_id: String,
     effort: String,
 ) -> CmdResult<()> {
-    if !matches!(effort.as_str(), "auto" | "low" | "medium" | "high") {
+    if !matches!(
+        effort.as_str(),
+        "default" | "low" | "medium" | "high" | "max"
+    ) {
         return Err("Unknown reasoning effort".into());
     }
     conversations::set_reasoning_effort(&state.db.pool, &conversation_id, &effort)

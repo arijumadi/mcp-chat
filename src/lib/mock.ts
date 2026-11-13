@@ -160,7 +160,7 @@ export function installMock(): void {
       updatedAt: now() - 1000 * 60 * 8,
       providerId: "provider-mock",
       model: "mock-text",
-      reasoningEffort: "auto",
+      reasoningEffort: "default",
       workspaceRoot: "/home/you/project",
       systemPrompt: null,
       archived: false,
@@ -431,7 +431,7 @@ export function installMock(): void {
           updatedAt: now(),
           providerId: providers[0]?.id ?? null,
           model: providers[0]?.model ?? null,
-          reasoningEffort: "auto",
+          reasoningEffort: "default",
           workspaceRoot:
             (args.input as { workspaceRoot?: string | null } | undefined)?.workspaceRoot ??
             "/home/you/project",
@@ -500,7 +500,7 @@ export function installMock(): void {
         );
         if (conversation) {
           conversation.reasoningEffort = String(
-            args.effort ?? "auto",
+            args.effort ?? "default",
           ) as Conversation["reasoningEffort"];
         }
         return null;

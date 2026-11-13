@@ -14,7 +14,7 @@ function conversation(
     updatedAt,
     providerId: null,
     model: null,
-    reasoningEffort: "auto",
+    reasoningEffort: "default",
     workspaceRoot: null,
     systemPrompt: null,
     archived: false,

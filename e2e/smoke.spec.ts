@@ -45,12 +45,12 @@ test("quick switcher finds the demo conversation", async ({ page }) => {
 test("changes the reasoning effort for a chat", async ({ page }) => {
   await page.goto("/?mock=1");
   await page.getByRole("button", { name: "New chat" }).first().click();
-  const trigger = page.getByRole("button", { name: "Reasoning effort: Auto" });
+  const trigger = page.getByRole("button", { name: "Reasoning effort: Default" });
   await expect(trigger).toBeVisible();
   await trigger.click();
-  await page.getByRole("option", { name: /High/ }).click();
+  await page.getByRole("option", { name: /Max/ }).click();
   await expect(
-    page.getByRole("button", { name: "Reasoning effort: High" }),
+    page.getByRole("button", { name: "Reasoning effort: Max" }),
   ).toBeVisible();
 });
 
