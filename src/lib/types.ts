@@ -10,6 +10,7 @@ export interface Conversation {
   providerId: string | null;
   model: string | null;
   reasoningEffort: ReasoningEffort;
+  parentId?: string | null;
   workspaceRoot: string | null;
   systemPrompt: string | null;
   archived: boolean;
@@ -224,6 +225,8 @@ export interface ToolCallPayload {
   truncated?: boolean;
   exitCode?: number | null;
   image?: ToolImage | null;
+  subagentSessionId?: string | null;
+  subagentState?: "running" | "completed" | "failed" | null;
   /**
    * Unified diff for built-in edit, apply_patch and write calls. UI-only: it is
    * stored on the tool_call part, never sent to the model.

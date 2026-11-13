@@ -150,6 +150,15 @@
       ]
     },
     {
+      "name": "subagent",
+      "label": "Subagent",
+      "risk": "code_exec",
+      "description": [
+        "Launch a subagent in a background child conversation with fresh context.",
+        "Include all relevant context and instructions. The call returns immediately; a <subagent> report arrives later. Pass sessionID to send a follow-up. The child runs in the same workspace and cannot start another subagent."
+      ]
+    },
+    {
       "name": "question",
       "label": "Question",
       "risk": "interactive",

@@ -12,7 +12,8 @@ export function InputRequestModal() {
   const activeId = useApp((state) => state.activeId);
   const respond = useApp((state) => state.respondInput);
   const toast = useApp((state) => state.toast);
-  const request = requests.find((item) => item.conversationId === activeId);
+  const request = requests[0];
+  const subagent = request !== undefined && request.conversationId !== activeId;
   const [values, setValues] = useState<Record<string, Record<string, unknown>>>({});
   const [error, setError] = useState<string | null>(null);
 
@@ -33,7 +34,7 @@ export function InputRequestModal() {
   if (!request) return null;
 
   if (questions.length > 0) {
-    return <QuestionRequest request={request} questions={questions} />;
+    return <QuestionRequest request={request} questions={questions} subagent={subagent} />;
   }
 
   const unsupported = entries.filter(
@@ -78,10 +79,14 @@ export function InputRequestModal() {
       title={
         <span className="flex items-center gap-2">
           <MessageSquareQuote size={16} style={{ color: "var(--accent)" }} />
-          The server needs input
+          {subagent ? "A subagent needs input" : "The server needs input"}
         </span>
       }
-      subtitle="The tool call is paused until you answer."
+      subtitle={
+        subagent
+          ? "A subagent is paused until you answer."
+          : "The tool call is paused until you answer."
+      }
       footer={
         <>
           <Button size="sm" variant="ghost" onClick={() => void respond(request.callId, {}, true)}>
@@ -248,9 +253,11 @@ function optionsOf(question: QuestionPrompt) {
 function QuestionRequest({
   request,
   questions,
+  subagent = false,
 }: {
   request: InputRequestEvent;
   questions: QuestionPrompt[];
+  subagent?: boolean;
 }) {
   const respond = useApp((state) => state.respondInput);
   const [values, setValues] = useState<
@@ -307,10 +314,14 @@ function QuestionRequest({
       title={
         <span className="flex items-center gap-2">
           <MessageSquareQuote size={16} style={{ color: "var(--accent)" }} />
-          The model needs input
+          {subagent ? "A subagent needs input" : "The model needs input"}
         </span>
       }
-      subtitle="Answer the question to continue the tool call."
+      subtitle={
+        subagent
+          ? "A subagent is paused until you answer."
+          : "Answer the question to continue the tool call."
+      }
       footer={
         <>
           <Button

@@ -78,6 +78,7 @@ async fn models(State(_state): State<ProviderState>) -> Json<Value> {
             {"id": "mock-lazy"},
             {"id": "mock-batch"},
             {"id": "mock-question"},
+            {"id": "mock-subagent"},
             {"id": "mock-question-free"},
             {"id": "mock-loop"},
             {"id": "mock-big-read"}
@@ -262,6 +263,23 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
 
     match scenario.as_str() {
         "text" => text_response("Hello from the mock provider."),
+        "subagent" => {
+            let last = last_user_text(&messages);
+            if last.contains("You are a subagent spawned") || last.contains("Follow-up:") {
+                text_response("Subagent report: the workspace looks healthy.")
+            } else if messages.to_string().contains("<subagent state=") {
+                text_response("Parent got the subagent report.")
+            } else if tools_done {
+                text_response("Subagent launched in the background.")
+            } else {
+                sse(tool_call_frames(&[(
+                    0,
+                    "call_subagent",
+                    "subagent",
+                    r#"{"description":"Inspect workspace","prompt":"Inspect the workspace and report the key files."}"#,
+                )]))
+            }
+        }
         "flaky" => {
             let count = bump(&state, "flaky");
             if count <= 2 {

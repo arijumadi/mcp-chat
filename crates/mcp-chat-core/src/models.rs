@@ -13,6 +13,7 @@ pub struct Conversation {
     pub provider_id: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: String,
+    pub parent_id: Option<String>,
     pub workspace_root: Option<String>,
     pub system_prompt: Option<String>,
     pub archived: bool,

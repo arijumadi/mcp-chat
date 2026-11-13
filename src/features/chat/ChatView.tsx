@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PanelLeft, Plus, Settings, Plug } from "lucide-react";
+import { CornerUpLeft, PanelLeft, Plus, Settings, Plug } from "lucide-react";
 import { useApp } from "@/app/store";
 import { Button } from "@/components/Button";
 import { Logo } from "@/components/Logo";
@@ -12,6 +12,7 @@ import { Composer } from "./Composer";
 export function ChatView() {
   const activeId = useApp((state) => state.activeId);
   const conversations = useApp((state) => state.conversations);
+  const subagents = useApp((state) => state.subagents);
   const messages = useApp((state) => state.messages);
   const providers = useApp((state) => state.providers);
   const servers = useApp((state) => state.servers);
@@ -20,8 +21,11 @@ export function ChatView() {
   const setView = useApp((state) => state.setView);
   const setDraft = useApp((state) => state.setDraft);
   const newChat = useApp((state) => state.newChat);
+  const openConversation = useApp((state) => state.openConversation);
   const renameConversation = useApp((state) => state.renameConversation);
-  const conversation = conversations.find((item) => item.id === activeId);
+  const conversation =
+    conversations.find((item) => item.id === activeId) ??
+    (activeId ? subagents[activeId] : undefined);
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [title, setTitle] = useState("");
@@ -71,6 +75,16 @@ export function ChatView() {
             <PanelLeft size={16} />
           </button>
         ) : null}
+        {conversation.parentId ? (
+          <button
+            onClick={() => void openConversation(conversation.parentId!)}
+            className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)]"
+            title="Back to parent chat"
+            aria-label="Back to parent chat"
+          >
+            <CornerUpLeft size={16} />
+          </button>
+        ) : null}
         <div className="min-w-0 flex-1 px-1">
           {editingTitle ? (
             <input
@@ -98,7 +112,7 @@ export function ChatView() {
             </button>
           )}
           <div className="truncate text-[10.5px]" style={{ color: "var(--faint)" }}>
-            local transcript
+            {conversation.parentId ? "subagent transcript" : "local transcript"}
           </div>
         </div>
         <ConversationTools conversation={conversation} />
@@ -123,7 +137,16 @@ export function ChatView() {
       ) : (
         <Transcript />
       )}
-      <Composer conversation={conversation} />
+      {conversation.parentId ? (
+        <div
+          className="border-t px-4 py-3 text-center text-[11.5px]"
+          style={{ borderColor: "var(--border)", color: "var(--faint)" }}
+        >
+          Subagent transcript · follow-ups are managed by the parent chat.
+        </div>
+      ) : (
+        <Composer conversation={conversation} />
+      )}
 
     </div>
   );

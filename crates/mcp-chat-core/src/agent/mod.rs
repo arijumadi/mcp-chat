@@ -14,13 +14,14 @@ pub mod types;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 
-use tokio::sync::{Semaphore, broadcast};
+use tokio::sync::{Semaphore, broadcast, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::db::Db;
-use crate::db::repo::{conversations, messages, providers, settings};
+use crate::db::repo::{conversation_servers, conversations, messages, providers, settings};
 use crate::events::CoreEvent;
 use crate::mcp::McpManager;
 use crate::models::{Conversation, Message, PartPayload, Provider};
@@ -28,7 +29,8 @@ use crate::secrets::SecretStore;
 use crate::{CoreError, Result};
 
 use self::approvals::{ApprovalAnswer, ApprovalRegistry, InputAnswer, InputRegistry};
-use self::tools::ToolExecutor;
+use self::tools::{SubagentHost, ToolExecutor};
+use futures::future::BoxFuture;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,20 +90,330 @@ impl ChatEngine {
             attachments_dir: attachments_dir.clone(),
             limiter: Arc::new(Semaphore::new(4)),
             file_locks: crate::agent::file_locks::FileLocks::default(),
+            subagent_host: std::sync::OnceLock::new(),
         });
-        Arc::new(Self {
+        let engine = Arc::new(Self {
             db,
             secrets,
             mcp,
             events,
             approvals,
             inputs,
-            executor,
+            executor: executor.clone(),
             output_dir,
             attachments_dir,
             turns: Mutex::new(HashMap::new()),
             auto_approve: Mutex::new(HashSet::new()),
-        })
+        });
+        let host: Arc<dyn SubagentHost> = Arc::new(SubagentHostRef {
+            engine: Arc::downgrade(&engine),
+        });
+        let _ = executor.subagent_host.set(host);
+        engine
+    }
+
+    /// Launch a focused child conversation. The child gets fresh context, the
+    /// same workspace/model/tool selection, and its own message history. It is
+    /// hidden from the main conversation list and reports back asynchronously.
+    pub async fn launch_subagent(
+        self: &Arc<Self>,
+        parent_id: &str,
+        description: &str,
+        prompt: &str,
+        session_id: Option<&str>,
+        part_id: &str,
+    ) -> Result<(String, String)> {
+        let parent = conversations::get(&self.db.pool, parent_id).await?;
+
+        if let Some(session_id) = session_id {
+            let child = conversations::get(&self.db.pool, session_id).await?;
+            if child.parent_id.as_deref() != Some(parent_id) {
+                return Err(CoreError::Message(
+                    "That conversation is not a child of this chat.".into(),
+                ));
+            }
+            self.mark_subagent_part(parent_id, part_id, &child.id).await;
+            self.append_subagent_prompt(&child.id, prompt, false)
+                .await?;
+            let running = self.in_flight(&child.id);
+            if !running {
+                self.inherit_subagent_auto(&parent, &child.id);
+                let done = self.start_turn_with_done(&child.id)?;
+                self.spawn_subagent_supervisor(
+                    parent.id.clone(),
+                    child.id.clone(),
+                    child.title.clone(),
+                    done,
+                );
+            }
+            let content = if running {
+                format!(
+                    "Follow-up sent to the running subagent (sessionID: {}). It will report again when this round finishes.",
+                    child.id
+                )
+            } else {
+                format!(
+                    "Follow-up sent. The subagent is running in the background (sessionID: {}).",
+                    child.id
+                )
+            };
+            return Ok((child.id, content));
+        }
+
+        if parent.parent_id.is_some() {
+            return Err(CoreError::Message(
+                "Subagent depth limit reached. A subagent cannot start another subagent.".into(),
+            ));
+        }
+
+        let description = description.trim();
+        let description = if description.is_empty() {
+            "Subagent"
+        } else {
+            description
+        };
+        let title: String = description.chars().take(120).collect();
+        let child = conversations::create(
+            &self.db.pool,
+            &title,
+            parent.provider_id.as_deref(),
+            parent.model.as_deref(),
+        )
+        .await?;
+        conversations::set_parent(&self.db.pool, &child.id, &parent.id).await?;
+        conversations::set_workspace(&self.db.pool, &child.id, parent.workspace_root.as_deref())
+            .await?;
+        conversations::set_reasoning_effort(&self.db.pool, &child.id, &parent.reasoning_effort)
+            .await?;
+        conversations::set_tool_mode(&self.db.pool, &child.id, &parent.tool_mode).await?;
+        conversations::set_system_prompt(&self.db.pool, &child.id, parent.system_prompt.as_deref())
+            .await?;
+        conversations::set_max_steps(
+            &self.db.pool,
+            &child.id,
+            if parent.max_steps > 0 {
+                parent.max_steps
+            } else {
+                30
+            },
+        )
+        .await?;
+        if parent.servers_configured {
+            let server_ids = conversation_servers::selected(&self.db.pool, &parent.id).await?;
+            conversation_servers::set(&self.db.pool, &child.id, &server_ids).await?;
+        }
+        self.mark_subagent_part(parent_id, part_id, &child.id).await;
+        self.append_subagent_prompt(&child.id, prompt, true).await?;
+        self.inherit_subagent_auto(&parent, &child.id);
+        let done = self.start_turn_with_done(&child.id)?;
+        self.spawn_subagent_supervisor(
+            parent.id.clone(),
+            child.id.clone(),
+            child.title.clone(),
+            done,
+        );
+        let content = format!(
+            "The subagent is running in the background (sessionID: {}). You will receive a <subagent> report when it goes idle. Do not poll or duplicate its work; work on non-overlapping tasks or briefly tell the user and end your response.",
+            child.id
+        );
+        Ok((child.id, content))
+    }
+
+    async fn mark_subagent_part(&self, parent_id: &str, part_id: &str, child_id: &str) {
+        let Ok(part) = messages::get_part(&self.db.pool, part_id).await else {
+            return;
+        };
+        let mut payload = part.payload();
+        payload["subagentSessionId"] = serde_json::json!(child_id);
+        payload["subagentState"] = serde_json::json!("running");
+        if messages::update_part_payload(&self.db.pool, part_id, &payload)
+            .await
+            .is_ok()
+        {
+            let _ = self.events.send(CoreEvent::Part {
+                conversation_id: parent_id.to_owned(),
+                message_id: part.message_id,
+                part_id: part_id.to_owned(),
+                kind: "tool_call".into(),
+                payload,
+            });
+        }
+    }
+
+    async fn append_subagent_prompt(
+        &self,
+        child_id: &str,
+        prompt: &str,
+        first: bool,
+    ) -> Result<()> {
+        let message = messages::create(&self.db.pool, child_id, "user", "completed").await?;
+        let text = if first {
+            format!(
+                "You are a subagent spawned by another Jarvis conversation. Work on the task below and return a concise, complete report for the parent agent. Do not ask the user unless truly blocked.\n\n{prompt}"
+            )
+        } else {
+            prompt.to_owned()
+        };
+        messages::append_part(
+            &self.db.pool,
+            &message.id,
+            "text",
+            &PartPayload::Text { text },
+        )
+        .await?;
+        messages::append_part(
+            &self.db.pool,
+            &message.id,
+            "time",
+            &PartPayload::Text {
+                text: crate::util::message_time_note(message.created_at),
+            },
+        )
+        .await?;
+        conversations::touch(&self.db.pool, child_id).await?;
+        Ok(())
+    }
+
+    fn inherit_subagent_auto(&self, parent: &Conversation, child_id: &str) {
+        if self.auto_approve(&parent.id) {
+            self.set_auto_approve(child_id, true);
+        }
+    }
+
+    fn spawn_subagent_supervisor(
+        self: &Arc<Self>,
+        parent_id: String,
+        child_id: String,
+        description: String,
+        done: oneshot::Receiver<()>,
+    ) {
+        let engine = self.clone();
+        tokio::spawn(async move {
+            engine
+                .supervise_subagent(parent_id, child_id, description, done)
+                .await;
+        });
+    }
+
+    async fn supervise_subagent(
+        self: Arc<Self>,
+        parent_id: String,
+        child_id: String,
+        description: String,
+        mut done: oneshot::Receiver<()>,
+    ) {
+        loop {
+            let _ = (&mut done).await;
+            let history = messages::list_for_conversation(&self.db.pool, &child_id)
+                .await
+                .unwrap_or_default();
+            let has_pending_user = history
+                .last()
+                .is_some_and(|item| item.message.role == "user");
+            if has_pending_user {
+                match self.start_turn_with_done(&child_id) {
+                    Ok(next) => {
+                        done = next;
+                        continue;
+                    }
+                    Err(_) => {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
+                }
+            }
+            let (state, report) = subagent_report(&history);
+            self.finish_subagent(&parent_id, &child_id, &description, state, &report)
+                .await;
+            self.set_auto_approve(&child_id, false);
+            break;
+        }
+    }
+
+    async fn finish_subagent(
+        self: &Arc<Self>,
+        parent_id: &str,
+        child_id: &str,
+        description: &str,
+        state: &str,
+        report: &str,
+    ) {
+        let preview = crate::util::truncate_chars(report, 4_000).0;
+        if let Ok(history) = messages::list_for_conversation(&self.db.pool, parent_id).await {
+            for message in &history {
+                for part in &message.parts {
+                    if part.kind != "tool_call" {
+                        continue;
+                    }
+                    let mut payload = part.payload();
+                    if payload
+                        .get("subagentSessionId")
+                        .and_then(serde_json::Value::as_str)
+                        != Some(child_id)
+                    {
+                        continue;
+                    }
+                    if payload
+                        .get("subagentState")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|value| value == "completed" || value == "failed")
+                    {
+                        continue;
+                    }
+                    payload["subagentState"] = serde_json::json!(state);
+                    payload["resultPreview"] = serde_json::json!(preview);
+                    payload["endedAt"] = serde_json::json!(crate::now_ms());
+                    if state == "failed" {
+                        payload["error"] = serde_json::json!(report);
+                    }
+                    let _ = messages::update_part_payload(&self.db.pool, &part.id, &payload).await;
+                    let _ = self.events.send(CoreEvent::Part {
+                        conversation_id: parent_id.to_owned(),
+                        message_id: message.message.id.clone(),
+                        part_id: part.id.clone(),
+                        kind: "tool_call".into(),
+                        payload,
+                    });
+                }
+            }
+        }
+
+        let report = format!(
+            "<subagent state=\"{state}\" description=\"{}\" sessionID=\"{child_id}\">\n{}\n</subagent>",
+            description.replace('"', "'"),
+            crate::util::truncate_chars(report, 12_000).0
+        );
+        let Ok(message) = messages::create(&self.db.pool, parent_id, "user", "synthetic").await
+        else {
+            return;
+        };
+        if messages::append_part(
+            &self.db.pool,
+            &message.id,
+            "text",
+            &PartPayload::Text { text: report },
+        )
+        .await
+        .is_err()
+        {
+            return;
+        }
+        let _ = messages::append_part(
+            &self.db.pool,
+            &message.id,
+            "time",
+            &PartPayload::Text {
+                text: crate::util::message_time_note(message.created_at),
+            },
+        )
+        .await;
+        let _ = conversations::touch(&self.db.pool, parent_id).await;
+        let _ = self.events.send(CoreEvent::ConversationUpdated {
+            conversation_id: parent_id.to_owned(),
+        });
+        if !self.in_flight(parent_id) {
+            let _ = self.start_turn(parent_id);
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<CoreEvent> {
@@ -430,20 +742,30 @@ impl ChatEngine {
     }
 
     fn start_turn(self: &Arc<Self>, conversation_id: &str) -> Result<()> {
+        drop(self.start_turn_with_done(conversation_id)?);
+        Ok(())
+    }
+
+    fn start_turn_with_done(
+        self: &Arc<Self>,
+        conversation_id: &str,
+    ) -> Result<oneshot::Receiver<()>> {
         let (slot, token) = self.claim_turn(
             conversation_id,
             "This conversation is already generating a response.",
         )?;
         let engine = self.clone();
         let id = conversation_id.to_owned();
+        let (done_tx, done_rx) = oneshot::channel();
         tokio::spawn(async move {
             // The slot is released when this task ends, however it ends.
             let _slot = slot;
             if let Err(error) = runner::run(engine.clone(), &id, token).await {
                 tracing::debug!(conversation = %id, error = %error.user_message(), "turn ended with error");
             }
+            let _ = done_tx.send(());
         });
-        Ok(())
+        Ok(done_rx)
     }
 
     pub fn stop(&self, conversation_id: &str) -> bool {
@@ -524,5 +846,61 @@ impl ChatEngine {
             provider.context_window.max(4_000),
             provider.max_output_tokens.max(256),
         ))
+    }
+}
+
+impl SubagentHost for SubagentHostRef {
+    fn run_subagent<'a>(
+        &'a self,
+        parent_id: &'a str,
+        description: &'a str,
+        prompt: &'a str,
+        session_id: Option<&'a str>,
+        part_id: &'a str,
+    ) -> BoxFuture<'a, Result<(String, String)>> {
+        Box::pin(async move {
+            let engine = self.engine.upgrade().ok_or_else(|| {
+                CoreError::Message("The subagent runner is not available.".into())
+            })?;
+            engine
+                .launch_subagent(parent_id, description, prompt, session_id, part_id)
+                .await
+        })
+    }
+}
+
+struct SubagentHostRef {
+    engine: Weak<ChatEngine>,
+}
+
+fn subagent_report(history: &[crate::models::MessageWithParts]) -> (&'static str, String) {
+    let Some(last) = history
+        .iter()
+        .rev()
+        .find(|item| item.message.role == "assistant")
+    else {
+        return (
+            "failed",
+            "Subagent finished without a final answer.".to_owned(),
+        );
+    };
+    if last.message.status == "error" {
+        return (
+            "failed",
+            last.message
+                .error
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "Subagent failed.".into()),
+        );
+    }
+    let report = crate::agent::context::text_parts(&last.parts);
+    if report.trim().is_empty() {
+        (
+            "failed",
+            "Subagent finished without a final answer.".to_owned(),
+        )
+    } else {
+        ("completed", report)
     }
 }

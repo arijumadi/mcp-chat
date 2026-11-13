@@ -10,6 +10,7 @@ mod patch;
 mod question;
 mod shell;
 mod skills;
+mod subagent;
 #[cfg(test)]
 mod tests;
 mod ui;
@@ -45,9 +46,10 @@ use crate::mcp::manager::McpManager;
 use crate::mcp::types::ToolInfo;
 use crate::util::truncate_chars;
 use crate::{CoreError, Result, now_ms};
+use futures::future::BoxFuture;
 use serde_json::{Value, json};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use tokio::sync::{Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
@@ -71,6 +73,20 @@ pub struct ToolExecutor {
     pub attachments_dir: PathBuf,
     pub limiter: Arc<Semaphore>,
     pub file_locks: FileLocks,
+    /// Set by `ChatEngine::new` after the engine exists. The subagent tool uses
+    /// this trait object so the recursive child-runner future is type-erased.
+    pub subagent_host: OnceLock<Arc<dyn SubagentHost>>,
+}
+
+pub trait SubagentHost: Send + Sync {
+    fn run_subagent<'a>(
+        &'a self,
+        parent_id: &'a str,
+        description: &'a str,
+        prompt: &'a str,
+        session_id: Option<&'a str>,
+        part_id: &'a str,
+    ) -> BoxFuture<'a, crate::Result<(String, String)>>;
 }
 
 pub struct ToolExecRequest {
@@ -166,18 +182,26 @@ impl ToolExecutor {
                 .await;
         }
 
-        let _permit = match self.limiter.acquire().await {
-            Ok(permit) => permit,
-            Err(_) => {
-                return self
-                    .fail(
-                        req,
-                        "error",
-                        "The tool runner is shutting down.".into(),
-                        started,
-                        false,
-                    )
-                    .await;
+        let is_subagent = req.server_slug == "builtin" && req.remote_name == "subagent";
+        let _permit = if is_subagent {
+            // The subagent runner blocks until the child finishes. Do not hold
+            // a general tool permit while the child needs permits for its own
+            // tools, or four parallel subagents can deadlock the executor.
+            None
+        } else {
+            match self.limiter.acquire().await {
+                Ok(permit) => Some(permit),
+                Err(_) => {
+                    return self
+                        .fail(
+                            req,
+                            "error",
+                            "The tool runner is shutting down.".into(),
+                            started,
+                            false,
+                        )
+                        .await;
+                }
             }
         };
 
@@ -293,7 +317,7 @@ impl ToolExecutor {
             }
             Effect::Ask => {
                 if let Err(message) = self
-                    .ask_permission(&req, &action, &resource, !outside_access)
+                    .ask_permission(&req, &action, &resource, !outside_access && !is_subagent)
                     .await
                 {
                     let state = if message == "Tool execution interrupted" {
@@ -629,6 +653,7 @@ impl ToolExecutor {
             "grep" => self.run_grep(req).await,
             "glob" => self.run_glob(req).await,
             "skill" => self.run_skill(req).await,
+            "subagent" => self.run_subagent(req).await,
             "question" => self.run_question(req).await,
             other => Err(CoreError::invalid(format!(
                 "Unknown built-in tool: {other}"
