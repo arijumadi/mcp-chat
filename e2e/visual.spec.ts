@@ -43,6 +43,20 @@ test.describe("visual regression", () => {
       maxDiffPixelRatio: 0.01,
     });
   });
+
+  test("skills", async ({ page }) => {
+    await page.goto("/?mock=1");
+    await page.getByRole("complementary").getByRole("button", { name: "Skills" }).click();
+    await expect(page.getByText("Global skill settings")).toBeVisible();
+    await expect(page.getByText("excalidraw").first()).toBeVisible();
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.mouse.move(10, 10);
+
+    await expect(page).toHaveScreenshot("skills.png", {
+      animations: "disabled",
+      maxDiffPixelRatio: 0.01,
+    });
+  });
 });
 
 test.describe("minimum window width", () => {

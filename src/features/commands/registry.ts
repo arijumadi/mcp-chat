@@ -200,6 +200,13 @@ export const COMMANDS: readonly Command[] = [
     disabled: () => null,
     run: (state) => state.setView("servers"),
   },
+  {
+    id: "view.skills",
+    title: "Open skills",
+    keywords: "workflows reusable global manage",
+    disabled: () => null,
+    run: (state) => state.setView("skills"),
+  },
 ];
 
 export function commandById(id: string): Command | undefined {

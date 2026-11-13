@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  Sparkles,
   Sun,
   Trash2,
 } from "lucide-react";
@@ -250,7 +251,7 @@ export function SettingsView() {
         <div className="ml-1">
           <div className="text-[14px] font-medium">Settings</div>
           <div className="text-[10.5px]" style={{ color: "var(--faint)" }}>
-            providers, appearance and local data
+            providers, skills, appearance and local data
           </div>
         </div>
       </header>
@@ -452,6 +453,29 @@ export function SettingsView() {
               </Button>
               <Button size="sm" loading={savingPrompt} onClick={() => void savePrompt()}>
                 Save prompt
+              </Button>
+            </div>
+          </Section>
+
+          <Section
+            id="skills"
+            title="Skills"
+            description="Reusable workflows loaded on demand. Toggles apply to every workspace and every new chat."
+          >
+            <div
+              className="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3"
+              style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+            >
+              <Sparkles size={16} style={{ color: "var(--accent)" }} />
+              <div className="min-w-0 flex-1">
+                <div className="text-[12.5px] font-medium">Global skill settings</div>
+                <div className="mt-0.5 text-[11.5px]" style={{ color: "var(--muted)" }}>
+                  See which skills are available, where they come from, and disable the ones the
+                  model should not use.
+                </div>
+              </div>
+              <Button size="sm" onClick={() => setView("skills")}>
+                Manage skills
               </Button>
             </div>
           </Section>
@@ -962,6 +986,7 @@ function SettingsNav() {
     ["notifications", "Notifications"],
     ["shortcuts", "Shortcuts"],
     ["chat-defaults", "Chat defaults"],
+    ["skills", "Skills"],
     ["context", "Context"],
     ["export", "Export"],
     ["data", "Data"],

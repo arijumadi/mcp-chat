@@ -26,7 +26,7 @@ import type {
   UsageEvent,
 } from "@/lib/types";
 
-export type View = "chat" | "settings" | "servers";
+export type View = "chat" | "settings" | "servers" | "skills";
 
 /** Statuses in which a turn (or a compaction) owns the conversation. */
 export const BUSY_STATUSES: readonly TurnStatus[] = [

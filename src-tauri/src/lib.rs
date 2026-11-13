@@ -42,6 +42,22 @@ pub fn run() {
             std::fs::create_dir_all(&attachments_dir)?;
             init_logging(&data_dir);
 
+            if let Some(report) = mcp_chat_core::builtin_skills::install_global_skills() {
+                if report.changed() {
+                    tracing::info!(
+                        installed = report.installed,
+                        updated = report.updated,
+                        "installed bundled skills"
+                    );
+                }
+                if report.failed > 0 {
+                    tracing::warn!(
+                        failed = report.failed,
+                        "some bundled skills could not be installed"
+                    );
+                }
+            }
+
             let db_path = data_dir.join("mcp-chat.db");
             let db = tauri::async_runtime::block_on(Db::open(&db_path))?;
             tauri::async_runtime::block_on(messages::sweep_interrupted(&db.pool))?;
@@ -141,6 +157,8 @@ pub fn run() {
             commands::settings::delete_all_data,
             commands::settings::open_external,
             commands::settings::open_data_dir,
+            commands::skills::list_skills,
+            commands::skills::set_skill_enabled,
             commands::updates::check_for_update,
         ])
         .run(tauri::generate_context!())

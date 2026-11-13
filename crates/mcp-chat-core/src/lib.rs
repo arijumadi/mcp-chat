@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod attachments;
+pub mod builtin_skills;
 pub mod db;
 pub mod error;
 pub mod events;

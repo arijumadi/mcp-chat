@@ -6,7 +6,7 @@ use sqlx::SqlitePool;
 
 use crate::Result;
 use crate::agent::capabilities::table;
-use crate::agent::tools::{skill_catalog, workspace_root_for_conversation};
+use crate::agent::tools::{disabled_skill_names, skill_catalog, workspace_root_for_conversation};
 use crate::util::truncate_chars;
 
 const MAX_AGENTS_FILE: usize = 32_000;
@@ -106,7 +106,11 @@ pub async fn runtime_context(
     if let Some(instructions) = agents_block(&workspace, output_dir) {
         parts.push(instructions);
     }
-    let skills = skill_catalog(&workspace, output_dir);
+    let disabled = disabled_skill_names(pool).await?;
+    let skills = skill_catalog(&workspace, output_dir)
+        .into_iter()
+        .filter(|(name, _)| !disabled.contains(name))
+        .collect::<Vec<_>>();
     if !skills.is_empty() {
         let mut lines = vec![
             "# Skills".to_owned(),
@@ -215,14 +219,18 @@ fn git_exclude_path(workspace: &Path) -> Option<PathBuf> {
 fn environment_block(workspace: &Path, artifacts: &Path, scratch: &Path) -> String {
     let git = workspace.join(".git").exists();
     let shell = if cfg!(windows) { "powershell" } else { "sh" };
+    let global_skills = crate::agent::tools::global_skills_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "(unavailable)".into());
     format!(
-        "<env>\n  Working directory: {}\n  Workspace root folder: {}\n  Is directory a git repo: {}\n  Platform: {}\n  Default shell: {shell}\n  Shell state: each bash call is a fresh process; cd and variables do not persist.\n  Artifacts directory: {}\n  Scratch directory: {}\n  Both artifact/scratch directories are excluded from glob/grep.\n</env>",
+        "<env>\n  Working directory: {}\n  Workspace root folder: {}\n  Is directory a git repo: {}\n  Platform: {}\n  Default shell: {shell}\n  Shell state: each bash call is a fresh process; cd and variables do not persist.\n  Artifacts directory: {}\n  Scratch directory: {}\n  Global skills directory: {}\n  Both artifact/scratch directories are excluded from glob/grep.\n</env>",
         workspace.display(),
         workspace.display(),
         if git { "yes" } else { "no" },
         std::env::consts::OS,
         artifacts.display(),
         scratch.display(),
+        global_skills,
     )
 }
 
@@ -458,7 +466,16 @@ mod tests {
             .await
             .unwrap();
         assert!(context.contains("<env>"));
+        assert!(context.contains("Global skills directory:"));
         assert!(context.contains("Project instruction."));
         assert!(context.contains("demo: Demo workflow"));
+
+        crate::agent::tools::set_skill_enabled(&db.pool, "demo", false)
+            .await
+            .unwrap();
+        let context = runtime_context(&db.pool, &output, &conversation.id)
+            .await
+            .unwrap();
+        assert!(!context.contains("demo: Demo workflow"));
     }
 }

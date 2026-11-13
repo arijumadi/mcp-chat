@@ -42,7 +42,7 @@ test("quick switcher finds the demo conversation", async ({ page }) => {
   await expect(page.getByText("What can you do with MCP tools?")).toBeVisible();
 });
 
-test("settings and MCP screens render", async ({ page }) => {
+test("settings, MCP, and skills screens render", async ({ page }) => {
   await page.goto("/?mock=1");
   await page.getByRole("complementary").getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "Providers" })).toBeVisible();
@@ -54,6 +54,15 @@ test("settings and MCP screens render", async ({ page }) => {
   await expect(page.getByText("Mock MCP").first()).toBeVisible();
   await page.getByRole("button", { name: "Show tools" }).click();
   await expect(page.getByText("Echo text back")).toBeVisible();
+
+  await page.getByRole("complementary").getByRole("button", { name: "Skills" }).click();
+  await expect(page.getByText("Global skill settings")).toBeVisible();
+  await expect(page.getByText("excalidraw").first()).toBeVisible();
+  const skillToggle = page.getByRole("switch", { name: "Enable excalidraw" });
+  await expect(skillToggle).toHaveAttribute("aria-checked", "true");
+  await skillToggle.click();
+  await expect(skillToggle).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByText(/disabled for all chats/)).toBeVisible();
 });
 
 

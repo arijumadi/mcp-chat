@@ -10,7 +10,7 @@ use super::shell::{
     PS_PROLOG, clean_powershell_stderr, clip_lines, echo_suspect, normalize_shell_text,
     powershell_script, shell_echoed, shell_launch_error,
 };
-use super::skills::skill_roots_with_home;
+use super::skills::{set_skill_enabled, skill_roots_with_home};
 use super::ui::take_ui_diff;
 use super::workspace::{
     outside_read_target, path_is_outside, resolve_in_workspace, resolve_write_path, workspace_root,
@@ -1416,6 +1416,44 @@ async fn builtin_skill_loads_skill_md() {
         ))
         .await;
     assert!(escaped.is_err());
+}
+
+#[tokio::test]
+async fn disabled_skill_is_hidden_and_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    let skill_dir = workspace.join(".mcp-chat/skills/demo");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(skill_dir.join("SKILL.md"), "Use the demo workflow.").unwrap();
+    let executor = test_executor(&workspace).await;
+
+    set_skill_enabled(&executor.db.pool, "demo", false)
+        .await
+        .unwrap();
+
+    let listed = executor
+        .run_skill(&request("skill", json!({})))
+        .await
+        .unwrap();
+    assert!(!listed.content.contains("demo"));
+
+    let disabled = executor
+        .run_skill(&request("skill", json!({"name": "demo"})))
+        .await;
+    let disabled = match disabled {
+        Ok(_) => panic!("disabled skill unexpectedly loaded"),
+        Err(error) => error,
+    };
+    assert!(disabled.user_message().contains("disabled"));
+
+    set_skill_enabled(&executor.db.pool, "demo", true)
+        .await
+        .unwrap();
+    let loaded = executor
+        .run_skill(&request("skill", json!({"name": "demo"})))
+        .await
+        .unwrap();
+    assert!(loaded.content.contains("Use the demo workflow."));
 }
 
 #[tokio::test]

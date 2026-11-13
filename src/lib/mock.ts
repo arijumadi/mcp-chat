@@ -7,6 +7,7 @@ import type {
   Part,
   ProviderView,
   ServerView,
+  SkillView,
   ToolInfo,
   UpdateInfo,
 } from "./types";
@@ -93,6 +94,30 @@ export function installMock(): void {
       toolCount: 1,
     },
   ];
+  const skills: SkillView[] = [
+    {
+      name: "excalidraw",
+      description: "Create hand-drawn Excalidraw JSON diagrams.",
+      path: "/home/you/.config/mcp-chat/skills/excalidraw/SKILL.md",
+      source: "global",
+      enabled: true,
+    },
+    {
+      name: "spreadsheet",
+      description: "Probe, read, compare, and safely edit Excel workbooks.",
+      path: "/home/you/.config/mcp-chat/skills/spreadsheet/SKILL.md",
+      source: "global",
+      enabled: true,
+    },
+    {
+      name: "manage-skill",
+      description: "Create, update, validate, and organize global Jarvis skills.",
+      path: "/home/you/.config/mcp-chat/skills/manage-skill/SKILL.md",
+      source: "global",
+      enabled: true,
+    },
+  ];
+  const disabledSkills = new Set<string>(JSON.parse(settingsStore["skills.disabled"] ?? "[]"));
 
   function emit(event: CoreEvent) {
     for (const subscriber of subscribers) subscriber(event);
@@ -365,6 +390,18 @@ export function installMock(): void {
           localStorage.setItem("mock-ui-settings", JSON.stringify(stored));
         }
         return null;
+      case "list_skills":
+        return skills.map((skill) => ({
+          ...skill,
+          enabled: !disabledSkills.has(skill.name),
+        }));
+      case "set_skill_enabled": {
+        const name = String(args.name ?? "");
+        if (args.enabled === false) disabledSkills.add(name);
+        else disabledSkills.delete(name);
+        settingsStore["skills.disabled"] = JSON.stringify([...disabledSkills].sort());
+        return null;
+      }
       case "list_conversations": {
         const offset = Number(args.offset ?? 0);
         const limit = Number(args.limit ?? 200);

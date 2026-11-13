@@ -22,6 +22,14 @@ export interface ConversationToolsView {
   toolMode: "direct" | "lazy";
 }
 
+export interface SkillView {
+  name: string;
+  description: string;
+  path: string;
+  source: "workspace" | "app" | "opencode" | "global" | string;
+  enabled: boolean;
+}
+
 export interface ContextStatus {
   tokens: number;
   window: number;

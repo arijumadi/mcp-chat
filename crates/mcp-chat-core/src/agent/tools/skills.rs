@@ -2,11 +2,27 @@
 
 use super::workspace::{read_text_file, workspace_root_for_conversation};
 use super::{Rendered, ToolExecRequest, ToolExecutor};
+use crate::db::repo::settings;
 use crate::util::truncate_chars;
 use crate::{CoreError, Result};
+use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use sqlx::SqlitePool;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+
+const DISABLED_SKILLS_SETTING: &str = "skills.disabled";
+
+/// A skill exposed to the settings UI. Duplicate names keep the first root,
+/// which is the same precedence the `skill` tool and prompt catalog use.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInfo {
+    pub name: String,
+    pub description: String,
+    pub path: String,
+    pub source: String,
+}
 
 pub(super) async fn skill_listing(dir: &Path, name: &str, relative: &str) -> Result<String> {
     let mut entries = Vec::new();
@@ -59,23 +75,45 @@ pub fn skill_roots(workspace: &Path, output_dir: &Path) -> Vec<PathBuf> {
     skill_roots_with_home(workspace, output_dir, home_dir().as_deref())
 }
 
+/// The user-level skill directory shared by every conversation.
+pub fn global_skills_dir() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".config").join("mcp-chat").join("skills"))
+}
+
+fn skill_roots_with_sources(
+    workspace: &Path,
+    output_dir: &Path,
+    home: Option<&Path>,
+) -> Vec<(PathBuf, &'static str)> {
+    let mut roots = vec![
+        (workspace.join(".mcp-chat").join("skills"), "workspace"),
+        (workspace.join(".opencode").join("skills"), "workspace"),
+    ];
+    if let Some(parent) = output_dir.parent() {
+        roots.push((parent.join("skills"), "app"));
+    }
+    if let Some(home) = home {
+        roots.push((
+            home.join(".config").join("opencode").join("skills"),
+            "opencode",
+        ));
+        roots.push((
+            home.join(".config").join("mcp-chat").join("skills"),
+            "global",
+        ));
+    }
+    roots
+}
+
 pub(super) fn skill_roots_with_home(
     workspace: &Path,
     output_dir: &Path,
     home: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let mut roots = vec![
-        workspace.join(".mcp-chat").join("skills"),
-        workspace.join(".opencode").join("skills"),
-    ];
-    if let Some(parent) = output_dir.parent() {
-        roots.push(parent.join("skills"));
-    }
-    if let Some(home) = home {
-        roots.push(home.join(".config").join("opencode").join("skills"));
-        roots.push(home.join(".config").join("mcp-chat").join("skills"));
-    }
-    roots
+    skill_roots_with_sources(workspace, output_dir, home)
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect()
 }
 
 pub(super) fn home_dir() -> Option<PathBuf> {
@@ -115,9 +153,9 @@ pub(super) fn skill_description(path: &Path) -> String {
     String::new()
 }
 
-pub fn skill_catalog(workspace: &Path, output_dir: &Path) -> Vec<(String, String)> {
+pub fn skill_catalog_infos(workspace: &Path, output_dir: &Path) -> Vec<SkillInfo> {
     let mut skills = BTreeMap::new();
-    for root in skill_roots(workspace, output_dir) {
+    for (root, source) in skill_roots_with_sources(workspace, output_dir, home_dir().as_deref()) {
         let Ok(entries) = std::fs::read_dir(root) else {
             continue;
         };
@@ -130,12 +168,67 @@ pub fn skill_catalog(workspace: &Path, output_dir: &Path) -> Vec<(String, String
             let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
                 continue;
             };
-            skills
-                .entry(name.to_owned())
-                .or_insert_with(|| skill_description(&manifest));
+            skills.entry(name.to_owned()).or_insert_with(|| SkillInfo {
+                name: name.to_owned(),
+                description: skill_description(&manifest),
+                path: manifest.display().to_string(),
+                source: source.to_owned(),
+            });
         }
     }
-    skills.into_iter().collect()
+    skills.into_values().collect()
+}
+
+pub fn skill_catalog(workspace: &Path, output_dir: &Path) -> Vec<(String, String)> {
+    skill_catalog_infos(workspace, output_dir)
+        .into_iter()
+        .map(|skill| (skill.name, skill.description))
+        .collect()
+}
+
+/// Names disabled in Settings. Missing or malformed values mean no disabled
+/// skills, so a bad setting never removes the whole catalog.
+pub async fn disabled_skill_names(pool: &SqlitePool) -> Result<HashSet<String>> {
+    let Some(raw) = settings::get(pool, DISABLED_SKILLS_SETTING).await? else {
+        return Ok(HashSet::new());
+    };
+    let names = serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default();
+    Ok(names
+        .into_iter()
+        .filter(|name| valid_skill_name(name))
+        .collect())
+}
+
+pub async fn set_skill_enabled(pool: &SqlitePool, name: &str, enabled: bool) -> Result<()> {
+    let name = name.trim();
+    if !valid_skill_name(name) {
+        return Err(CoreError::invalid("Invalid skill name."));
+    }
+    let mut names = disabled_skill_names(pool)
+        .await?
+        .into_iter()
+        .collect::<Vec<_>>();
+    if enabled {
+        names.retain(|item| item != name);
+    } else if !names.iter().any(|item| item == name) {
+        names.push(name.to_owned());
+    }
+    names.sort();
+    settings::set(
+        pool,
+        DISABLED_SKILLS_SETTING,
+        &serde_json::to_string(&names)?,
+    )
+    .await
+}
+
+fn valid_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
 }
 
 impl ToolExecutor {
@@ -155,7 +248,11 @@ impl ToolExecutor {
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
         let roots = skill_roots(&workspace, &self.output_dir);
-        let catalog = skill_catalog(&workspace, &self.output_dir);
+        let disabled = disabled_skill_names(&self.db.pool).await?;
+        let catalog = skill_catalog(&workspace, &self.output_dir)
+            .into_iter()
+            .filter(|(name, _)| !disabled.contains(name))
+            .collect::<Vec<_>>();
         if name.is_empty() {
             if file.is_some() {
                 return Err(CoreError::invalid(
@@ -163,7 +260,7 @@ impl ToolExecutor {
                 ));
             }
             let content = if catalog.is_empty() {
-                "No skills found. Add <name>/SKILL.md to .mcp-chat/skills, .opencode/skills, app data, or ~/.config/opencode/skills.".into()
+                "No skills enabled. Add <name>/SKILL.md to .mcp-chat/skills, .opencode/skills, app data, or ~/.config/opencode/skills, then enable it in Skills.".into()
             } else {
                 format!(
                     "Available skills:\n{}",
@@ -186,32 +283,32 @@ impl ToolExecutor {
                 ok: true,
             });
         }
-        if name == "."
-            || name == ".."
-            || !name
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
-        {
+        if !valid_skill_name(name) {
             return Err(CoreError::invalid("Invalid skill name."));
         }
         let skill_dir = roots
             .iter()
             .map(|root| root.join(name))
-            .find(|path| path.join("SKILL.md").is_file())
-            .ok_or_else(|| {
-                CoreError::invalid(format!(
-                    "Skill {name:?} was not found. Available skills: {}",
-                    if catalog.is_empty() {
-                        "(none)".into()
-                    } else {
-                        catalog
-                            .iter()
-                            .map(|(name, _)| name.clone())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    }
-                ))
-            })?;
+            .find(|path| path.join("SKILL.md").is_file());
+        if skill_dir.is_some() && disabled.contains(name) {
+            return Err(CoreError::invalid(format!(
+                "Skill {name:?} is disabled. Enable it in Skills settings."
+            )));
+        }
+        let skill_dir = skill_dir.ok_or_else(|| {
+            CoreError::invalid(format!(
+                "Skill {name:?} was not found. Available skills: {}",
+                if catalog.is_empty() {
+                    "(none)".into()
+                } else {
+                    catalog
+                        .iter()
+                        .map(|(name, _)| name.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            ))
+        })?;
         let canonical_dir = skill_dir.canonicalize()?;
         let requested = file.unwrap_or("SKILL.md");
         if requested.len() > 512 || Path::new(requested).is_absolute() {
