@@ -215,14 +215,18 @@ fn git_exclude_path(workspace: &Path) -> Option<PathBuf> {
 fn environment_block(workspace: &Path, artifacts: &Path, scratch: &Path) -> String {
     let git = workspace.join(".git").exists();
     let shell = if cfg!(windows) { "powershell" } else { "sh" };
+    let global_skills = crate::agent::tools::global_skills_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "(unavailable)".into());
     format!(
-        "<env>\n  Working directory: {}\n  Workspace root folder: {}\n  Is directory a git repo: {}\n  Platform: {}\n  Default shell: {shell}\n  Shell state: each bash call is a fresh process; cd and variables do not persist.\n  Artifacts directory: {}\n  Scratch directory: {}\n  Both artifact/scratch directories are excluded from glob/grep.\n</env>",
+        "<env>\n  Working directory: {}\n  Workspace root folder: {}\n  Is directory a git repo: {}\n  Platform: {}\n  Default shell: {shell}\n  Shell state: each bash call is a fresh process; cd and variables do not persist.\n  Artifacts directory: {}\n  Scratch directory: {}\n  Global skills directory: {}\n  Both artifact/scratch directories are excluded from glob/grep.\n</env>",
         workspace.display(),
         workspace.display(),
         if git { "yes" } else { "no" },
         std::env::consts::OS,
         artifacts.display(),
         scratch.display(),
+        global_skills,
     )
 }
 
@@ -458,6 +462,7 @@ mod tests {
             .await
             .unwrap();
         assert!(context.contains("<env>"));
+        assert!(context.contains("Global skills directory:"));
         assert!(context.contains("Project instruction."));
         assert!(context.contains("demo: Demo workflow"));
     }

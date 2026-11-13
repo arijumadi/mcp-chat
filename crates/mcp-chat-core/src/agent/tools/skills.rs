@@ -59,6 +59,11 @@ pub fn skill_roots(workspace: &Path, output_dir: &Path) -> Vec<PathBuf> {
     skill_roots_with_home(workspace, output_dir, home_dir().as_deref())
 }
 
+/// The user-level skill directory shared by every conversation.
+pub fn global_skills_dir() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".config").join("mcp-chat").join("skills"))
+}
+
 pub(super) fn skill_roots_with_home(
     workspace: &Path,
     output_dir: &Path,

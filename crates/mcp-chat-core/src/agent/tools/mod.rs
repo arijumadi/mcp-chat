@@ -24,7 +24,7 @@ pub use mcp::{
     meta_tool_defs, meta_tool_info,
 };
 pub use output::{persist_result, read_spilled, read_spilled_lines, remove_spilled};
-pub use skills::{skill_catalog, skill_roots};
+pub use skills::{global_skills_dir, skill_catalog, skill_roots};
 pub(crate) use workspace::{display_relative, path_is_outside, resolve_write_path};
 pub use workspace::{resolve_workspace_path, workspace_root, workspace_root_for_conversation};
 

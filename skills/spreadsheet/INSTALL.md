@@ -1,4 +1,8 @@
-# Install Jarvis spreadsheet skill
+# Jarvis spreadsheet skill
+
+Jarvis installs this skill automatically into the global skills directory on
+startup. The manual steps below remain for older builds or a custom install.
+The installer does not overwrite a file you have edited.
 
 Requires Python 3 and `openpyxl` (`python -m pip install openpyxl`).
 
