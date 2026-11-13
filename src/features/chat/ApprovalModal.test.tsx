@@ -117,6 +117,27 @@ describe("ApprovalModal", () => {
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
   });
 
+  it("labels a child conversation approval as a subagent request", () => {
+    useApp.setState({
+      activeId: "parent",
+      respondApproval: vi.fn().mockResolvedValue(undefined),
+      approvals: [
+        {
+          type: "approval",
+          conversationId: "child",
+          callId: "call-subagent",
+          server: "mcp-chat",
+          tool: "write",
+          args: { filePath: "notes.md", content: "hi" },
+          allowAlways: true,
+          diff: null,
+        },
+      ],
+    });
+    render(<ApprovalModal />);
+    expect(screen.getByText(/A subagent wants to run/)).toBeInTheDocument();
+  });
+
   it("tells the user, and assistive technology, which keys answer the call", () => {
     useApp.setState({
       activeId: "c1",

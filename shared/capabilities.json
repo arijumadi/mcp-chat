@@ -150,6 +150,15 @@
       ]
     },
     {
+      "name": "subagent",
+      "label": "Subagent",
+      "risk": "code_exec",
+      "description": [
+        "Delegate a focused task to a child conversation with fresh context.",
+        "Include all relevant context and instructions; the child returns only its final report. It runs in the same workspace and cannot start another subagent."
+      ]
+    },
+    {
       "name": "question",
       "label": "Question",
       "risk": "interactive",

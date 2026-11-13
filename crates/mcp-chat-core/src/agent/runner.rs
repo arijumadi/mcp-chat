@@ -714,6 +714,9 @@ async fn load_tools(
             .collect()
     };
     defs.extend(builtin_tool_defs());
+    if conversation.parent_id.is_some() {
+        defs.retain(|definition| definition.name != "subagent");
+    }
     (registry, defaults, defs, active_slugs, tool_mode)
 }
 

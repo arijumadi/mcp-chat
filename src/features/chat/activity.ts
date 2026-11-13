@@ -163,6 +163,9 @@ export function summarizeTool(payload: ToolCallPayload): ToolSummary {
       case "skill":
         target = str(args.name) || keyValues(args).join(" ");
         break;
+      case "subagent":
+        target = str(args.description) || keyValues(args).join(" ");
+        break;
       case "mcp_execute": {
         const calls = Array.isArray(args.calls) ? (args.calls as Record<string, unknown>[]) : [];
         const names = calls

@@ -36,8 +36,12 @@ export function ApprovalModal() {
   const respond = useApp((state) => state.respondApproval);
   const [feedback, setFeedback] = useState("");
   const [rejecting, setRejecting] = useState(false);
-  const pending = approvals.filter((item) => item.conversationId === activeId);
+  const pending = [...approvals].sort(
+    (a, b) =>
+      Number(b.conversationId === activeId) - Number(a.conversationId === activeId),
+  );
   const approval = pending[0];
+  const subagent = approval !== undefined && approval.conversationId !== activeId;
 
   useEffect(() => {
     setFeedback("");
@@ -58,7 +62,8 @@ export function ApprovalModal() {
       }
       subtitle={
         <>
-          {approval.server} wants to run <code className="font-mono">{approval.tool}</code>
+          {subagent ? "A subagent wants to run" : `${approval.server} wants to run`}{" "}
+          <code className="font-mono">{approval.tool}</code>
           {pending.length > 1 ? ` · 1 of ${pending.length} pending` : ""}
         </>
       }

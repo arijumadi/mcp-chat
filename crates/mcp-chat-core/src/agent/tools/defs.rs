@@ -138,6 +138,15 @@ fn base_schema(name: &str) -> Value {
             },
             "additionalProperties": false
         }),
+        "subagent" => json!({
+            "type": "object",
+            "properties": {
+                "description": {"type": "string", "description": "Short 3-5 word label for the task."},
+                "prompt": {"type": "string", "description": "Complete task for the child agent. It does not see the parent conversation."}
+            },
+            "required": ["description", "prompt"],
+            "additionalProperties": false
+        }),
         "question" => json!({
             "type": "object",
             "properties": {

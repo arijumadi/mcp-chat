@@ -51,7 +51,7 @@ pub async fn get(pool: &SqlitePool, id: &str) -> Result<Conversation> {
 pub async fn list(pool: &SqlitePool, limit: i64, offset: i64) -> Result<Vec<Conversation>> {
     let rows = sqlx::query_as::<_, Conversation>(
         r#"SELECT * FROM conversations
-           WHERE archived = 0
+           WHERE archived = 0 AND parent_id IS NULL
            ORDER BY pinned DESC, updated_at DESC
            LIMIT ?1 OFFSET ?2"#,
     )
@@ -133,6 +133,26 @@ pub async fn set_reasoning_effort(pool: &SqlitePool, id: &str, effort: &str) -> 
     Ok(())
 }
 
+pub async fn set_parent(pool: &SqlitePool, id: &str, parent_id: &str) -> Result<()> {
+    sqlx::query("UPDATE conversations SET parent_id = ?2, updated_at = ?3 WHERE id = ?1")
+        .bind(id)
+        .bind(parent_id)
+        .bind(now_ms())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_max_steps(pool: &SqlitePool, id: &str, max_steps: i64) -> Result<()> {
+    sqlx::query("UPDATE conversations SET max_steps = ?2, updated_at = ?3 WHERE id = ?1")
+        .bind(id)
+        .bind(max_steps)
+        .bind(now_ms())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn set_pinned(pool: &SqlitePool, id: &str, pinned: bool) -> Result<()> {
     sqlx::query("UPDATE conversations SET pinned = ?2 WHERE id = ?1")
         .bind(id)
@@ -202,6 +222,7 @@ pub async fn search(pool: &SqlitePool, query: &str, limit: i64) -> Result<Vec<Se
                   c.updated_at
            FROM conversations c
            WHERE c.archived = 0
+             AND c.parent_id IS NULL
              AND (
                c.title LIKE ?2 ESCAPE '\'
                OR c.id IN (
@@ -276,6 +297,12 @@ mod tests {
         let db = Db::open_memory().await.unwrap();
         let a = create(&db.pool, "Alpha", None, None).await.unwrap();
         let b = create(&db.pool, "Beta", None, None).await.unwrap();
+        let child = create(&db.pool, "Renamed child", None, None).await.unwrap();
+        set_parent(&db.pool, &child.id, &a.id).await.unwrap();
+        assert_eq!(
+            get(&db.pool, &child.id).await.unwrap().parent_id.as_deref(),
+            Some(a.id.as_str())
+        );
         assert_eq!(a.tool_mode, "lazy");
         assert_eq!(a.reasoning_effort, "default");
         set_reasoning_effort(&db.pool, &a.id, "high").await.unwrap();
@@ -284,6 +311,7 @@ mod tests {
         assert_eq!(threads.len(), 2);
         assert!(threads.iter().any(|c| c.id == a.id));
         assert!(threads.iter().any(|c| c.id == b.id));
+        assert!(!threads.iter().any(|c| c.id == child.id));
 
         update_title(&db.pool, &a.id, "Renamed thread")
             .await

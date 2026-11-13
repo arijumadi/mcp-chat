@@ -134,9 +134,10 @@ impl Harness {
                 .expect("event channel");
             match &event {
                 CoreEvent::Status {
+                    conversation_id,
                     status: TurnStatus::Idle | TurnStatus::Error,
                     ..
-                } => {
+                } if conversation_id == &self.conversation_id => {
                     events.push(event);
                     break;
                 }
@@ -236,6 +237,7 @@ async fn streams_text_and_persists_it() {
     assert!(tool_names.contains(&"grep"));
     assert!(tool_names.contains(&"glob"));
     assert!(tool_names.contains(&"skill"));
+    assert!(tool_names.contains(&"subagent"));
     assert!(tool_names.contains(&"question"));
     let messages = requests[0]["messages"].as_array().unwrap();
     let system = messages
@@ -1461,6 +1463,64 @@ async fn continue_turn_adds_a_hidden_resume_prompt() {
             .await
             .contains("Hello from the mock provider.")
     );
+}
+
+#[tokio::test]
+async fn subagent_runs_in_a_child_conversation() {
+    let h = Harness::new("mock-subagent", None, 0).await;
+    let events = h
+        .send_and_wait("delegate this", ApprovalDecision::Once, None, "ari")
+        .await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        CoreEvent::Approval { tool, .. } if tool == "subagent"
+    )));
+    assert!(
+        h.assistant_text()
+            .await
+            .contains("Parent got the subagent report.")
+    );
+
+    let all = conversations::list_all(&h.db.pool).await.unwrap();
+    let child = all
+        .iter()
+        .find(|conversation| conversation.parent_id.as_deref() == Some(&h.conversation_id))
+        .expect("child conversation");
+    assert_eq!(child.title, "Inspect workspace");
+    let child_history = messages::list_for_conversation(&h.db.pool, &child.id)
+        .await
+        .unwrap();
+    let child_text = child_history
+        .iter()
+        .filter(|message| message.message.role == "assistant")
+        .flat_map(|message| message.parts.iter())
+        .filter_map(|part| {
+            part.payload()
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(child_text.contains("Subagent report"));
+
+    let requests = h.provider.requests();
+    assert!(requests.len() >= 3);
+    let child_request = requests
+        .iter()
+        .find(|request| {
+            request["messages"]
+                .to_string()
+                .contains("You are a subagent spawned")
+        })
+        .expect("child request");
+    let child_tools = child_request["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(!child_tools.contains(&"subagent"));
 }
 
 #[tokio::test]

@@ -14,13 +14,13 @@ pub mod types;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use tokio::sync::{Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
 
 use crate::db::Db;
-use crate::db::repo::{conversations, messages, providers, settings};
+use crate::db::repo::{conversation_servers, conversations, messages, providers, settings};
 use crate::events::CoreEvent;
 use crate::mcp::McpManager;
 use crate::models::{Conversation, Message, PartPayload, Provider};
@@ -28,7 +28,8 @@ use crate::secrets::SecretStore;
 use crate::{CoreError, Result};
 
 use self::approvals::{ApprovalAnswer, ApprovalRegistry, InputAnswer, InputRegistry};
-use self::tools::ToolExecutor;
+use self::tools::{SubagentHost, ToolExecutor};
+use futures::future::BoxFuture;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,20 +89,156 @@ impl ChatEngine {
             attachments_dir: attachments_dir.clone(),
             limiter: Arc::new(Semaphore::new(4)),
             file_locks: crate::agent::file_locks::FileLocks::default(),
+            subagent_host: std::sync::OnceLock::new(),
         });
-        Arc::new(Self {
+        let engine = Arc::new(Self {
             db,
             secrets,
             mcp,
             events,
             approvals,
             inputs,
-            executor,
+            executor: executor.clone(),
             output_dir,
             attachments_dir,
             turns: Mutex::new(HashMap::new()),
             auto_approve: Mutex::new(HashSet::new()),
-        })
+        });
+        let host: Arc<dyn SubagentHost> = Arc::new(SubagentHostRef {
+            engine: Arc::downgrade(&engine),
+        });
+        let _ = executor.subagent_host.set(host);
+        engine
+    }
+
+    /// Run a focused child conversation to completion and return its final text.
+    /// The child gets fresh context, the same workspace/model/tool selection,
+    /// and its own message history. It is hidden from the main conversation list.
+    pub async fn run_subagent(
+        self: &Arc<Self>,
+        parent_id: &str,
+        description: &str,
+        prompt: &str,
+        cancel: CancellationToken,
+    ) -> Result<(String, String)> {
+        let parent = conversations::get(&self.db.pool, parent_id).await?;
+        if parent.parent_id.is_some() {
+            return Err(CoreError::Message(
+                "Subagent depth limit reached. A subagent cannot start another subagent.".into(),
+            ));
+        }
+
+        let description = description.trim();
+        let description = if description.is_empty() {
+            "Subagent"
+        } else {
+            description
+        };
+        let title: String = description.chars().take(120).collect();
+        let child = conversations::create(
+            &self.db.pool,
+            &title,
+            parent.provider_id.as_deref(),
+            parent.model.as_deref(),
+        )
+        .await?;
+        conversations::set_parent(&self.db.pool, &child.id, &parent.id).await?;
+        conversations::set_workspace(&self.db.pool, &child.id, parent.workspace_root.as_deref())
+            .await?;
+        conversations::set_reasoning_effort(&self.db.pool, &child.id, &parent.reasoning_effort)
+            .await?;
+        conversations::set_tool_mode(&self.db.pool, &child.id, &parent.tool_mode).await?;
+        conversations::set_system_prompt(&self.db.pool, &child.id, parent.system_prompt.as_deref())
+            .await?;
+        conversations::set_max_steps(
+            &self.db.pool,
+            &child.id,
+            if parent.max_steps > 0 {
+                parent.max_steps
+            } else {
+                30
+            },
+        )
+        .await?;
+        if parent.servers_configured {
+            let server_ids = conversation_servers::selected(&self.db.pool, &parent.id).await?;
+            conversation_servers::set(&self.db.pool, &child.id, &server_ids).await?;
+        }
+
+        let message = messages::create(&self.db.pool, &child.id, "user", "completed").await?;
+        messages::append_part(
+            &self.db.pool,
+            &message.id,
+            "text",
+            &PartPayload::Text {
+                text: format!(
+                    "You are a subagent spawned by another Jarvis conversation. Work on the task below and return a concise, complete report for the parent agent. Do not ask the user unless truly blocked.\n\n{prompt}"
+                ),
+            },
+        )
+        .await?;
+        messages::append_part(
+            &self.db.pool,
+            &message.id,
+            "time",
+            &PartPayload::Text {
+                text: crate::util::message_time_note(message.created_at),
+            },
+        )
+        .await?;
+        conversations::touch(&self.db.pool, &child.id).await?;
+
+        let (slot, child_cancel) =
+            self.claim_turn(&child.id, "This subagent is already running.")?;
+        let inherited_auto = self.auto_approve(&parent.id);
+        if inherited_auto {
+            self.set_auto_approve(&child.id, true);
+        }
+        let watcher_token = child_cancel.clone();
+        let parent_cancel = cancel.clone();
+        let watcher = tokio::spawn(async move {
+            parent_cancel.cancelled().await;
+            watcher_token.cancel();
+        });
+        // Box the nested runner future to keep the recursive async type finite.
+        let child_run: futures::future::BoxFuture<'_, Result<()>> = Box::pin(
+            crate::agent::runner::run(self.clone(), &child.id, child_cancel.clone()),
+        );
+        let result = child_run.await;
+        watcher.abort();
+        drop(slot);
+        self.set_auto_approve(&child.id, false);
+        if cancel.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+        result?;
+
+        let history = messages::list_for_conversation(&self.db.pool, &child.id).await?;
+        let last = history
+            .iter()
+            .rev()
+            .find(|item| item.message.role == "assistant");
+        let Some(last) = last else {
+            return Err(CoreError::Message(
+                "Subagent finished without a final answer.".into(),
+            ));
+        };
+        if last.message.status == "error" {
+            let message = last
+                .message
+                .error
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "Subagent failed.".into());
+            return Err(CoreError::Message(format!("Subagent failed: {message}")));
+        }
+        let report = crate::agent::context::text_parts(&last.parts);
+        if report.trim().is_empty() {
+            return Err(CoreError::Message(
+                "Subagent finished without a final answer.".into(),
+            ));
+        }
+        Ok((child.id, report))
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<CoreEvent> {
@@ -525,4 +662,27 @@ impl ChatEngine {
             provider.max_output_tokens.max(256),
         ))
     }
+}
+
+impl SubagentHost for SubagentHostRef {
+    fn run_subagent<'a>(
+        &'a self,
+        parent_id: &'a str,
+        description: &'a str,
+        prompt: &'a str,
+        cancel: CancellationToken,
+    ) -> BoxFuture<'a, Result<(String, String)>> {
+        Box::pin(async move {
+            let engine = self.engine.upgrade().ok_or_else(|| {
+                CoreError::Message("The subagent runner is not available.".into())
+            })?;
+            engine
+                .run_subagent(parent_id, description, prompt, cancel)
+                .await
+        })
+    }
+}
+
+struct SubagentHostRef {
+    engine: Weak<ChatEngine>,
 }

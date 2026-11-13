@@ -69,7 +69,7 @@ fn builtin_tool_schema_stays_compact() {
         .sum();
     println!("builtin tool schema chars: {chars}");
     assert!(
-        chars < 7_800,
+        chars < 8_600,
         "builtin tool schema grew unexpectedly: {chars} characters"
     );
 }
@@ -348,6 +348,7 @@ async fn test_executor(workspace: &Path) -> ToolExecutor {
         attachments_dir: workspace.join("attachments"),
         limiter: Arc::new(Semaphore::new(4)),
         file_locks: FileLocks::default(),
+        subagent_host: std::sync::OnceLock::new(),
     }
 }
 
