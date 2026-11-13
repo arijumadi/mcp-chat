@@ -146,15 +146,18 @@ impl ChatEngine {
                     done,
                 );
             }
-            return Ok((
-                child.id,
-                if running {
-                    "Follow-up sent to the running subagent. It will report again when this round finishes."
-                } else {
-                    "Follow-up sent. The subagent is running in the background and will report back."
-                }
-                .into(),
-            ));
+            let content = if running {
+                format!(
+                    "Follow-up sent to the running subagent (sessionID: {}). It will report again when this round finishes.",
+                    child.id
+                )
+            } else {
+                format!(
+                    "Follow-up sent. The subagent is running in the background (sessionID: {}).",
+                    child.id
+                )
+            };
+            return Ok((child.id, content));
         }
 
         if parent.parent_id.is_some() {
@@ -209,10 +212,11 @@ impl ChatEngine {
             child.title.clone(),
             done,
         );
-        Ok((
-            child.id,
-            "The subagent is running in the background. You will receive a <subagent> report when it goes idle. Do not poll or duplicate its work; work on non-overlapping tasks or briefly tell the user and end your response.".into(),
-        ))
+        let content = format!(
+            "The subagent is running in the background (sessionID: {}). You will receive a <subagent> report when it goes idle. Do not poll or duplicate its work; work on non-overlapping tasks or briefly tell the user and end your response.",
+            child.id
+        );
+        Ok((child.id, content))
     }
 
     async fn mark_subagent_part(&self, parent_id: &str, part_id: &str, child_id: &str) {
