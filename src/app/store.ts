@@ -19,6 +19,7 @@ import type {
   Part,
   ProviderView,
   RevertResult,
+  ReasoningEffort,
   SearchHit,
   ServerView,
   TurnStatus,
@@ -112,6 +113,7 @@ export interface AppStore {
   setAutoApprove: (enabled: boolean) => Promise<void>;
   revertMessage: (messageId: string) => Promise<void>;
   setModel: (providerId: string, model: string) => Promise<void>;
+  setReasoningEffort: (conversationId: string, effort: ReasoningEffort) => Promise<void>;
   setConversationWorkspace: (conversationId: string, workspaceRoot: string) => Promise<void>;
   renameConversation: (id: string, title: string) => Promise<void>;
   setConversationPinned: (id: string, pinned: boolean) => Promise<void>;
@@ -865,6 +867,21 @@ export const useApp = create<AppStore>()((set, get) => ({
     try {
       await call("set_conversation_model", { conversationId, providerId, model });
       await get().refreshConversations();
+    } catch (error) {
+      get().toast(String(error), "error");
+    }
+  },
+
+  async setReasoningEffort(conversationId, effort) {
+    try {
+      await call("set_conversation_reasoning_effort", { conversationId, effort });
+      set((state) => ({
+        conversations: state.conversations.map((conversation) =>
+          conversation.id === conversationId
+            ? { ...conversation, reasoningEffort: effort }
+            : conversation,
+        ),
+      }));
     } catch (error) {
       get().toast(String(error), "error");
     }

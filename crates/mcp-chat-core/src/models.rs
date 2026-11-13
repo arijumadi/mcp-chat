@@ -12,6 +12,7 @@ pub struct Conversation {
     pub updated_at: i64,
     pub provider_id: Option<String>,
     pub model: Option<String>,
+    pub reasoning_effort: String,
     pub workspace_root: Option<String>,
     pub system_prompt: Option<String>,
     pub archived: bool,

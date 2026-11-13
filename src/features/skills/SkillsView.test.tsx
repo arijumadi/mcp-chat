@@ -29,6 +29,7 @@ const conversation = {
   updatedAt: 0,
   providerId: null,
   model: null,
+  reasoningEffort: "auto",
   workspaceRoot: "/home/you/project",
   systemPrompt: null,
   archived: false,

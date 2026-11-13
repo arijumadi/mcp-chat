@@ -199,6 +199,20 @@ pub async fn set_conversation_model(
 }
 
 #[tauri::command]
+pub async fn set_conversation_reasoning_effort(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    effort: String,
+) -> CmdResult<()> {
+    if !matches!(effort.as_str(), "auto" | "low" | "medium" | "high") {
+        return Err("Unknown reasoning effort".into());
+    }
+    conversations::set_reasoning_effort(&state.db.pool, &conversation_id, &effort)
+        .await
+        .map_err(cmd_err)
+}
+
+#[tauri::command]
 pub async fn set_conversation_workspace(
     state: State<'_, AppState>,
     conversation_id: String,

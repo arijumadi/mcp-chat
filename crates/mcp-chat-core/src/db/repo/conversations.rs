@@ -123,6 +123,16 @@ pub async fn set_system_prompt(pool: &SqlitePool, id: &str, prompt: Option<&str>
     Ok(())
 }
 
+pub async fn set_reasoning_effort(pool: &SqlitePool, id: &str, effort: &str) -> Result<()> {
+    sqlx::query("UPDATE conversations SET reasoning_effort = ?2, updated_at = ?3 WHERE id = ?1")
+        .bind(id)
+        .bind(effort)
+        .bind(now_ms())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn set_pinned(pool: &SqlitePool, id: &str, pinned: bool) -> Result<()> {
     sqlx::query("UPDATE conversations SET pinned = ?2 WHERE id = ?1")
         .bind(id)
@@ -267,6 +277,9 @@ mod tests {
         let a = create(&db.pool, "Alpha", None, None).await.unwrap();
         let b = create(&db.pool, "Beta", None, None).await.unwrap();
         assert_eq!(a.tool_mode, "lazy");
+        assert_eq!(a.reasoning_effort, "auto");
+        set_reasoning_effort(&db.pool, &a.id, "high").await.unwrap();
+        assert_eq!(get(&db.pool, &a.id).await.unwrap().reasoning_effort, "high");
         let threads = list(&db.pool, 20, 0).await.unwrap();
         assert_eq!(threads.len(), 2);
         assert!(threads.iter().any(|c| c.id == a.id));

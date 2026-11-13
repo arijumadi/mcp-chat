@@ -396,6 +396,13 @@ fn build_body(req: &ChatRequest) -> Result<Value> {
     if let Some(temperature) = req.temperature {
         body["temperature"] = json!(temperature);
     }
+    if let Some(effort) = req
+        .reasoning_effort
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        body["reasoning_effort"] = json!(effort);
+    }
     if !req.tools.is_empty() {
         body["tools"] = Value::Array(
             req.tools
@@ -448,11 +455,31 @@ mod tests {
             tool_choice: ToolChoice::Auto,
             max_tokens: 1024,
             temperature: None,
+            reasoning_effort: None,
         };
         let body = build_body(&request).unwrap();
         let content = &body["messages"][0]["content"];
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[1]["type"], "image_url");
         assert_eq!(content[1]["image_url"]["url"], "data:image/png;base64,AAAA");
+    }
+
+    #[test]
+    fn reasoning_effort_is_sent_when_selected() {
+        let request = ChatRequest {
+            kind: ProviderKind::OpenaiCompat,
+            base_url: "https://example.invalid".into(),
+            api_key: None,
+            model: "reasoning-model".into(),
+            system: None,
+            messages: vec![ChatMessage::text(ChatRole::User, "Think")],
+            tools: Vec::new(),
+            tool_choice: ToolChoice::Auto,
+            max_tokens: 1024,
+            temperature: None,
+            reasoning_effort: Some("high".into()),
+        };
+        let body = build_body(&request).unwrap();
+        assert_eq!(body["reasoning_effort"], "high");
     }
 }

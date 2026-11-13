@@ -107,6 +107,7 @@ pub fn run() {
             commands::chat::set_conversation_pinned,
             commands::chat::delete_conversation,
             commands::chat::set_conversation_model,
+            commands::chat::set_conversation_reasoning_effort,
             commands::chat::set_conversation_workspace,
             commands::chat::set_system_prompt,
             commands::chat::get_messages,

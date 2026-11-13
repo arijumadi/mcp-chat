@@ -18,6 +18,7 @@ const conversation: Conversation = {
   updatedAt: 0,
   providerId: "p1",
   model: "mock",
+  reasoningEffort: "auto",
   workspaceRoot: "/home/you/project",
   systemPrompt: null,
   archived: false,
