@@ -195,6 +195,24 @@ pub async fn record_discovery(
     Ok(())
 }
 
+pub async fn set_oauth(pool: &SqlitePool, id: &str, issuer: &str, client_id: &str) -> Result<()> {
+    sqlx::query("UPDATE servers SET oauth_issuer = ?2, oauth_client_id = ?3 WHERE id = ?1")
+        .bind(id)
+        .bind(issuer)
+        .bind(client_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn clear_oauth(pool: &SqlitePool, id: &str) -> Result<()> {
+    sqlx::query("UPDATE servers SET oauth_issuer = NULL, oauth_client_id = NULL WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn record_error(pool: &SqlitePool, id: &str, error: &str) -> Result<()> {
     sqlx::query(
         "UPDATE servers SET last_status = 'error', last_error = ?2, last_checked_at = ?3 WHERE id = ?1",

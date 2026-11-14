@@ -146,6 +146,7 @@ export interface Server {
 export interface ServerView extends Server {
   hasBearer: boolean;
   hasApiKey: boolean;
+  hasOAuthToken: boolean;
   toolCount: number;
 }
 
@@ -171,6 +172,17 @@ export interface CallToolResult {
   resultType?: string;
   inputRequests?: unknown;
   requestState?: unknown;
+}
+
+export interface OAuthStart {
+  flowId: string;
+  authUrl: string;
+  redirectUri: string;
+}
+
+export interface OAuthStatus {
+  status: "pending" | "success" | "error" | "cancelled" | "not_found" | string;
+  error: string | null;
 }
 
 export interface ConnectionReport {

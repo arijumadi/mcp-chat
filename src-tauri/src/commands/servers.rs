@@ -8,6 +8,7 @@ use mcp_chat_core::mcp::client::{
     args_from_json, env_from_json, headers_from_json, validate_server_url,
 };
 use mcp_chat_core::mcp::manager::ConnectionReport;
+use mcp_chat_core::mcp::oauth::{OAuthStart, OAuthStatus};
 use mcp_chat_core::mcp::types::{CallToolResult, TransportKind};
 use mcp_chat_core::models::{AuthKind, Server, ServerPolicy, ServerView};
 use mcp_chat_core::secrets::{server_api_key_account, server_bearer_account};
@@ -158,6 +159,11 @@ async fn view(state: &AppState, server: Server) -> ServerView {
     } else {
         false
     };
+    let has_oauth_token = if server.auth_kind == "oauth" {
+        state.mcp.has_oauth_token(&server).await
+    } else {
+        false
+    };
     let tool_count = server
         .tools_json
         .as_deref()
@@ -168,6 +174,7 @@ async fn view(state: &AppState, server: Server) -> ServerView {
         server,
         has_bearer,
         has_api_key,
+        has_oauth_token,
         tool_count,
     }
 }
@@ -188,12 +195,6 @@ pub async fn create_server(
     input: ServerInput,
 ) -> CmdResult<ServerView> {
     let valid = validate(&input)?;
-    if valid.auth_kind == "oauth" {
-        return Err(
-            "OAuth servers are set up in the OAuth milestone; use a bearer token or none for now."
-                .into(),
-        );
-    }
     let slug = unique_slug(&state, &input.name).await;
     let server = servers::create(
         &state.db.pool,
@@ -239,7 +240,9 @@ pub async fn create_server(
                 .map_err(cmd_err)?;
         }
     }
-    let _ = state.mcp.refresh_tools(&server.id).await;
+    if valid.auth_kind != "oauth" {
+        let _ = state.mcp.refresh_tools(&server.id).await;
+    }
     let server = servers::get(&state.db.pool, &server.id)
         .await
         .map_err(cmd_err)?;
@@ -253,12 +256,10 @@ pub async fn update_server(
     input: ServerInput,
 ) -> CmdResult<ServerView> {
     let valid = validate(&input)?;
-    if valid.auth_kind == "oauth" {
-        return Err("OAuth servers are set up in the OAuth milestone.".into());
-    }
     let existing = servers::get(&state.db.pool, &server_id)
         .await
         .map_err(cmd_err)?;
+    let new_url = valid.url.clone();
     servers::update(
         &state.db.pool,
         &server_id,
@@ -317,11 +318,22 @@ pub async fn update_server(
             .delete(&server_api_key_account(&server_id))
             .await;
     }
+    let reset_oauth =
+        existing.url != new_url || (existing.auth_kind == "oauth") != (valid.auth_kind == "oauth");
+    if reset_oauth {
+        state
+            .mcp
+            .disconnect_oauth(&existing)
+            .await
+            .map_err(cmd_err)?;
+    }
     state.mcp.invalidate(&server_id).await;
-    let _ = state.mcp.refresh_tools(&server_id).await;
     let update = servers::get(&state.db.pool, &server_id)
         .await
         .map_err(cmd_err)?;
+    if valid.auth_kind != "oauth" || state.mcp.has_oauth_token(&update).await {
+        let _ = state.mcp.refresh_tools(&server_id).await;
+    }
     Ok(view(&state, update).await)
 }
 
@@ -362,7 +374,50 @@ pub async fn set_server_bearer(
 }
 
 #[tauri::command]
+pub async fn start_server_oauth(
+    state: State<'_, AppState>,
+    server_id: String,
+) -> CmdResult<OAuthStart> {
+    let server = servers::get(&state.db.pool, &server_id)
+        .await
+        .map_err(cmd_err)?;
+    if server.auth_kind != "oauth" {
+        return Err("Set this server's auth mode to OAuth first.".into());
+    }
+    state.mcp.start_oauth(&server).await.map_err(cmd_err)
+}
+
+#[tauri::command]
+pub async fn oauth_status(state: State<'_, AppState>, flow_id: String) -> CmdResult<OAuthStatus> {
+    Ok(state.mcp.oauth_status(&flow_id).await)
+}
+
+#[tauri::command]
+pub async fn cancel_server_oauth(state: State<'_, AppState>, flow_id: String) -> CmdResult<()> {
+    state.mcp.cancel_oauth(&flow_id).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn disconnect_server_oauth(
+    state: State<'_, AppState>,
+    server_id: String,
+) -> CmdResult<ServerView> {
+    let server = servers::get(&state.db.pool, &server_id)
+        .await
+        .map_err(cmd_err)?;
+    state.mcp.disconnect_oauth(&server).await.map_err(cmd_err)?;
+    let server = servers::get(&state.db.pool, &server_id)
+        .await
+        .map_err(cmd_err)?;
+    Ok(view(&state, server).await)
+}
+
+#[tauri::command]
 pub async fn delete_server(state: State<'_, AppState>, server_id: String) -> CmdResult<()> {
+    if let Ok(server) = servers::get(&state.db.pool, &server_id).await {
+        let _ = state.mcp.disconnect_oauth(&server).await;
+    }
     state
         .secrets
         .delete(&server_bearer_account(&server_id))
@@ -449,7 +504,14 @@ pub async fn test_server(
         }
     }
     if input.auth_kind == "oauth" {
-        return Err("OAuth servers are set up in the OAuth milestone.".into());
+        let server_id = input
+            .server_id
+            .as_deref()
+            .ok_or_else(|| "Save this server and connect OAuth before testing it.".to_string())?;
+        let server = servers::get(&state.db.pool, server_id)
+            .await
+            .map_err(cmd_err)?;
+        return state.mcp.test_saved(&server).await.map_err(cmd_err);
     }
     state
         .mcp

@@ -8,7 +8,7 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 
 - Streaming chat from any OpenAI-compatible `/chat/completions` endpoint and from Anthropic `/v1/messages`.
 - Local SQLite transcripts with full-text search, inline rename, delete, regenerate and stop.
-- Remote MCP over **Streamable HTTP 2026-07-28** (stateless headers, `server/discover`, request-scoped SSE progress, MRTR input), with legacy **2025-11-25** `initialize` fallback and deprecated **HTTP+SSE** fallback.
+- Remote MCP over **Streamable HTTP 2026-07-28** (stateless headers, `server/discover`, request-scoped SSE progress, MRTR input), with legacy **2025-11-25** `initialize` fallback, deprecated **HTTP+SSE** fallback, and **OAuth 2.0 + PKCE** for subscription-backed servers such as T3 Code.
 - Local MCP servers over **stdio**, including `npx` packages. Add a command, one argument per line, an optional working directory and optional environment variables; Jarvis keeps the child process alive between tool calls and stops it when the server is disabled, edited or deleted.
 - The model can call discovered MCP tools inside a normal turn. Tool calls and reasoning are grouped into a collapsible activity summary with the final answer below; detail cards stream live (`queued → running → ok / error`) and run in parallel (max 4). Any text the model emits before a tool call stays in the stored message for context but is not rendered as an interim note — detail cards show only thoughts and tools.
 - Per-chat MCP server selection with **lazy catalog + call** delivery. The MCP popover only selects which servers are active; there is no direct-schema mode. A compact server/tool/argument catalog goes in the system prompt, and the model calls `mcp_call_tool` directly (`mcp_get_tool_schema` only when it needs full JSON Schema; `mcp_search_tools` only when the catalog is truncated). `mcp_execute` runs up to 8 independent MCP calls in one step (4 in flight), so a multi-tool answer does not need many model round trips. Approval and policy checks still apply to each real target.
@@ -45,7 +45,7 @@ A local-first desktop chat app for OpenAI-compatible and Anthropic models, with 
 
 Packaging is configured for Windows (NSIS + MSI), macOS (app + dmg) and Linux (deb + rpm + AppImage). See `PACKAGING.md`. Installers must be built on the target OS; this headless repository does not produce native bundles.
 
-Not in this batch: OAuth 2.1/DCR (M6). Static bearer tokens and an `X-API-Key` header (stored in the OS keychain) for MCP work.
+Remote MCP servers can use **OAuth 2.0 authorization code + PKCE** with dynamic client registration, a loopback callback, and refresh tokens. The access token, refresh token and client secret live in the OS keychain, never SQLite. Static bearer tokens and an `X-API-Key` header remain available for servers that do not support OAuth.
 
 ## Tool loading and context
 
@@ -75,7 +75,7 @@ If you built this on a headless server and need to move it to a desktop, follow 
 Then in the app:
 
 1. **Settings → Add provider.** For a local OpenAI-compatible server use e.g. `http://127.0.0.1:11434/v1` and a model name; keys are optional for localhost.
-2. **MCP servers → Add server.** Use an HTTPS MCP endpoint (or localhost during development), choose a policy and run **Test connection**. For a local server choose **Local command (stdio / npx)**, set Command to `npx`, then add the package and arguments one per line, for example `-y`, `@modelcontextprotocol/server-filesystem`, `/path/to/folder`.
+2. **MCP servers → Add server.** Use an HTTPS MCP endpoint (or localhost during development), choose a policy and run **Test connection**. For OAuth, select **OAuth 2.0 (authorization code + PKCE)**, click **Save and connect**, and approve the provider's sign-in page in your browser. For a local server choose **Local command (stdio / npx)**, set Command to `npx`, then add the package and arguments one per line, for example `-y`, `@modelcontextprotocol/server-filesystem`, `/path/to/folder`.
 3. Create a chat and ask the model to use one of the server's tools.
 
 ## Mock server walkthrough
@@ -119,20 +119,20 @@ Everything below **was run in this repository** on Linux without a GUI/WebKit de
 ```bash
 pnpm lint          # ESLint
 pnpm typecheck     # TypeScript
-pnpm test          # Vitest: 31 tests
+pnpm test          # Vitest: 253 tests
 pnpm build         # Vite production build
 pnpm version:check # package.json, Cargo workspace and Tauri version agree
 pnpm package       # native installer for the current OS
 pnpm fmt:check     # cargo fmt --check
-pnpm core:test     # 85 unit + 32 agent + 6 MCP integration + 1 auth + 1 provider test = 125 Rust tests
+pnpm core:test     # 188 library + 41 agent-loop + 6 MCP protocol + 1 auth + 1 OAuth + 1 provider = 238 Rust tests
 pnpm core:clippy   # cargo clippy -p mcp-chat-core --all-targets -- -D warnings
 pnpm mock:clippy   # same for the mock server
-pnpm test:e2e      # Playwright: 6 smoke + 6 visual-regression tests against vite preview
+pnpm test:e2e      # Playwright: 71 smoke, interaction and visual-regression tests against vite preview
 ```
 
 `pnpm check` runs all of the above except Playwright.
 
-The Rust tests cover the acceptance matrix: split tool arguments, two parallel calls, invalid arguments, unknown tools, `finish_reason: length`, a cut stream, context overflow + guided/cache-aware compaction, manual compaction/context status, per-chat server selection, lazy MCP catalog/schema/call, batch execute, read_tool_output paging, built-in file/shell/search/skill/apply_patch tools, shell output labels/echo handling, shell-not-found errors, CLIXML cleanup, prompt composition, AGENTS/skill catalog, auto-approve/dangerous-command guard, built-in question round trip (with and without options), loop guard, continue-turn resume, default/custom system prompt, cache-stable timestamps in user turns, revert-to-composer, attachment staging/text inlining/image content blocks, unknown finish reason, policy denial, user rejection with feedback, crash sweep, progress notifications, MRTR elicitation, output spill/paging, optional max steps, cancellation during a tool, and retryable provider errors.
+The Rust tests cover the acceptance matrix: split tool arguments, two parallel calls, invalid arguments, unknown tools, `finish_reason: length`, a cut stream, context overflow + guided/cache-aware compaction, manual compaction/context status, per-chat server selection, lazy MCP catalog/schema/call, batch execute, read_tool_output paging, built-in file/shell/search/skill/apply_patch tools, shell output labels/echo handling, shell-not-found errors, CLIXML cleanup, prompt composition, AGENTS/skill catalog, auto-approve/dangerous-command guard, built-in question round trip (with and without options), loop guard, continue-turn resume, default/custom system prompt, cache-stable timestamps in user turns, revert-to-composer, attachment staging/text inlining/image content blocks, unknown finish reason, policy denial, user rejection with feedback, crash sweep, progress notifications, MRTR elicitation, OAuth discovery/DCR/PKCE/callback/refresh, output spill/paging, optional max steps, cancellation during a tool, and retryable provider errors.
 
 **What is not verified on this machine:** the Tauri shell itself could not be compiled or launched here because the machine has no WebKit/GTK development headers and no display. `pnpm tauri dev` is the intended path on a desktop with the prerequisites above. The frontend was verified in a browser through Playwright using a stubbed IPC bridge; screenshots are from that harness, not the native window. No real provider API key was used for automated tests; the keychain path is exercised with an in-memory store in tests.
 
@@ -168,7 +168,7 @@ The approval shortcuts never fire while you are typing in a text field, so writi
 
 - No accounts, cloud sync, telemetry or crash reporting.
 - All network I/O happens in Rust. The webview never calls LLM or MCP endpoints. Update checks are the only optional GitHub request: they run on startup (unless disabled) or when you press **Check for updates**, and send no message content or identifiers.
-- API keys and MCP bearer tokens are stored in the OS keychain (`com.mcpchat.app`), not SQLite or `localStorage`.
+- API keys, MCP bearer tokens and OAuth sessions are stored in the OS keychain (`com.mcpchat.app`), not SQLite or `localStorage`. OAuth access tokens are refreshed automatically before they expire when the provider issued a refresh token.
 - Markdown raw HTML is disabled, links are opened in the system browser, and remote images are not loaded.
 - MCP server URLs must be HTTPS, except loopback for development. Local stdio servers run as child processes with your user permissions; only add commands and packages you trust. Stdio environment values are stored in the local SQLite database.
 - Request logs never include message content; `Authorization`/`Cookie` values are not logged.
@@ -188,4 +188,4 @@ PACKAGING.md             Windows/macOS/Linux installer and signing guide
 
 ## Scope and next steps
 
-M6 (OAuth 2.1 + PKCE + DCR + loopback + refresh/Reconnect) is still not implemented. M7 packaging is configured; build the native installers on the target OS with `PACKAGING.md`. Automatic updates work for Windows NSIS and Linux AppImage; Linux `.deb` stays manual, and MSIX is future work. See `ARCHITECTURE.md` for the remaining protocol gaps.
+M7 packaging is configured; build the native installers on the target OS with `PACKAGING.md`. Automatic updates work for Windows NSIS and Linux AppImage; Linux `.deb` stays manual, and MSIX is future work. See `ARCHITECTURE.md` for the remaining protocol gaps.

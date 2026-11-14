@@ -209,6 +209,7 @@ pub struct ServerView {
     pub server: Server,
     pub has_bearer: bool,
     pub has_api_key: bool,
+    pub has_oauth_token: bool,
     pub tool_count: usize,
 }
 
