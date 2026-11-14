@@ -124,7 +124,7 @@ pnpm build         # Vite production build
 pnpm version:check # package.json, Cargo workspace and Tauri version agree
 pnpm package       # native installer for the current OS
 pnpm fmt:check     # cargo fmt --check
-pnpm core:test     # 188 library + 41 agent-loop + 6 MCP protocol + 1 auth + 1 OAuth + 1 provider = 238 Rust tests
+pnpm core:test     # 189 library + 41 agent-loop + 6 MCP protocol + 1 auth + 1 OAuth + 1 provider = 239 Rust tests
 pnpm core:clippy   # cargo clippy -p mcp-chat-core --all-targets -- -D warnings
 pnpm mock:clippy   # same for the mock server
 pnpm test:e2e      # Playwright: 71 smoke, interaction and visual-regression tests against vite preview
