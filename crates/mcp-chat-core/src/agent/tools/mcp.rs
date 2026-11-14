@@ -47,7 +47,7 @@ pub fn meta_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: MCP_GET_TOOL_SCHEMA.into(),
-            description: "Return the JSON input schema for one MCP tool, identified by its server slug and tool name.".into(),
+            description: "Return the JSON input schema for one MCP tool, identified by its server slug and tool name. Call this before the first use of an MCP tool when its catalog line does not list every argument you need; do not guess parameter names.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -60,13 +60,13 @@ pub fn meta_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: MCP_EXECUTE.into(),
-            description: "Execute several independent MCP tool calls in one step (max 8, up to 4 in flight). Use this when you need multiple tools for the same answer. Each call still follows its server policy and may ask for approval.".into(),
+            description: "Execute 2-8 independent MCP tool calls in one step (up to 4 in flight). `calls` is required and must contain 2-8 items; every item needs `server`, `tool` and an `arguments` object. Use `mcp_call_tool` for one call, and `mcp_get_tool_schema` first if you do not know a tool's arguments. Each call follows its server policy and may ask for approval.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "calls": {
                         "type": "array",
-                        "minItems": 1,
+                        "minItems": 2,
                         "maxItems": 8,
                         "items": {
                             "type": "object",
@@ -86,7 +86,7 @@ pub fn meta_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: MCP_CALL_TOOL.into(),
-            description: "Call a remote MCP tool. Use mcp_search_tools to discover it and mcp_get_tool_schema to see its arguments first. The target server policy still applies and may require approval.".into(),
+            description: "Call one remote MCP tool. `arguments` must be a JSON object matching its schema; call mcp_get_tool_schema first when the catalog line does not list every argument. Never guess parameter names. The target server policy still applies and may require approval.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -247,11 +247,14 @@ impl ToolExecutor {
         if let Err(message) = validate_args(&tool.input_schema, &target_args) {
             let schema = serde_json::to_string(&tool.input_schema).unwrap_or_default();
             let schema = truncate_chars(&schema, 1500).0;
+            let tool_name = tool.name.as_str();
             return self
                 .fail(
                     req,
                     "error",
-                    format!("Invalid tool input: {message}\nSchema: {schema}"),
+                    format!(
+                        "Invalid tool input: {message}\nSchema: {schema}\nCall mcp_get_tool_schema with server {server_slug:?} and tool {tool_name:?} before retrying."
+                    ),
                     started,
                     false,
                 )
@@ -364,18 +367,18 @@ impl ToolExecutor {
                 .fail(
                     req,
                     "error",
-                    "mcp_execute needs a calls array.".into(),
+                    "mcp_execute needs 2-8 calls in `calls`. Example item: {\"server\":\"server-slug\",\"tool\":\"tool_name\",\"arguments\":{}}. Use mcp_call_tool for one call, and mcp_get_tool_schema if you do not know a tool's arguments.".into(),
                     started,
                     false,
                 )
                 .await;
         };
-        if raw_calls.is_empty() || raw_calls.len() > 8 {
+        if raw_calls.len() < 2 || raw_calls.len() > 8 {
             return self
                 .fail(
                     req,
                     "error",
-                    "mcp_execute accepts between 1 and 8 calls.".into(),
+                    "mcp_execute accepts between 2 and 8 calls.".into(),
                     started,
                     false,
                 )
@@ -498,7 +501,11 @@ impl ToolExecutor {
         if let Err(message) = validate_args(&tool.input_schema, &call.arguments) {
             let schema = serde_json::to_string(&tool.input_schema).unwrap_or_default();
             let schema = truncate_chars(&schema, 1500).0;
-            return error(format!("Invalid tool input: {message}\nSchema: {schema}"));
+            let server_slug = server.slug.as_str();
+            let tool_name = tool.name.as_str();
+            return error(format!(
+                "Invalid tool input: {message}\nSchema: {schema}\nCall mcp_get_tool_schema with server {server_slug:?} and tool {tool_name:?} before retrying."
+            ));
         }
 
         let action = format!("mcp.{}.{}", server.slug, tool.name);
@@ -659,7 +666,7 @@ impl ToolExecutor {
                     let description = truncate_chars(&tool.description, 240).0;
                     content.push_str(&format!("- {slug} :: {} — {description}\n", tool.name));
                 }
-                content.push_str("\nUse mcp_get_tool_schema only if you need full JSON schema details, then mcp_call_tool.");
+                content.push_str("\nIf a tool's arguments are not fully clear from the catalog, call mcp_get_tool_schema before the first call; never guess parameter names.");
                 Ok(Rendered {
                     content,
                     structured: None,

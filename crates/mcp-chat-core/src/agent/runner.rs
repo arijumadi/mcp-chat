@@ -13,9 +13,9 @@ use crate::agent::ChatEngine;
 use crate::agent::context::{build_messages, estimate_tokens};
 use crate::agent::permissions::Effect;
 use crate::agent::tools::{
-    MCP_SEARCH_TOOLS, ToolExecRequest, builtin_default_effect, builtin_tool_defs,
-    builtin_tool_info, is_builtin_tool, is_meta_tool, meta_tool_defs, meta_tool_info,
-    persist_result,
+    MCP_CALL_TOOL, MCP_EXECUTE, MCP_SEARCH_TOOLS, ToolExecRequest, builtin_default_effect,
+    builtin_tool_defs, builtin_tool_info, is_builtin_tool, is_meta_tool, meta_tool_defs,
+    meta_tool_info, persist_result,
 };
 use crate::agent::types::{
     CONTINUE_PROMPT, LOOP_GUARD_PROMPT, MAX_STEPS_PROMPT, OUTPUT_LIMIT_PROMPT, StepError,
@@ -608,7 +608,11 @@ fn schema_args_summary(schema: &Value) -> Option<String> {
     if parts.is_empty() {
         None
     } else {
-        Some(parts.join(", "))
+        let mut summary = parts.join(", ");
+        if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
+            summary.push_str(" (no extra args)");
+        }
+        Some(summary)
     }
 }
 
@@ -645,7 +649,7 @@ fn lazy_tool_note(registry: &ToolRegistry) -> Option<String> {
         "All active tools are listed above; do not call mcp_search_tools just to browse."
     };
     Some(format!(
-        "MCP tools are available in lazy mode. Use mcp_call_tool directly with server and tool; call mcp_execute when you need several independent tools in one step (max 8). Call mcp_get_tool_schema only when you need the full JSON schema. Request small limits/fields first for tools that can return large data, and page output only when needed. {search_note} A trailing * means required.\n\n{catalog}"
+        "MCP tools are available in lazy mode. Read the catalog line first: it lists the server, tool, common arguments, and `*` marks required arguments. If the line does not show every argument you need, call mcp_get_tool_schema with the server slug and tool name before the first call; never invent parameter names. Use mcp_call_tool for one call. Use mcp_execute only for 2-8 independent calls, with a `calls` array of 2-8 items and an `arguments` object on every item. Request small limits/fields first for tools that can return large data, and page output only when needed. {search_note}\n\n{catalog}"
     ))
 }
 
@@ -951,7 +955,7 @@ async fn run_stream(
                 let message = if result.cancelled {
                     "Tool execution interrupted"
                 } else if !call.fragment.trim().is_empty() && call.args.is_none() {
-                    "Invalid tool input: arguments are not valid JSON."
+                    invalid_tool_arguments_message(&call.name)
                 } else {
                     "Provider did not return a tool result"
                 };
@@ -985,7 +989,7 @@ async fn run_stream(
                             defaults,
                             active_server_slugs,
                             call,
-                            "Invalid tool input: arguments are not valid JSON.",
+                            invalid_tool_arguments_message(&call.name),
                         )
                         .await;
                         outcomes.insert(index, outcome);
@@ -1261,6 +1265,18 @@ async fn dispatch_call(
     let handle = tokio::spawn(async move { executor.execute(request).await });
     handles.push((call.index, handle));
     Ok(())
+}
+
+fn invalid_tool_arguments_message(name: &str) -> &'static str {
+    match name {
+        MCP_EXECUTE => {
+            "Invalid tool input: arguments are not valid JSON. mcp_execute needs 2-8 calls in `calls`; every item needs server, tool and an arguments object. Use mcp_call_tool for a single call, and call mcp_get_tool_schema first if you do not know a tool's arguments."
+        }
+        MCP_CALL_TOOL => {
+            "Invalid tool input: arguments are not valid JSON. mcp_call_tool needs server, tool and an arguments object; call mcp_get_tool_schema first if you do not know them."
+        }
+        _ => "Invalid tool input: arguments are not valid JSON.",
+    }
 }
 
 async fn settle_call_error(
@@ -1708,4 +1724,36 @@ async fn compact_claimed(
         focus,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_summary_marks_no_extra_arguments() {
+        let summary = schema_args_summary(&json!({
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer"}
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        }))
+        .unwrap();
+        assert!(summary.contains("query:string*"));
+        assert!(summary.contains("limit:integer"));
+        assert!(summary.contains("no extra args"));
+    }
+
+    #[test]
+    fn invalid_mcp_arguments_point_to_schema_lookup() {
+        let execute = invalid_tool_arguments_message(MCP_EXECUTE);
+        assert!(execute.contains("calls"));
+        assert!(execute.contains("mcp_get_tool_schema"));
+        let call = invalid_tool_arguments_message(MCP_CALL_TOOL);
+        assert!(call.contains("arguments object"));
+        assert!(call.contains("mcp_get_tool_schema"));
+    }
 }

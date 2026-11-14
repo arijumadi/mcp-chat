@@ -16,7 +16,10 @@ use super::workspace::{
     outside_read_target, path_is_outside, resolve_in_workspace, resolve_write_path, workspace_root,
     workspace_root_for_conversation,
 };
-use super::{Rendered, ToolExecRequest, ToolExecResult, ToolExecutor, validate_args};
+use super::{
+    Rendered, ToolExecRequest, ToolExecResult, ToolExecutor, meta_tool_defs, meta_tool_info,
+    validate_args,
+};
 use crate::agent::approvals::{ApprovalDecision, ApprovalRegistry, InputAnswer, InputRegistry};
 use crate::agent::file_locks::FileLocks;
 use crate::agent::permissions::Effect;
@@ -71,6 +74,49 @@ fn builtin_tool_schema_stays_compact() {
     assert!(
         chars < 8_600,
         "builtin tool schema grew unexpectedly: {chars} characters"
+    );
+}
+
+#[test]
+fn mcp_meta_tools_require_explicit_batch_or_single_call_shape() {
+    let defs = meta_tool_defs();
+    let execute = defs.iter().find(|tool| tool.name == "mcp_execute").unwrap();
+    assert!(execute.description.contains("2-8"));
+    assert!(execute.description.contains("mcp_get_tool_schema"));
+    assert_eq!(execute.input_schema["properties"]["calls"]["minItems"], 2);
+    assert_eq!(execute.input_schema["properties"]["calls"]["maxItems"], 8);
+    assert_eq!(
+        execute.input_schema["properties"]["calls"]["items"]["required"],
+        json!(["server", "tool", "arguments"])
+    );
+
+    let schema = defs
+        .iter()
+        .find(|tool| tool.name == "mcp_get_tool_schema")
+        .unwrap();
+    assert!(schema.description.contains("before the first use"));
+    assert!(schema.description.contains("do not guess"));
+}
+
+#[tokio::test]
+async fn empty_mcp_execute_explains_the_required_shape() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    let executor = test_executor(&workspace).await;
+    let mut req = request("mcp_execute", json!({}));
+    req.tool = meta_tool_info("mcp_execute");
+    let result = executor.execute(req).await;
+    assert!(!result.ok);
+    assert!(result.content.contains("2-8 calls"), "{}", result.content);
+    assert!(
+        result.content.contains("mcp_call_tool"),
+        "{}",
+        result.content
+    );
+    assert!(
+        result.content.contains("mcp_get_tool_schema"),
+        "{}",
+        result.content
     );
 }
 
