@@ -26,6 +26,10 @@ const HARNESS_TEMPLATE: &str = r#"# Harness rules
 - `{ask_user}` is for clarification that blocks the next step; options are optional and a normal explanation belongs in the final answer.
 - Ask only when the answer changes the action, file, format or target, or confirms a destructive step, and the workspace cannot answer it. A light question that does not change the next step goes in the final answer. Do not use `{ask_user}` for pleasantries, status, or anything you can read yourself.
 - Do not narrate routine tool use or write a preamble before a tool call. Call the tool directly.
+- When several reads, searches, or inspections are independent, issue them together in one step instead of serializing them. Tool execution runs up to 4 calls concurrently; keep batches focused.
+- Use `mcp_execute` when it is available for 2-8 independent MCP calls in one step. Do not batch calls that depend on each other's results.
+- Use `subagent` for a large, self-contained workstream that can run while you continue, or to keep bulky exploration out of the parent context. Give it complete context and instructions. Do not poll it; wait for its `<subagent>` report.
+- Use the returned subagent `sessionID` for follow-ups. Do not spawn a duplicate subagent for the same workstream, and do not use subagents for trivial tasks or tightly coupled steps.
 - Do not chain shell commands with separators only to print section headers; keep output clean.
 - Use the `python` tool for Python code and data/spreadsheet processing instead of embedding Python in a shell command; the tool sends the code directly through stdin.
 - With `shell=powershell` or `pwsh`, send the PowerShell script body directly; the tool already launches PowerShell. Do not wrap it in another `powershell -Command`.
@@ -308,6 +312,16 @@ mod tests {
     use crate::db::repo::settings;
 
     #[test]
+    fn harness_rules_cover_parallel_work_and_subagents() {
+        let rules = harness_rules();
+        assert!(rules.contains("up to 4 calls concurrently"));
+        assert!(rules.contains("mcp_execute"));
+        assert!(rules.contains("subagent"));
+        assert!(rules.contains("sessionID"));
+        assert!(rules.contains("Do not poll"));
+    }
+
+    #[test]
     fn git_excludes_ignore_runtime_dirs_idempotently() {
         let root = tempfile::tempdir().unwrap();
         let repo = root.path();
@@ -362,13 +376,18 @@ mod tests {
 
     #[test]
     fn system_parts_keep_a_stable_order() {
-        let system =
-            compose_system(Some("BASE".into()), "ENV", Some("MCP"), Some("SUMMARY")).unwrap();
-        let base = system.find("BASE").unwrap();
+        let system = compose_system(
+            Some("BASE_BLOCK".into()),
+            "ENV_BLOCK",
+            Some("MCP_BLOCK"),
+            Some("SUMMARY_BLOCK"),
+        )
+        .unwrap();
+        let base = system.find("BASE_BLOCK").unwrap();
         let harness = system.find("# Harness rules").unwrap();
-        let env = system.find("ENV").unwrap();
-        let mcp = system.find("MCP").unwrap();
-        let summary = system.find("SUMMARY").unwrap();
+        let env = system.find("ENV_BLOCK").unwrap();
+        let mcp = system.find("MCP_BLOCK").unwrap();
+        let summary = system.find("SUMMARY_BLOCK").unwrap();
         assert!(base < harness && harness < env && env < mcp && mcp < summary);
     }
 
@@ -387,6 +406,7 @@ mod tests {
   - Build/test/git/package manager -> `bash`
   - Rename/move/delete massal -> `bash`
   - Proses/port/disk/env -> `bash`
+  - Workstream besar di background -> `subagent`
   - Klarifikasi blocking -> `question`
 - Sebelum bash: apakah command ini mengubah isi file? Kalau ya, tool-nya salah.
 - Read a file before editing it. Keep patches small, include unique context, and preserve unrelated user changes.
@@ -395,6 +415,10 @@ mod tests {
 - `question` is for clarification that blocks the next step; options are optional and a normal explanation belongs in the final answer.
 - Ask only when the answer changes the action, file, format or target, or confirms a destructive step, and the workspace cannot answer it. A light question that does not change the next step goes in the final answer. Do not use `question` for pleasantries, status, or anything you can read yourself.
 - Do not narrate routine tool use or write a preamble before a tool call. Call the tool directly.
+- When several reads, searches, or inspections are independent, issue them together in one step instead of serializing them. Tool execution runs up to 4 calls concurrently; keep batches focused.
+- Use `mcp_execute` when it is available for 2-8 independent MCP calls in one step. Do not batch calls that depend on each other's results.
+- Use `subagent` for a large, self-contained workstream that can run while you continue, or to keep bulky exploration out of the parent context. Give it complete context and instructions. Do not poll it; wait for its `<subagent>` report.
+- Use the returned subagent `sessionID` for follow-ups. Do not spawn a duplicate subagent for the same workstream, and do not use subagents for trivial tasks or tightly coupled steps.
 - Do not chain shell commands with separators only to print section headers; keep output clean.
 - Use the `python` tool for Python code and data/spreadsheet processing instead of embedding Python in a shell command; the tool sends the code directly through stdin.
 - With `shell=powershell` or `pwsh`, send the PowerShell script body directly; the tool already launches PowerShell. Do not wrap it in another `powershell -Command`.
@@ -418,6 +442,7 @@ mod tests {
             "Build/test/git/package manager -> `bash`",
             "Rename/move/delete massal -> `bash`",
             "Proses/port/disk/env -> `bash`",
+            "Workstream besar di background -> `subagent`",
             "Klarifikasi blocking -> `question`",
         ] {
             assert!(rules.contains(route), "missing route: {route}");
