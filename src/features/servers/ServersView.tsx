@@ -266,6 +266,9 @@ export function ServersView() {
                             {server.authKind === "api_key" && !server.hasApiKey
                               ? " (missing X-API-Key)"
                               : ""}
+                            {server.authKind === "oauth" && !server.hasOAuthToken
+                              ? " (not connected)"
+                              : ""}
                           </span>
                           {server.lastError ? (
                             <span className="w-full" style={{ color: "var(--danger)" }}>

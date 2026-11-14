@@ -91,6 +91,7 @@ export function installMock(): void {
       negotiatedAt: now(),
       hasBearer: false,
       hasApiKey: false,
+      hasOAuthToken: false,
       toolCount: 1,
     },
   ];
@@ -794,6 +795,24 @@ export function installMock(): void {
           instructions: "Mock MCP server for mcp-chat tests",
           tools: [TOOL],
         } satisfies ConnectionReport;
+      }
+      case "start_server_oauth": {
+        const server = servers.find((item) => item.id === args.serverId);
+        if (server) server.hasOAuthToken = true;
+        return {
+          flowId: "oauth-flow-mock",
+          authUrl: "https://example.com/oauth/authorize",
+          redirectUri: "http://127.0.0.1:49152/callback",
+        };
+      }
+      case "oauth_status":
+        return { status: "success", error: null };
+      case "cancel_server_oauth":
+        return null;
+      case "disconnect_server_oauth": {
+        const server = servers.find((item) => item.id === args.serverId);
+        if (server) server.hasOAuthToken = false;
+        return server ?? servers[0] ?? null;
       }
       case "refresh_server":
         return {

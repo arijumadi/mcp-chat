@@ -99,6 +99,12 @@ pub fn oauth_account(server_id: &str, issuer: &str, suffix: &str) -> String {
     format!("oauth:{issuer}:{server_id}:{suffix}")
 }
 
+/// The OAuth session JSON for one server. It contains the access token,
+/// optional refresh token and client registration details.
+pub fn oauth_token_account(server_id: &str) -> String {
+    format!("oauth:{server_id}:session")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

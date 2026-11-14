@@ -121,6 +121,25 @@ test("adds a local npx MCP server over stdio", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("connects a remote MCP server with OAuth", async ({ page }) => {
+  await page.goto("/?mock=1");
+  await page.getByRole("complementary").getByRole("button", { name: "MCP servers" }).click();
+  await page.getByRole("button", { name: "Add server" }).click();
+  const dialog = page.getByRole("dialog");
+
+  await dialog.getByRole("textbox", { name: "Name" }).fill("T3 Code");
+  await dialog
+    .getByRole("textbox", { name: "Server URL" })
+    .fill("https://t3.example.test/mcp");
+  await dialog.getByRole("combobox", { name: "Auth" }).selectOption("oauth");
+  await dialog.getByRole("button", { name: "Save and connect" }).click();
+
+  await expect(dialog.getByText("OAuth connected")).toBeVisible({ timeout: 10_000 });
+  await expect(dialog.getByRole("button", { name: "Reconnect" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByText("T3 Code").first()).toBeVisible();
+});
+
 test("a long path without spaces wraps inside the user bubble", async ({ page }) => {
   await page.goto("/?mock=1");
   await page.getByRole("button", { name: "New chat" }).first().click();
