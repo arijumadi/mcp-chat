@@ -1,0 +1,132 @@
+# AGENTS.md — Jarvis
+
+Jarvis is a local-first desktop assistant for OpenAI-compatible and Anthropic
+models. It supports remote MCP servers, local stdio MCP servers, built-in file
+and shell tools, explicit approvals, attachments, and update checks. There is no
+telemetry, account system, or cloud sync.
+
+This file is the short operating guide for an AI agent working in this repo.
+The deep details live in:
+
+- `README.md` — user-facing features, setup, security, and exact behavior.
+- `ARCHITECTURE.md` — data flow, MCP negotiation, agent loop, storage, and gaps.
+- `PACKAGING.md` — native builds, updater signing, release assets.
+- `RUN-ON-DESKTOP.md` — moving a build to a graphical desktop.
+
+## Stack and layout
+
+- `crates/mcp-chat-core/` — Rust core: SQLite/sqlx, LLM providers, MCP client,
+  agent loop, tool executor, attachments, secrets, updates.
+- `src-tauri/` — thin Tauri v2 shell: commands, paths, keychain, events,
+  updater plugin, window setup.
+- `src/` — React 19 + TypeScript + Tailwind renderer. The webview never calls
+  LLM or MCP endpoints directly; all network I/O is in Rust.
+- `tests/mock_servers/` — axum MCP and scripted LLM mock used by Rust tests and
+  the local walkthrough.
+- `e2e/` — Playwright smoke, activity, keyboard, notification, and visual tests.
+- `shared/capabilities.json` — source of truth for built-in tool descriptions,
+  routing, risk, guards, and diff behavior.
+- `crates/mcp-chat-core/migrations/` — sqlx migrations. Do not edit an applied
+  migration; add the next numbered file.
+
+Current version at the time of this note: **0.3.24**.
+
+## Commands
+
+```bash
+pnpm install
+pnpm check          # version, lint, typecheck, Vitest, build, fmt, Rust tests, clippy
+pnpm test:e2e       # Playwright, 68 tests at 0.3.24
+pnpm tauri dev      # requires WebKit/GTK development libraries on Linux
+pnpm version:check  # package.json, Cargo workspace, tauri.conf.json
+```
+
+Targeted checks while iterating:
+
+```bash
+pnpm vitest run src/path/to/file.test.tsx
+cargo test -p mcp-chat-core <filter>
+cargo clippy -p mcp-chat-core --all-targets -- -D warnings
+cargo fmt --all -- --check
+```
+
+Local Tauri compilation may fail on a headless machine because GTK/WebKit
+development headers are missing. Use the GitHub Actions `Build desktop bundles`
+workflow to verify the native shell; do not treat a missing `webkit2gtk` package
+as an application bug.
+
+## Working agreement
+
+- Use a feature branch and a PR. Do not commit directly to `master` unless the
+  user explicitly asks.
+- Do not merge, tag, or publish a release without explicit user instruction.
+- Do not bump the version unless the user asks. When asked, update all three
+  version files plus `Cargo.lock`, run `pnpm version:check`, and do not mix the
+  bump with unrelated behavior.
+- Never commit API keys, updater private keys, `.env` files, local databases, or
+  workspace runtime output.
+- Keep the local-first/no-telemetry property. Update checks may contact GitHub
+  only when enabled or manually requested; never send message content,
+  attachments, paths, or account identifiers.
+- Preserve unrelated user changes. Read a file before editing it and keep
+  patches focused.
+- Add or update tests for behavior changes. For UI changes, update the relevant
+  Playwright/visual coverage and restore unrelated screenshot noise before
+  committing.
+- `docs/screenshots/*.png` and `e2e/visual.spec.ts-snapshots/*.png` are binary;
+  only commit them when the UI change is intentional.
+
+## Architecture rules worth knowing
+
+- The agent loop is in `crates/mcp-chat-core/src/agent/`. Tool execution is in
+  `agent/tools/` (split by concern); permissions, guards, approvals, compaction,
+  and the prompt live beside it.
+- Built-in tool names, labels, risk, routing and guards come from
+  `shared/capabilities.json`. Change that file instead of duplicating rules in
+  prompts, UI labels, or refusal messages.
+- The loaded tool schema has a compact-size test. If adding tool descriptions,
+  keep the total under its budget or update the test intentionally.
+- MCP supports modern Streamable HTTP, legacy HTTP, HTTP+SSE, and local stdio.
+  The stdio process is long-lived per server; editing/disabling/deleting the
+  server invalidates and kills it.
+- Approval rules are persisted in SQLite and evaluated last-match-wins with
+  globs. “Always allow” previews the saved rule; shell patterns are conservative
+  and risky/compound/unknown commands stay exact. Do not silently broaden a
+  permission rule.
+- The updater is check-only on Linux `.deb`; signed auto-install is for Windows
+  NSIS and Linux AppImage. The Tauri updater private key is a GitHub Actions
+  secret (`TAURI_SIGNING_PRIVATE_KEY`) and must have an offline backup. Losing
+  it blocks signed updates for existing installs.
+- `bundle.createUpdaterArtifacts` and the `plugins.updater` config are required
+  for updater signatures. `latest.json` is generated by
+  `scripts/latest-json.mjs` from the real Windows and AppImage `.sig` files.
+- A `v*` tag workflow builds signed artifacts and creates a **draft** GitHub
+  release. Edit its notes and publish it; `releases/latest/download/latest.json`
+  is not live while the release is a draft.
+- Workspace runtime output goes to `.mcp-chat/artifacts` and `.mcp-chat/tmp`.
+  Jarvis adds only those paths to a git workspace’s local `.git/info/exclude`;
+  `.mcp-chat/skills` and `.mcp-chat/AGENTS.md` remain committable.
+- `clippy.toml` intentionally sets a 1.85 lint baseline while the app itself
+  requires Rust 1.90 for the updater plugin. Do not mass-rewrite existing
+  `if let` blocks just to satisfy newer let-chain suggestions unless that is a
+  deliberate refactor.
+
+## Release path
+
+1. Merge feature/fix PRs after review.
+2. Bump `package.json`, `Cargo.toml` `[workspace.package]`, and
+   `src-tauri/tauri.conf.json`; update `Cargo.lock`; run `pnpm version:check`.
+3. Push a `v<version>` tag.
+4. Wait for Windows NSIS, Linux `.deb` + AppImage, and updater signature jobs.
+5. The workflow creates a draft release with installers, `.sig` files,
+   `latest.json`, and `SHA256SUMS.txt`. Edit the release notes and publish it.
+6. Verify downloaded assets against `SHA256SUMS.txt` and check the published
+   `latest.json` endpoint.
+7. Keep the updater private key secret backed up offline.
+
+## Documentation hygiene
+
+When changing behavior, update at least one of `README.md`,
+`ARCHITECTURE.md`, or `PACKAGING.md`, plus this file if the operating rules or
+release path change. Prefer a short, specific note over restating the whole
+feature list.
