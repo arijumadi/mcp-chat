@@ -395,7 +395,7 @@ mod tests {
     fn table_is_valid() {
         let table = load(SOURCE).expect("capabilities.json must load");
         assert_eq!(table.tools.len(), 12);
-        assert_eq!(table.routes.len(), 9);
+        assert_eq!(table.routes.len(), 10);
     }
 
     #[test]
@@ -459,6 +459,7 @@ mod tests {
                 "Build/test/git/package manager -> `bash`",
                 "Rename/move/delete massal -> `bash`",
                 "Proses/port/disk/env -> `bash`",
+                "Workstream besar di background -> `subagent`",
                 "Klarifikasi blocking -> `question`",
             ]
         );

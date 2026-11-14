@@ -8,6 +8,7 @@
     "modify_file": "apply_patch",
     "replace_once": "edit",
     "shell": "bash",
+    "delegate_work": "subagent",
     "ask_user": "question"
   },
   "risks": {
@@ -26,6 +27,7 @@
     { "task": "Build/test/git/package manager", "use": ["shell"] },
     { "task": "Rename/move/delete massal", "use": ["shell"] },
     { "task": "Proses/port/disk/env", "use": ["shell"] },
+    { "task": "Workstream besar di background", "use": ["delegate_work"] },
     { "task": "Klarifikasi blocking", "use": ["ask_user"] }
   ],
   "selfCheck": "Sebelum {shell}: apakah command ini mengubah isi file? Kalau ya, tool-nya salah.",
