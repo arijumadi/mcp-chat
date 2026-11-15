@@ -53,12 +53,24 @@ const BUILTIN_SKILLS: &[BundledSkill] = &[
         name: "spreadsheet",
         files: &[
             (
+                "INSTALL.md",
+                include_bytes!("../../../skills/spreadsheet/INSTALL.md"),
+            ),
+            (
+                "LICENSE",
+                include_bytes!("../../../skills/spreadsheet/LICENSE"),
+            ),
+            (
                 "SKILL.md",
                 include_bytes!("../../../skills/spreadsheet/SKILL.md"),
             ),
             (
-                "INSTALL.md",
-                include_bytes!("../../../skills/spreadsheet/INSTALL.md"),
+                "references/restructuring.md",
+                include_bytes!("../../../skills/spreadsheet/references/restructuring.md"),
+            ),
+            (
+                "scripts/csv_to_xlsx.py",
+                include_bytes!("../../../skills/spreadsheet/scripts/csv_to_xlsx.py"),
             ),
             (
                 "scripts/diff.py",
@@ -67,6 +79,177 @@ const BUILTIN_SKILLS: &[BundledSkill] = &[
             (
                 "scripts/probe.py",
                 include_bytes!("../../../skills/spreadsheet/scripts/probe.py"),
+            ),
+            (
+                "scripts/xlsx_create.py",
+                include_bytes!("../../../skills/spreadsheet/scripts/xlsx_create.py"),
+            ),
+            (
+                "scripts/xlsx_edit.py",
+                include_bytes!("../../../skills/spreadsheet/scripts/xlsx_edit.py"),
+            ),
+            (
+                "scripts/xlsx_read.py",
+                include_bytes!("../../../skills/spreadsheet/scripts/xlsx_read.py"),
+            ),
+            (
+                "scripts/xlsx_recalc.py",
+                include_bytes!("../../../skills/spreadsheet/scripts/xlsx_recalc.py"),
+            ),
+            (
+                "scripts/xlsx_restructure.py",
+                include_bytes!("../../../skills/spreadsheet/scripts/xlsx_restructure.py"),
+            ),
+            (
+                "scripts/xlsx_to_csv.py",
+                include_bytes!("../../../skills/spreadsheet/scripts/xlsx_to_csv.py"),
+            ),
+        ],
+    },
+    BundledSkill {
+        name: "docx",
+        files: &[
+            (
+                "INSTALL.md",
+                include_bytes!("../../../skills/docx/INSTALL.md"),
+            ),
+            ("LICENSE", include_bytes!("../../../skills/docx/LICENSE")),
+            ("SKILL.md", include_bytes!("../../../skills/docx/SKILL.md")),
+            (
+                "references/revisions-and-comments.md",
+                include_bytes!("../../../skills/docx/references/revisions-and-comments.md"),
+            ),
+            (
+                "scripts/docx_comments.py",
+                include_bytes!("../../../skills/docx/scripts/docx_comments.py"),
+            ),
+            (
+                "scripts/docx_common.py",
+                include_bytes!("../../../skills/docx/scripts/docx_common.py"),
+            ),
+            (
+                "scripts/docx_create.py",
+                include_bytes!("../../../skills/docx/scripts/docx_create.py"),
+            ),
+            (
+                "scripts/docx_edit.py",
+                include_bytes!("../../../skills/docx/scripts/docx_edit.py"),
+            ),
+            (
+                "scripts/docx_read.py",
+                include_bytes!("../../../skills/docx/scripts/docx_read.py"),
+            ),
+            (
+                "scripts/docx_revisions.py",
+                include_bytes!("../../../skills/docx/scripts/docx_revisions.py"),
+            ),
+            (
+                "scripts/docx_template.py",
+                include_bytes!("../../../skills/docx/scripts/docx_template.py"),
+            ),
+            (
+                "scripts/docx_validate.py",
+                include_bytes!("../../../skills/docx/scripts/docx_validate.py"),
+            ),
+        ],
+    },
+    BundledSkill {
+        name: "pdf",
+        files: &[
+            (
+                "INSTALL.md",
+                include_bytes!("../../../skills/pdf/INSTALL.md"),
+            ),
+            ("LICENSE", include_bytes!("../../../skills/pdf/LICENSE")),
+            ("SKILL.md", include_bytes!("../../../skills/pdf/SKILL.md")),
+            (
+                "references/forms.md",
+                include_bytes!("../../../skills/pdf/references/forms.md"),
+            ),
+            (
+                "references/nano-pdf-editing.md",
+                include_bytes!("../../../skills/pdf/references/nano-pdf-editing.md"),
+            ),
+            (
+                "references/ocr-extraction.md",
+                include_bytes!("../../../skills/pdf/references/ocr-extraction.md"),
+            ),
+            (
+                "scripts/_raster.py",
+                include_bytes!("../../../skills/pdf/scripts/_raster.py"),
+            ),
+            (
+                "scripts/extract_marker.py",
+                include_bytes!("../../../skills/pdf/scripts/extract_marker.py"),
+            ),
+            (
+                "scripts/extract_pymupdf.py",
+                include_bytes!("../../../skills/pdf/scripts/extract_pymupdf.py"),
+            ),
+            (
+                "scripts/pdf_create.py",
+                include_bytes!("../../../skills/pdf/scripts/pdf_create.py"),
+            ),
+            (
+                "scripts/pdf_fill_form.py",
+                include_bytes!("../../../skills/pdf/scripts/pdf_fill_form.py"),
+            ),
+            (
+                "scripts/pdf_form_layout.py",
+                include_bytes!("../../../skills/pdf/scripts/pdf_form_layout.py"),
+            ),
+            (
+                "scripts/pdf_make_form.py",
+                include_bytes!("../../../skills/pdf/scripts/pdf_make_form.py"),
+            ),
+            (
+                "scripts/pdf_merge.py",
+                include_bytes!("../../../skills/pdf/scripts/pdf_merge.py"),
+            ),
+            (
+                "scripts/pdf_meta.py",
+                include_bytes!("../../../skills/pdf/scripts/pdf_meta.py"),
+            ),
+            (
+                "scripts/pdf_page_image.py",
+                include_bytes!("../../../skills/pdf/scripts/pdf_page_image.py"),
+            ),
+            (
+                "scripts/pdf_read.py",
+                include_bytes!("../../../skills/pdf/scripts/pdf_read.py"),
+            ),
+            (
+                "scripts/pdf_secure.py",
+                include_bytes!("../../../skills/pdf/scripts/pdf_secure.py"),
+            ),
+            (
+                "scripts/pdf_split.py",
+                include_bytes!("../../../skills/pdf/scripts/pdf_split.py"),
+            ),
+            (
+                "scripts/pdf_stamp.py",
+                include_bytes!("../../../skills/pdf/scripts/pdf_stamp.py"),
+            ),
+            (
+                "scripts/pdf_watermark.py",
+                include_bytes!("../../../skills/pdf/scripts/pdf_watermark.py"),
+            ),
+        ],
+    },
+    BundledSkill {
+        name: "antigravity-cli",
+        files: &[
+            (
+                "INSTALL.md",
+                include_bytes!("../../../skills/antigravity-cli/INSTALL.md"),
+            ),
+            (
+                "SKILL.md",
+                include_bytes!("../../../skills/antigravity-cli/SKILL.md"),
+            ),
+            (
+                "references/cli-docs.md",
+                include_bytes!("../../../skills/antigravity-cli/references/cli-docs.md"),
             ),
         ],
     },
@@ -279,7 +462,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap().path().join("skills");
         let report = install_builtin_skills(&root);
         assert_eq!(report.failed, 0);
-        assert_eq!(report.installed, 10);
+        let expected_files = BUILTIN_SKILLS
+            .iter()
+            .map(|skill| skill.files.len())
+            .sum::<usize>();
+        assert_eq!(report.installed, expected_files);
         for skill in BUILTIN_SKILLS {
             assert!(
                 root.join(skill.name).join("SKILL.md").is_file(),

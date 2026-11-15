@@ -42,6 +42,8 @@ Reasoning effort from Default to Max, context compaction, steering, background s
 
 **Run a research or operations desk.** Connect search, databases, internal APIs and automation tools. Use attachments, long-running subagents and compacted context to work through a task instead of one prompt at a time.
 
+**Work with real office files.** Bundled skills create, read and edit Word `.docx`, PDF and Excel `.xlsx` files, with form filling, tracked changes, PDF merging/stamping, spreadsheet formulas and CSV interop. One `spreadsheet` skill handles both safe workbook auditing and authoring. Antigravity CLI users can also delegate one-shot coding tasks to `agy`.
+
 **Use subscription-backed agent runtimes.** OAuth 2.0 + PKCE with dynamic client registration, loopback callback, refresh tokens and keychain storage. Designed for subscription-backed servers such as T3 Code.
 
 ## At a glance
@@ -52,6 +54,7 @@ Reasoning effort from Default to Max, context compaction, steering, background s
 | **MCP transports** | Streamable HTTP 2026-07-28, legacy 2025-11-25, HTTP+SSE, local stdio |
 | **MCP auth** | OAuth 2.0 + PKCE, static bearer, `X-API-Key` |
 | **Local tools** | shell, Python, read, grep, glob, edit, apply_patch, write, skills, question, subagent |
+| **Bundled skills** | docx, pdf, spreadsheet, excalidraw, antigravity-cli, manage-skill |
 | **Safety** | per-server policy, per-call approvals, diff preview, shell guard, workspace confinement |
 | **Platforms** | Windows, Linux and macOS from source; Windows NSIS and Linux packages published |
 | **Privacy** | no telemetry, no account, no cloud transcript sync |
