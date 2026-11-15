@@ -1071,7 +1071,7 @@ async fn run_stream(
     }
 
     if !usage_emitted {
-        let completion = ((text.text.chars().count() + reasoning.text.chars().count()) / 3) as i64;
+        let completion = ((text.text.chars().count() + reasoning.text.chars().count()) / 4) as i64;
         if completion > 0 {
             let _ = engine.events.send(CoreEvent::Usage {
                 conversation_id: conversation_id.to_owned(),
@@ -1597,7 +1597,7 @@ fn message_tokens(message: &crate::models::MessageWithParts) -> usize {
             _ => {}
         }
     }
-    (chars / 3).max(1)
+    (chars / 4).max(1)
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
