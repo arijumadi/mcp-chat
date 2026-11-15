@@ -41,9 +41,8 @@ pub fn slugify(name: &str) -> String {
 }
 
 pub fn estimate_tokens(text: &str) -> usize {
-    // Deliberately conservative: no tokenizer dependency, and most providers
-    // average close to four characters per token for English/code.
-    (text.chars().count() / 3).max(1)
+    // No tokenizer dependency; OpenCode-style approximation for English/code.
+    (text.chars().count() / 4).max(1)
 }
 
 pub fn redact_secret(value: &str) -> String {
@@ -82,6 +81,14 @@ pub fn message_time_note(created_at_ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_estimate_uses_four_characters_per_token() {
+        assert_eq!(estimate_tokens(""), 1);
+        assert_eq!(estimate_tokens("abcd"), 1);
+        assert_eq!(estimate_tokens("abcdefgh"), 2);
+        assert_eq!(estimate_tokens("a".repeat(10).as_str()), 2);
+    }
 
     #[test]
     fn time_note_is_stable_for_a_message_timestamp() {

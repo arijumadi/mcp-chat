@@ -445,7 +445,7 @@ pub fn estimate_tokens(messages: &[ChatMessage], tools: &[ToolDef], system: Opti
                 .map(|s| s.len())
                 .unwrap_or(0);
     }
-    (chars / 3).max(1)
+    (chars / 4).max(1)
 }
 
 pub fn transcript_for_summary(history: &[MessageWithParts]) -> String {
