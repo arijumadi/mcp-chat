@@ -470,8 +470,68 @@ button {
 /* File tree and code preview beside the chat. On narrower windows it becomes
    a full-screen drawer instead of squeezing the conversation to a sliver. */
 .workspace-panel {
-  width: min(50vw, 900px);
+  position: relative;
+  width: min(var(--workspace-width, 50vw), 900px, calc(100vw - 420px));
   min-width: 420px;
+}
+
+.workspace-tree {
+  width: var(--tree-width, 230px);
+  min-width: 150px;
+  max-width: calc(100% - 260px);
+}
+
+.workspace-resize-handle {
+  position: relative;
+  flex: 0 0 7px;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.workspace-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: var(--border);
+  transition:
+    background 120ms ease,
+    left 120ms ease,
+    width 120ms ease;
+}
+
+.workspace-resize-handle:hover::after,
+.workspace-resize-handle:focus-visible::after {
+  left: 2px;
+  width: 2px;
+  background: var(--accent);
+}
+
+.workspace-panel-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 20;
+  width: 6px;
+}
+
+.workspace-panel-resize::after {
+  left: 0;
+}
+
+.workspace-panel-resize:hover::after,
+.workspace-panel-resize:focus-visible::after {
+  left: 0;
+  width: 2px;
+}
+
+.workspace-markdown .md {
+  font-size: 12.5px;
 }
 
 @media (max-width: 1100px) {
@@ -482,5 +542,9 @@ button {
     width: 100%;
     min-width: 0;
     border-left: 0;
+  }
+
+  .workspace-panel-resize {
+    display: none;
   }
 }

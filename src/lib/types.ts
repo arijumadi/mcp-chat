@@ -93,6 +93,8 @@ export interface WorkspaceFile {
   size: number;
   truncated: boolean;
   binary: boolean;
+  mime: string | null;
+  dataUrl: string | null;
 }
 
 export interface Attachment {

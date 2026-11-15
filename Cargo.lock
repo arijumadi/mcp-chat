@@ -2817,6 +2817,7 @@ name = "mcp-chat"
 version = "0.7.0"
 dependencies = [
  "arboard",
+ "base64 0.22.1",
  "mcp-chat-core",
  "png 0.17.16",
  "serde",

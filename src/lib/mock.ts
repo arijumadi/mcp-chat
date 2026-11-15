@@ -846,6 +846,7 @@ export function installMock(): void {
           return [
             { name: "src", path: "src", kind: "dir" },
             { name: "README.md", path: "README.md", kind: "file" },
+            { name: "preview.png", path: "preview.png", kind: "file" },
           ];
         }
         if (path === "src") {
@@ -862,6 +863,19 @@ export function installMock(): void {
             size: 45,
             truncated: false,
             binary: false,
+            mime: null,
+            dataUrl: null,
+          };
+        }
+        if (path === "preview.png") {
+          return {
+            path,
+            content: "",
+            size: 3098,
+            truncated: false,
+            binary: true,
+            mime: "image/png",
+            dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAPAAAACWCAIAAABvmpKCAAAL4UlEQVR42u3deVxU5R7H8d85MzBQgpmggiCbCpgsjogQE5sLCkamsimYWZRgmd6LaItZcdPSMpNbmjdNREzBq5mmLCYgoYAICKgIggtIYNyuyj7M0h+H1zQvEGIZZOn7/muYOfMcDvM5D4/jMMM0NLUQwFDB4kcACBoAQQMgaAAEDQgaAEEDIGgABA2AoAFBAyBoAAQNgKABEDQgaAAEDdD/+H007rWyavxwoXOWpqNVPiaj2j/BQsfQv2WrMmjlmoWWY/E4Qedyrt1VedOqCVqRMjqG3pTd+6xZ1Az9TlFO75esLGqGodQ0q9rvBqB/K+pV0NzJhJpBtU33ZpJmUTMMpabxP4UwpCBoQNBYb8BAXXVghgbM0AAIGgBBAyBoQNAAQwO/H/ctimhsf+UvGzTxqMAgC/qRKSvfhKxh0Cw5Oqm5W9sA9H/QXS8VTcNAD7q7jaJpGLhB96xONA0DfQ3dd6ymz+zW9sU3yg4cOtoX30nfjQyde0zPcvRmohVFNPbRkx4Tx5tOHG86uEaGv9EMrZgdFwW+Ntt78Z6o7xUzd9i7Ed8diJ37YlBV9W9EJBa3uM31kclk3KS+LybOc8FSr4VL09Izlef7TVsjfQJf9w1aUV5RqTzOg4e1q8M3Lln+pm/QissFV4moo5Hbb+nm6Xu3soqIgoLf+nDTNiLKyMp5M2wDWkTQjxYVcyR8TWhs9K5v9sZw14jFYu+5s14O9PX0cD+TnEZEF7IuuYgcWLb18Hfs3BMXvWvH1ohjJ+IV44jFYuvJlnEHvgnwnR/x6ZfK42zaGrks0Ddmb+T2LR+sf38zEXU0cvstXUUOmdm5MplMLpNdKSohoszsXNfnHNHiYFpyPE7vhL3x46mksynpdXX13DU8lid61p6IvDzcP9j8RaD/gjPJad5esxV3cXN2WrP+w6CAhds+2ai4kmEYj5kuROTlMePjLTuUxzn3S8atO+XcZo2NjVKprKOR22/p8pxjfFLyJPMJz1iaX71eUl/fkJWdt8TvRbSIoFv5Bq2Ijd6l+DJkzTtzZ7m9FOgTfei/rUHzedyUaWpidP/+g7q6+ivXij96L0xxl883bcjKzt2z//DxnxI++7j1tz/LsCzL4y6rq6srjyORSvfv/lIgUJfJZNk5l3k8tqOR22/pME346bavL+Xl20210dAQXMjKEYvFOiOfRotYcrT6//0Hv1ZV3y6/q6szkogKCq/NmzOjuVksFj/iXc5muTt//e1+W6tJDMNw19TW1vkuDRHaWn3x6cbk1PNKLUqSz50nop8SfnacPlV5EDuhdcKZFCJKSbvw1e6ojkZ+5JYaGgJd3ZHxSSl2U6zthDbfRh2cPm0KQsQM/ae3w94IfiOcYZgN694ioqCAhQsWB1taTNDWGiYWt6irqylv7OXh7jE/8NC+rxXXaGkNm+HqNN//FZlMvipkueJ6gUBwOil5994D2trDtkS8pzzI++tXr39/84HDx/g83icfvd3RyB1t6Spy+D7u+IinhgttJl+8lPfPVa8jRFXp4Zs19uCPZHv8zF1/vVDJavrMgswzSKRfcG/f2IP3bsTroQFr6Mc40fbj60gxPSNoFdeJV0XDQF9ydL1R1AyDIOguloqaoWf652k7rlf8TSEMkaDRLgydJQcAggZA0ICgARA0AIIGQNAACBoQNACCBkDQAAgaAEEDggZA0AAIGgBBAyBoQNAACHrwqbr3e3xyVmNTM34Ug9fj+yPZ0He2mxjqMQxJpTI/bzdjwzGhb283NdILW+HHbbBqQ+SOiDeJ6FxGflpWPo9lNTUFSxfNHjFci9ugsrqmuKzC1dG2j77Dr6J+cHW0VbxX+WOjOHAYTEHzeby1IX5EdPfXmn2x8e++Fcjn86Qy2fXScnMzQ8VmV4tv5xaWrF+5mMdj45OzomITVgcv4m7SH62jP1qn777Dh7X1M0RCNIGgu2esnk7N7w+4yy/MdvoxMX1tiL/i1sTUi/PniHg8lohcn7UtvV0pk8lZlmkzma3aECm0mlBcVu7hYl9yq6L0VqW7k3CW89TK6proI0kNjc0ie6tZzlMf1jbsP5JQ39ikM2J4YdHNLz5c2dDYdPCHnx/W1kskMp/nXUwM9biRUy7kNTWLt+48vGr5grX/2jVl8oRxY0fZ2Zjvi41vbm4RCNSW+c4ZrvVkR/vlBnlvy541wT4jR2hv/8+RMaOe9n/B/XppeWrGZT9vt/bjcLtQnEK1dQ2f7459bcm8oht3fskqZBha4On8zETjVRsinadbl96pZIhZ7j9X3NKifIB19Y37jyTWNzTx+eyrAV48HvvIo8Maug9dK7ljOFaXu2wxfhwRFZXeUdx6t7rGQK/1Vg2B+spl8xU1K2uRSFwcbMJW+MUcS5ohEoat8EtIzSKis+m5CzyfCw/1576MO5kyzcZiXWiA0Gpik1hMRHEnU2c4Cf/xmu+riz2jjyQqBnR1tBWoq68N8RMI1CQSqb2txQyRMO5Eir2tZXiov72tZdzJlE72y5lsblJcViGXy2VyeXnlPSIqLquwsjBpP45iF9wdJVLp7gMn/b3d9UfrnEzKCA/1D148LzPnKrelkeHodaEBzg7WsSeS2xxg7IkUO2vztSF+9raWxxPTOzo6zNCqJ5FKt+48TCTX1BC85OOhuN57ttPxhHSL0HHclzKZjLuQdC4770rpw9r6iPDl7UdjGMbIYAzLMjwez9hgDMMwYrGEiBZ5uVzMK8q/WtbUJCai66Xl3L5sJpmyDEtEV67fuldznxukWdyiPP3/eZazzKSJRtzdl/nOIaJpNuZHT53rZL+KoHMKiw31dceNHVVR+VtTs7jkZrmLw7yjp9LajKPYBefgsTPThZbc6W1labL30ClXxynL/T2JiBiaMnkCEdlZm8edTPl43avKB3jtxu2lPrOJyHHqM0KrCRs/2/eXR4egVbyGbsPczJBlmaIbrZP0KJ0RFb/+Zmw4ZpazndM0q7CPdnY0GvdQqfH5yh8BsSv6x6lWE91FU1Iu5HFnUet5IpfLSc6dMKuDF6rx+XK5vOTm3Uc+3izLcmNyd+nKfhXHcvT0udJblROMDdTV+NdLy1skUm2tJ9qPo9gFNwffraohIpG9FRG97De3uKziTNqlzNxrL/vNYRmGOxWJiM/jtzlAuax1bJZlNDUEXTk6LDn6nPdsp+OJ6dxl5+k2xxPSpVIZESWfz+3uQ3K7vNrOxrylRSqRSIlovLF+3pUbRJRbWMI98GbGY3MLbhBRQdHN02czOx/NwmzcpfxiIrqUX6z8L9eOqKnxtbWezCksNjPRH29skHQu29zU8C/H4fN561curvn9YVpmfmNT89adh8yM9F8J8CwoKiMiqUzGXcjOv24x3rDNARqPG8MdYFpmwdFTad06OszQfWWiqQGfx+MeIQfhpKp7//tg276ntIc5CCd190k012dtP/n3QQN9XU1NgUQi9X3ebe+h02fTc82M9AXqakTk5+0WfSQxNSOPZdmlizw6H23RPJeo2ITUjMsCdTVuzfCXJpubpGXmD3tC09RIr+RmxXwPUVfGYRgmeInX5sgYA31da0uzTZExcrl83kxH7ldBTkFxQsrFJzQFL/l6PP2UtvIB+j3vti82Ifl8rqaGYLm/Z1OzuOtHNyQ9vs9Y6RffHT49y9nOQE/3VnlV7ImU8FD/QfcI/T2fpe7xZ6zwh/bPxd1JePDYz+pqfIlUumTBTALM0IN6hoa/2wyN13IAnuUAQNAACBoAQQOCBkDQAAgaAEEDIGhA0AAIGgBBAyBoAAQNCBoAQQMgaAAEDYCgAUEDIGgABA2AoAEQNCBoAAQNgKABEDQAggYEDYCgARA0wOMOmntrde5t1gFUq8dv348ZGjBDAwzJoLHqgIG23ujtDI2mYUDVrLIlB5qGAVJRb4NWnExoGlRSc2+mZ9XM0GgaBkjN1ONPkn0k7uNlOfiQWejWGqP3Kas+6DZNA3T3l/yACxplQ7903OdBA/QL/E8hIGgABA2AoAEQNCBoAAQNgKABEDQAggYEDYCgARA0AIIGQNCAoAEGqz8ABVZSgnE1jQcAAAAASUVORK5CYII=",
           };
         }
         return {
@@ -870,6 +884,8 @@ export function installMock(): void {
           size: 63,
           truncated: false,
           binary: false,
+          mime: null,
+          dataUrl: null,
         };
       }
       case "list_server_tools":

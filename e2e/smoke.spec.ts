@@ -180,6 +180,45 @@ test("opens the workspace tree and adds a line comment to the composer", async (
   await expect(page.getByText("check the fallback path too")).toBeVisible();
 });
 
+test("previews images and toggles rendered markdown in the workspace", async ({ page }) => {
+  await page.goto("/?mock=1");
+  await page.getByText("Welcome to Jarvis").first().click();
+  await page.getByRole("button", { name: "Open workspace files" }).click();
+
+  await page.getByRole("button", { name: "preview.png", exact: true }).click();
+  await expect(page.getByAltText("preview.png")).toBeVisible();
+
+  await page.getByRole("button", { name: "README.md", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Demo workspace" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  await expect(page.getByText("# Demo workspace")).toBeVisible();
+
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Demo workspace" })).toBeVisible();
+});
+
+test("resizes the workspace panel and file tree", async ({ page }) => {
+  await page.goto("/?mock=1");
+  await page.getByText("Welcome to Jarvis").first().click();
+  await page.getByRole("button", { name: "Open workspace files" }).click();
+
+  const panel = page.locator(".workspace-panel");
+  const tree = page.locator(".workspace-tree");
+  const panelWidth = (await panel.boundingBox())?.width ?? 0;
+  const treeWidth = (await tree.boundingBox())?.width ?? 0;
+
+  await page.getByRole("separator", { name: "Resize workspace panel" }).press("ArrowLeft");
+  await expect
+    .poll(async () => (await panel.boundingBox())?.width ?? 0)
+    .toBeGreaterThan(panelWidth);
+
+  await page.getByRole("separator", { name: "Resize file tree" }).press("ArrowRight");
+  await expect
+    .poll(async () => (await tree.boundingBox())?.width ?? 0)
+    .toBeGreaterThan(treeWidth);
+});
+
 test("a long path without spaces wraps inside the user bubble", async ({ page }) => {
   await page.goto("/?mock=1");
   await page.getByRole("button", { name: "New chat" }).first().click();

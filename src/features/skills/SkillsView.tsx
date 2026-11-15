@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 import { useApp } from "@/app/store";
 import { call } from "@/lib/ipc";
 import type { SkillView } from "@/lib/types";
@@ -120,18 +120,15 @@ export function SkillsView() {
             className="mb-4 rounded-xl border px-4 py-3"
             style={{ borderColor: "var(--border)", background: "var(--panel)" }}
           >
-            <div className="flex items-start gap-2">
-              <Sparkles size={15} className="mt-0.5 shrink-0" style={{ color: "var(--accent)" }} />
-              <div>
-                <div className="text-[12.5px] font-medium">Global skill settings</div>
-                <p className="mt-0.5 text-[11.5px] leading-relaxed" style={{ color: "var(--muted)" }}>
-                  A disabled skill is hidden from the model and cannot be loaded with the
-                  <code className="mx-1 rounded bg-[var(--code)] px-1 py-0.5 font-mono text-[10.5px]">
-                    skill
-                  </code>
-                  tool. Changes apply to every chat and every new chat.
-                </p>
-              </div>
+            <div>
+              <div className="text-[12.5px] font-medium">Global skill settings</div>
+              <p className="mt-0.5 text-[11.5px] leading-relaxed" style={{ color: "var(--muted)" }}>
+                A disabled skill is hidden from the model and cannot be loaded with the
+                <code className="mx-1 rounded bg-[var(--code)] px-1 py-0.5 font-mono text-[10.5px]">
+                  skill
+                </code>
+                tool. Changes apply to every chat and every new chat.
+              </p>
             </div>
           </div>
 
@@ -144,12 +141,6 @@ export function SkillsView() {
             </div>
           ) : skills.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-center">
-              <div
-                className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border"
-                style={{ borderColor: "var(--border)", background: "var(--panel)" }}
-              >
-                <Sparkles size={22} style={{ color: "var(--muted)" }} />
-              </div>
               <h2 className="text-[16px] font-medium">No skills found</h2>
               <p className="mt-1 max-w-md text-[12.5px]" style={{ color: "var(--muted)" }}>
                 Add a skill as <code className="font-mono">&lt;name&gt;/SKILL.md</code> under the
@@ -172,16 +163,14 @@ export function SkillsView() {
                     }}
                   >
                     <div className="flex items-start gap-3">
-                      <div
-                        className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border"
+                      <span
+                        aria-hidden="true"
+                        title={skill.enabled ? "Enabled" : "Disabled"}
+                        className="mt-[7px] h-2 w-2 shrink-0 rounded-full"
                         style={{
-                          borderColor: "var(--border)",
-                          background: "var(--panel-2)",
-                          color: skill.enabled ? "var(--accent)" : "var(--muted)",
+                          background: skill.enabled ? "var(--accent)" : "var(--faint)",
                         }}
-                      >
-                        <Sparkles size={15} />
-                      </div>
+                      />
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-[13.5px] font-medium">{skill.name}</span>

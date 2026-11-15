@@ -1,6 +1,15 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import {
   ChevronRight,
+  Code2,
+  Eye,
   FileCode2,
   FileText,
   Folder,
@@ -19,9 +28,37 @@ import type {
 } from "@/lib/types";
 import { Button } from "@/components/Button";
 import { cn } from "@/lib/cn";
+import { Markdown } from "@/components/Markdown";
 import { inputClass } from "@/components/ui";
 
 type Selection = { start: number; end: number };
+
+const PANEL_WIDTH_KEY = "jarvis.workspace.panelWidth";
+const TREE_WIDTH_KEY = "jarvis.workspace.treeWidth";
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function storedWidth(key: string, fallback: number): number {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const value = Number(window.localStorage.getItem(key));
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function isMarkdownPath(path: string): boolean {
+  return /\.mdx?$/i.test(path);
+}
+
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
 
 function baseName(path: string): string {
   const index = path.lastIndexOf("/");
@@ -33,6 +70,60 @@ function rangeLabel(selection: Selection | null): string {
   return selection.start === selection.end
     ? `line ${selection.start}`
     : `lines ${selection.start}–${selection.end}`;
+}
+
+function ResizeHandle({
+  label,
+  onResize,
+  className,
+}: {
+  label: string;
+  onResize: (delta: number) => void;
+  className?: string;
+}) {
+  const lastX = useRef(0);
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      tabIndex={0}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        lastX.current = event.clientX;
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+        const delta = event.clientX - lastX.current;
+        if (delta === 0) return;
+        lastX.current = event.clientX;
+        onResize(delta);
+      }}
+      onPointerUp={(event) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+      }}
+      onPointerCancel={(event) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          onResize(-16);
+        }
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          onResize(16);
+        }
+      }}
+      className={cn("workspace-resize-handle", className)}
+    />
+  );
 }
 
 function TreeRow({
@@ -60,40 +151,40 @@ function TreeRow({
       type="button"
       onClick={() => (isDir ? onToggle(entry.path) : onOpen(entry.path))}
       className={cn(
-        "focus-ring flex w-full min-w-0 items-center gap-1 rounded px-2 py-1 text-left text-[11.5px] transition hover:bg-[var(--panel-2)]",
+        "focus-ring flex w-full min-w-0 items-center gap-1 rounded px-2 py-[3px] text-left text-[10.5px] transition hover:bg-[var(--panel-2)]",
         filtered && "font-medium",
         selected && "bg-[var(--panel-2)]",
       )}
-      style={{ paddingLeft: 8 + depth * 13 }}
+      style={{ paddingLeft: 8 + depth * 12 }}
       title={entry.path}
     >
       {isDir ? (
         <>
           <ChevronRight
-            size={11}
+            size={10}
             className={cn("shrink-0 transition-transform", expanded && "rotate-90")}
             style={{ color: "var(--faint)" }}
           />
           {expanded ? (
-            <FolderOpen size={13} className="shrink-0" style={{ color: "var(--warn)" }} />
+            <FolderOpen size={12} className="shrink-0" style={{ color: "var(--warn)" }} />
           ) : (
-            <Folder size={13} className="shrink-0" style={{ color: "var(--warn)" }} />
+            <Folder size={12} className="shrink-0" style={{ color: "var(--warn)" }} />
           )}
         </>
       ) : (
         <>
-          <span className="w-[11px] shrink-0" />
+          <span className="w-[10px] shrink-0" />
           {/\.(tsx?|jsx?|rs|py|go|java|kt|json|md|css|html|toml|yaml|yml|sh|sql)$/i.test(
             entry.name,
           ) ? (
-            <FileCode2 size={13} className="shrink-0" style={{ color: "var(--muted)" }} />
+            <FileCode2 size={12} className="shrink-0" style={{ color: "var(--muted)" }} />
           ) : (
-            <FileText size={13} className="shrink-0" style={{ color: "var(--muted)" }} />
+            <FileText size={12} className="shrink-0" style={{ color: "var(--muted)" }} />
           )}
         </>
       )}
       <span className="truncate">{entry.name}</span>
-      {loading ? <Loader2 size={10} className="ml-auto animate-spin" /> : null}
+      {loading ? <Loader2 size={9} className="ml-auto animate-spin" /> : null}
     </button>
   );
 }
@@ -120,10 +211,32 @@ export function WorkspacePanel({
   const [commentFocus, setCommentFocus] = useState(false);
   const treeRequest = useRef(0);
   const fileRequest = useRef(0);
+  const [panelWidth, setPanelWidth] = useState(() =>
+    clamp(storedWidth(PANEL_WIDTH_KEY, 640), 420, 900),
+  );
+  const [treeWidth, setTreeWidth] = useState(() =>
+    clamp(storedWidth(TREE_WIDTH_KEY, 230), 150, 360),
+  );
+  const [markdownView, setMarkdownView] = useState<"source" | "rendered">("source");
 
   const rootName = conversation.workspaceRoot
     ? baseName(conversation.workspaceRoot.replace(/[\\/]+$/, "")) || "workspace"
     : "workspace";
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidth));
+      window.localStorage.setItem(TREE_WIDTH_KEY, String(treeWidth));
+    } catch {
+      // Resizing still works when storage is unavailable.
+    }
+  }, [panelWidth, treeWidth]);
+
+  useEffect(() => {
+    setTreeWidth((width) =>
+      clamp(width, 150, Math.max(150, Math.min(360, panelWidth - 260))),
+    );
+  }, [panelWidth]);
 
   const loadDir = async (path: string, force = false) => {
     if (!force && entries[path]) return;
@@ -158,6 +271,7 @@ export function WorkspacePanel({
     setSelected(null);
     setFile(null);
     setFileLoading(false);
+    setMarkdownView("source");
     setFilter("");
     setSelection(null);
     setComment("");
@@ -184,6 +298,7 @@ export function WorkspacePanel({
     const request = ++fileRequest.current;
     setSelected(path);
     setFile(null);
+    setMarkdownView(isMarkdownPath(path) ? "rendered" : "source");
     setSelection(null);
     setComment("");
     setFileLoading(true);
@@ -207,6 +322,8 @@ export function WorkspacePanel({
     if (!selection) return [];
     return lines.slice(selection.start - 1, selection.end);
   }, [lines, selection]);
+  const markdown = Boolean(file && isMarkdownPath(file.path));
+  const renderedMarkdown = markdown && markdownView === "rendered";
 
   useEffect(() => {
     if (!file || file.binary) {
@@ -317,12 +434,28 @@ export function WorkspacePanel({
   return (
     <aside
       className="workspace-panel flex h-full min-w-0 shrink-0 flex-col border-l"
-      style={{
-        borderColor: "var(--border)",
-        background: "var(--bg)",
-      }}
+      style={
+        {
+          borderColor: "var(--border)",
+          background: "var(--bg)",
+          "--workspace-width": `${panelWidth}px`,
+        } as CSSProperties
+      }
       aria-label="Workspace files"
     >
+      <ResizeHandle
+        label="Resize workspace panel"
+        className="workspace-panel-resize"
+        onResize={(delta) =>
+          setPanelWidth((width) =>
+            clamp(
+              width - delta,
+              420,
+              Math.max(420, Math.min(900, window.innerWidth - 420)),
+            ),
+          )
+        }
+      />
       <header
         className="flex h-14 shrink-0 items-center gap-2 border-b px-3"
         style={{ borderColor: "var(--border)" }}
@@ -347,8 +480,8 @@ export function WorkspacePanel({
 
       <div className="flex min-h-0 flex-1">
         <aside
-          className="flex w-[230px] shrink-0 flex-col border-r"
-          style={{ borderColor: "var(--border)" }}
+          className="workspace-tree flex shrink-0 flex-col"
+          style={{ "--tree-width": `${treeWidth}px` } as CSSProperties}
         >
           <div className="border-b p-2" style={{ borderColor: "var(--border)" }}>
             <input
@@ -356,7 +489,7 @@ export function WorkspacePanel({
               onChange={(event) => setFilter(event.target.value)}
               placeholder="Filter loaded files"
               aria-label="Filter files"
-              className={cn(inputClass, "h-8 text-[11px]")}
+              className={cn(inputClass, "h-8 text-[10.5px]")}
               style={{ borderColor: "var(--border)" }}
             />
           </div>
@@ -375,6 +508,18 @@ export function WorkspacePanel({
             ) : null}
           </div>
         </aside>
+        <ResizeHandle
+          label="Resize file tree"
+          onResize={(delta) =>
+            setTreeWidth((width) =>
+              clamp(
+                width + delta,
+                150,
+                Math.max(150, Math.min(360, panelWidth - 260)),
+              ),
+            )
+          }
+        />
 
         <section className="flex min-w-0 flex-1 flex-col">
           {file ? (
@@ -386,9 +531,57 @@ export function WorkspacePanel({
                 <span className="min-w-0 flex-1 truncate font-mono text-[11.5px]">
                   {file.path}
                 </span>
-                {file.binary ? (
+                {markdown ? (
+                  <div
+                    role="group"
+                    aria-label="Markdown view"
+                    className="flex items-center rounded-md border p-0.5 text-[10px]"
+                    style={{ borderColor: "var(--border)" }}
+                  >
+                    <button
+                      type="button"
+                      aria-pressed={markdownView === "source"}
+                      onClick={() => setMarkdownView("source")}
+                      className={cn(
+                        "focus-ring flex items-center gap-1 rounded px-1.5 py-0.5 transition",
+                        markdownView === "source" && "bg-[var(--panel-2)]",
+                      )}
+                      style={{
+                        color:
+                          markdownView === "source" ? "var(--fg)" : "var(--muted)",
+                      }}
+                      title="View the markdown source"
+                    >
+                      <Code2 size={10} /> Source
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={markdownView === "rendered"}
+                      onClick={() => {
+                        setMarkdownView("rendered");
+                        setSelection(null);
+                        setComment("");
+                        setCommentFocus(false);
+                      }}
+                      className={cn(
+                        "focus-ring flex items-center gap-1 rounded px-1.5 py-0.5 transition",
+                        markdownView === "rendered" && "bg-[var(--panel-2)]",
+                      )}
+                      style={{
+                        color:
+                          markdownView === "rendered" ? "var(--fg)" : "var(--muted)",
+                      }}
+                      title="View the rendered markdown"
+                    >
+                      <Eye size={10} /> Preview
+                    </button>
+                  </div>
+                ) : null}
+                {file.binary && !file.dataUrl ? (
                   <span className="text-[10.5px]" style={{ color: "var(--danger)" }}>
-                    binary preview unavailable
+                    {file.mime?.startsWith("image/")
+                      ? "image too large"
+                      : "binary preview unavailable"}
                   </span>
                 ) : null}
                 {file.truncated ? (
@@ -397,11 +590,11 @@ export function WorkspacePanel({
                   </span>
                 ) : null}
                 <span className="text-[10.5px]" style={{ color: "var(--faint)" }}>
-                  {file.size.toLocaleString()} B
+                  {formatSize(file.size)}
                 </span>
               </div>
 
-              {selection ? (
+              {selection && !renderedMarkdown ? (
                 <div
                   className="shrink-0 border-b px-3 py-2"
                   style={{ borderColor: "var(--border)", background: "var(--panel)" }}
@@ -449,9 +642,26 @@ export function WorkspacePanel({
                   <div className="flex items-center gap-2 px-4 py-3 text-[11.5px]" style={{ color: "var(--muted)" }}>
                     <Loader2 size={13} className="animate-spin" /> Loading file…
                   </div>
+                ) : file.dataUrl ? (
+                  <div
+                    className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-6"
+                    style={{ background: "var(--code)" }}
+                  >
+                    <img
+                      src={file.dataUrl}
+                      alt={file.path}
+                      className="max-h-[70vh] max-w-full rounded-lg object-contain shadow-sm"
+                    />
+                  </div>
                 ) : file.binary ? (
                   <div className="px-4 py-3 text-[11.5px]" style={{ color: "var(--muted)" }}>
-                    This file is binary. Jarvis does not render binary files here.
+                    {file.mime?.startsWith("image/")
+                      ? "This image is larger than 10 MB. Jarvis does not preview it here."
+                      : "This file is binary. Jarvis does not render binary files here."}
+                  </div>
+                ) : renderedMarkdown ? (
+                  <div className="workspace-markdown min-h-0 flex-1 overflow-auto px-5 py-4">
+                    <Markdown text={file.content} />
                   </div>
                 ) : (
                   <div className="min-w-max py-2 font-mono text-[11.5px] leading-[18px]">
