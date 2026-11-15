@@ -14,6 +14,7 @@ export function ActivityRow({
   title,
   trailing,
   children,
+  expandable = true,
 }: {
   icon: ReactNode;
   expanded: boolean;
@@ -22,13 +23,16 @@ export function ActivityRow({
   title?: string;
   trailing?: ReactNode;
   children: ReactNode;
+  expandable?: boolean;
 }) {
   return (
     <button
       type="button"
-      onClick={onToggle}
-      aria-expanded={expanded}
-      aria-controls={expanded ? controlsId : undefined}
+      onClick={() => {
+        if (expandable) onToggle();
+      }}
+      aria-expanded={expandable ? expanded : undefined}
+      aria-controls={expandable && expanded ? controlsId : undefined}
       title={title}
       // The global button reset beats size utilities; follow the chat size explicitly.
       style={{ fontSize: "var(--chat-fs)" }}
@@ -46,12 +50,14 @@ export function ActivityRow({
       ) : (
         <span className="ml-auto" />
       )}
-      <ChevronRight
-        size={12}
-        aria-hidden
-        className={cn("shrink-0 transition-transform", expanded && "rotate-90")}
-        style={{ color: "var(--faint)" }}
-      />
+      {expandable ? (
+        <ChevronRight
+          size={12}
+          aria-hidden
+          className={cn("shrink-0 transition-transform", expanded && "rotate-90")}
+          style={{ color: "var(--faint)" }}
+        />
+      ) : null}
     </button>
   );
 }

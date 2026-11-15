@@ -92,14 +92,19 @@ describe("ToolCard", () => {
     expect(screen.queryByRole("button", { name: /Changes/ })).not.toBeInTheDocument();
   });
 
-  it("links a background subagent to its child conversation", () => {
+  it("opens a background subagent directly without arguments or result", () => {
     const openConversation = vi.fn().mockResolvedValue(undefined);
     useApp.setState({ openConversation });
     render(<ToolCard part={subagent} />);
-    const row = screen.getByRole("button", { name: /Subagent/ });
-    expect(row).toHaveTextContent("Inspect workspace");
-    fireEvent.click(row);
-    fireEvent.click(screen.getByRole("button", { name: "Open subagent" }));
+    expect(screen.getByText("Subagent")).toBeInTheDocument();
+    expect(screen.getByText("Inspect workspace")).toBeInTheDocument();
+    expect(screen.queryByText("Arguments")).not.toBeInTheDocument();
+    expect(screen.queryByText("Result")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("The subagent is running in the background."),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open subagent chat" }));
     expect(openConversation).toHaveBeenCalledWith("child-1");
   });
 
@@ -156,6 +161,27 @@ describe("ToolCard", () => {
     expect(screen.queryByText("Result")).not.toBeInTheDocument();
   });
 
+  it("does not expand a text read into arguments or result", () => {
+    render(
+      <ToolCard
+        part={toolPart("r1", {
+          callId: "r1",
+          name: "read",
+          server: "mcp-chat",
+          args: { filePath: "src/main.ts" },
+          state: "completed",
+          executed: true,
+          resultPreview: "1\tconst value = 1;",
+        })}
+      />,
+    );
+    const row = screen.getByRole("button", { name: /Read/ });
+    expect(row).not.toHaveAttribute("aria-expanded");
+    fireEvent.click(row);
+    expect(screen.queryByText("Arguments")).not.toBeInTheDocument();
+    expect(screen.queryByText("Result")).not.toBeInTheDocument();
+  });
+
   it("shows a read image in the expanded tool result", () => {
     render(
       <ToolCard
@@ -176,8 +202,11 @@ describe("ToolCard", () => {
         })}
       />,
     );
+    expect(screen.getByTitle("pw_test.png")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Read/ }));
     expect(screen.getByText(/Image: pw_test\.png \(image\/png\)/)).toBeInTheDocument();
+    expect(screen.queryByText("Arguments")).not.toBeInTheDocument();
+    expect(screen.queryByText("Result")).not.toBeInTheDocument();
   });
 
   it("shows every file of a multi-file patch in one open diff", () => {
@@ -320,25 +349,6 @@ describe("ToolCard", () => {
     expect(screen.getByText(/"command": "npm test"/)).toBeInTheDocument();
     expect(screen.getByText("all tests passed")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Changes/ })).not.toBeInTheDocument();
-  });
-
-  it("keeps the arguments and result view for read", () => {
-    render(
-      <ToolCard
-        part={toolPart("r1", {
-          callId: "r1",
-          name: "read",
-          server: "mcp-chat",
-          args: { filePath: "src/app.ts", offset: 1, limit: 20 },
-          state: "completed",
-          executed: true,
-          resultPreview: "src/app.ts (lines 1-20 of 40)",
-        })}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /Read/ }));
-    expect(screen.getByText("Arguments")).toBeInTheDocument();
-    expect(screen.getByText("Result")).toBeInTheDocument();
   });
 
   it("does not show a diff while the tool is still running", () => {

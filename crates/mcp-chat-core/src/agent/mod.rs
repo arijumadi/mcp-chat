@@ -189,16 +189,9 @@ impl ChatEngine {
         conversations::set_tool_mode(&self.db.pool, &child.id, &parent.tool_mode).await?;
         conversations::set_system_prompt(&self.db.pool, &child.id, parent.system_prompt.as_deref())
             .await?;
-        conversations::set_max_steps(
-            &self.db.pool,
-            &child.id,
-            if parent.max_steps > 0 {
-                parent.max_steps
-            } else {
-                30
-            },
-        )
-        .await?;
+        // The parent owns the step budget. An unlimited parent (0) gives the
+        // child the same unlimited budget; an explicit limit is inherited.
+        conversations::set_max_steps(&self.db.pool, &child.id, parent.max_steps).await?;
         if parent.servers_configured {
             let server_ids = conversation_servers::selected(&self.db.pool, &parent.id).await?;
             conversation_servers::set(&self.db.pool, &child.id, &server_ids).await?;
@@ -331,6 +324,29 @@ impl ChatEngine {
         }
     }
 
+    /// A background child must not start a parent turn after the user has
+    /// already sent a follow-up in the parent. That would interleave a new
+    /// parent turn with the user's work (and can race with a send). The
+    /// synthetic report is still persisted and will be in context next time.
+    fn should_wake_parent(history: &[crate::models::MessageWithParts], child_id: &str) -> bool {
+        let launch = history.iter().position(|message| {
+            message.parts.iter().any(|part| {
+                part.kind == "tool_call"
+                    && part
+                        .payload()
+                        .get("subagentSessionId")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(child_id)
+            })
+        });
+        let Some(index) = launch else {
+            return true;
+        };
+        !history[index + 1..]
+            .iter()
+            .any(|message| message.message.role == "user" && message.message.status != "synthetic")
+    }
+
     async fn finish_subagent(
         self: &Arc<Self>,
         parent_id: &str,
@@ -340,7 +356,9 @@ impl ChatEngine {
         report: &str,
     ) {
         let preview = crate::util::truncate_chars(report, 4_000).0;
+        let mut wake_parent = true;
         if let Ok(history) = messages::list_for_conversation(&self.db.pool, parent_id).await {
+            wake_parent = Self::should_wake_parent(&history, child_id);
             for message in &history {
                 for part in &message.parts {
                     if part.kind != "tool_call" {
@@ -412,7 +430,7 @@ impl ChatEngine {
         let _ = self.events.send(CoreEvent::ConversationUpdated {
             conversation_id: parent_id.to_owned(),
         });
-        if !self.in_flight(parent_id) {
+        if wake_parent && !self.in_flight(parent_id) {
             let _ = self.start_turn(parent_id);
         }
     }
@@ -981,5 +999,67 @@ fn subagent_report(history: &[crate::models::MessageWithParts]) -> (&'static str
         )
     } else {
         ("completed", report)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Message, Part};
+
+    fn message(
+        id: &str,
+        role: &str,
+        status: &str,
+        parts: Vec<Part>,
+    ) -> crate::models::MessageWithParts {
+        crate::models::MessageWithParts {
+            message: Message {
+                id: id.into(),
+                conversation_id: "c1".into(),
+                role: role.into(),
+                created_at: 0,
+                status: status.into(),
+                error: None,
+            },
+            parts,
+        }
+    }
+
+    fn subagent_part(id: &str, child_id: &str) -> Part {
+        Part {
+            id: id.into(),
+            message_id: "a1".into(),
+            idx: 0,
+            kind: "tool_call".into(),
+            payload_json: serde_json::json!({ "subagentSessionId": child_id }).to_string(),
+        }
+    }
+
+    #[test]
+    fn a_background_subagent_only_wakes_a_parent_without_a_real_follow_up() {
+        let initial = message("u1", "user", "completed", vec![]);
+        let launch = message(
+            "a1",
+            "assistant",
+            "completed",
+            vec![subagent_part("p1", "child")],
+        );
+        assert!(ChatEngine::should_wake_parent(
+            &[initial.clone(), launch.clone()],
+            "child"
+        ));
+
+        let synthetic = message("u2", "user", "synthetic", vec![]);
+        assert!(ChatEngine::should_wake_parent(
+            &[initial.clone(), launch.clone(), synthetic],
+            "child"
+        ));
+
+        let follow_up = message("u3", "user", "completed", vec![]);
+        assert!(!ChatEngine::should_wake_parent(
+            &[initial, launch, follow_up],
+            "child"
+        ));
     }
 }
