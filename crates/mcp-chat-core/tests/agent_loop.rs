@@ -1587,6 +1587,58 @@ async fn subagent_runs_in_a_child_conversation() {
 }
 
 #[tokio::test]
+async fn subagent_wake_waits_for_a_busy_parent() {
+    let h = Harness::new("mock-subagent-busy", Some("auto"), 0).await;
+    h.engine
+        .send_message(&h.conversation_id, "work while child runs")
+        .await
+        .unwrap();
+    for _ in 0..200 {
+        if h.engine.in_flight(&h.conversation_id) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        h.engine.in_flight(&h.conversation_id),
+        "parent did not start"
+    );
+
+    let (child_id, _) = h
+        .engine
+        .launch_subagent(
+            &h.conversation_id,
+            "Busy parent check",
+            "Report while the parent is working",
+            None,
+            "",
+        )
+        .await
+        .unwrap();
+
+    for _ in 0..400 {
+        if h.assistant_text()
+            .await
+            .contains("Parent got the subagent report.")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let text = h.assistant_text().await;
+    assert!(
+        text.contains("Parent still busy."),
+        "the user's parent turn was lost: {text}"
+    );
+    assert!(
+        text.contains("Parent got the subagent report."),
+        "the queued subagent wake did not run: {text}"
+    );
+    let child = conversations::get(&h.db.pool, &child_id).await.unwrap();
+    assert_eq!(child.parent_id.as_deref(), Some(h.conversation_id.as_str()));
+}
+
+#[tokio::test]
 async fn subagent_inherits_an_explicit_parent_step_limit() {
     let h = Harness::new("mock-text", None, 0).await;
     conversations::set_max_steps(&h.db.pool, &h.conversation_id, 7)

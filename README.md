@@ -159,7 +159,7 @@ The repository includes a mock MCP/LLM server for integration tests:
 cargo run -p mcp-mock
 ```
 
-Current verification: **257 Vitest tests, 248 Rust tests and 74 Playwright tests** pass. The native Tauri bundles are built by the tag workflow on Windows and Linux.
+Current verification: **257 Vitest tests, 249 Rust tests and 74 Playwright tests** pass. The native Tauri bundles are built by the tag workflow on Windows and Linux.
 
 ## Documentation
 
