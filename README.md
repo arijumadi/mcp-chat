@@ -44,7 +44,7 @@ Reasoning effort from Default to Max, context compaction, steering, background s
 
 **Work with real office files.** Bundled skills create, read and edit Word `.docx`, PDF and Excel `.xlsx` files, with form filling, tracked changes, PDF merging/stamping, spreadsheet formulas and CSV interop. One `spreadsheet` skill handles both safe workbook auditing and authoring. Antigravity CLI users can also delegate one-shot coding tasks to `agy`.
 
-**Browse and comment on the workspace.** Open the files panel to browse the conversation workspace with a lazy file tree, inspect source, select one or more lines, and attach a comment directly to the next message. The composer keeps the file context as removable chips, so the model receives the path, line range, preview and comment without pasting a whole file.
+**Browse and comment on the workspace.** Open the files panel to browse the conversation workspace with a lazy file tree, inspect source, select one or more lines, and attach a comment directly to the next message. The composer keeps the file context as chips you can edit or remove, so the model receives the path, line range, preview and comment without pasting a whole file.
 
 **Use subscription-backed agent runtimes.** OAuth 2.0 + PKCE with dynamic client registration, loopback callback, refresh tokens and keychain storage. Designed for subscription-backed servers such as T3 Code.
 

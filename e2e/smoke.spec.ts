@@ -155,10 +155,17 @@ test("opens the workspace tree and adds a line comment to the composer", async (
   await expect(page.getByText("src/main.ts:2")).toBeVisible();
   await expect(page.getByText("handle the empty case").first()).toBeVisible();
 
+  await page.getByRole("button", { name: "Edit context from src/main.ts" }).click();
+  await page
+    .getByRole("textbox", { name: "Edit file context comment" })
+    .fill("check the fallback path too");
+  await page.getByRole("button", { name: "Save comment" }).click();
+  await expect(page.getByText("check the fallback path too")).toBeVisible();
+
   await page.getByRole("button", { name: "Send message" }).click();
   const userMessage = page.getByTestId("user-message").last();
   await expect(userMessage.getByText("src/main.ts:2")).toBeVisible();
-  await expect(userMessage.getByText("handle the empty case")).toBeVisible();
+  await expect(userMessage.getByText("check the fallback path too")).toBeVisible();
 
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible({
     timeout: 15_000,
@@ -169,6 +176,7 @@ test("opens the workspace tree and adds a line comment to the composer", async (
   await expect(
     page.getByRole("button", { name: "Remove context from src/main.ts" }),
   ).toBeVisible();
+  await expect(page.getByText("check the fallback path too")).toBeVisible();
 });
 
 test("a long path without spaces wraps inside the user bubble", async ({ page }) => {

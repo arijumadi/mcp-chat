@@ -103,6 +103,7 @@ export interface AppStore {
   sendMessage: (text: string) => Promise<void>;
   steerMessage: (text: string) => Promise<void>;
   addContext: (context: MessageContext) => void;
+  updateContextComment: (id: string, comment: string) => void;
   removeContext: (id: string) => void;
   stageAttachments: (paths: string[]) => Promise<void>;
   stageImageFile: (file: File) => Promise<void>;
@@ -737,6 +738,14 @@ export const useApp = create<AppStore>()((set, get) => ({
         ? crypto.randomUUID()
         : `context-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     set({ contexts: [...existing, { ...context, id }] });
+  },
+
+  updateContextComment(id, comment) {
+    set((state) => ({
+      contexts: state.contexts.map((context) =>
+        context.id === id ? { ...context, comment } : context,
+      ),
+    }));
   },
 
   removeContext(id) {
