@@ -117,7 +117,7 @@ fn ext(path: &Path) -> String {
         .to_ascii_lowercase()
 }
 
-pub(crate) fn image_mime(head: &[u8]) -> Option<&'static str> {
+pub fn image_mime(head: &[u8]) -> Option<&'static str> {
     if head.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
     } else if head.starts_with(b"\xff\xd8\xff") {

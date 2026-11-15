@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { CornerUpLeft, FolderTree, PanelLeft, Plus, Settings, Plug } from "lucide-react";
+import {
+  CornerUpLeft,
+  FolderTree,
+  MessageSquare,
+  PanelLeft,
+  Plus,
+  Settings,
+  Plug,
+} from "lucide-react";
 import { useApp } from "@/app/store";
 import { Button } from "@/components/Button";
 import { Logo } from "@/components/Logo";
@@ -65,8 +73,8 @@ export function ChatView() {
     <div className="flex h-full min-w-0 flex-1">
       <div className="flex h-full min-w-0 flex-1 flex-col">
         <header
-          className="flex h-14 shrink-0 items-center gap-2 border-b px-3"
-          style={{ borderColor: "var(--border)", background: "var(--bg)" }}
+          className="flex h-11 shrink-0 items-center gap-1.5 px-3"
+          style={{ background: "var(--bg)" }}
         >
           {!sidebarOpen ? (
             <button
@@ -75,7 +83,7 @@ export function ChatView() {
               title="Open sidebar"
               aria-label="Open sidebar"
             >
-              <PanelLeft size={16} />
+              <PanelLeft size={15} />
             </button>
           ) : null}
           {conversation.parentId ? (
@@ -85,10 +93,16 @@ export function ChatView() {
               title="Back to parent chat"
               aria-label="Back to parent chat"
             >
-              <CornerUpLeft size={16} />
+              <CornerUpLeft size={15} />
             </button>
           ) : null}
-          <div className="min-w-0 flex-1 px-1">
+          <MessageSquare
+            size={14}
+            className="shrink-0"
+            style={{ color: "var(--faint)" }}
+            aria-hidden="true"
+          />
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             {editingTitle ? (
               <input
                 autoFocus
@@ -99,7 +113,7 @@ export function ChatView() {
                   if (event.key === "Enter") saveTitle();
                   if (event.key === "Escape") setEditingTitle(false);
                 }}
-                className="w-full max-w-[420px] rounded border bg-transparent px-1.5 py-0.5 text-[14px] font-medium outline-none"
+                className="w-full max-w-[420px] rounded border bg-transparent px-1.5 py-0.5 text-[12.5px] font-medium outline-none"
                 style={{ borderColor: "var(--accent)" }}
               />
             ) : (
@@ -108,29 +122,36 @@ export function ChatView() {
                   setTitle(conversation.title);
                   setEditingTitle(true);
                 }}
-                className="focus-ring block max-w-full truncate rounded text-left text-[14px] font-medium tracking-[-0.01em]"
+                className="focus-ring block max-w-full truncate rounded text-left text-[12.5px] font-medium tracking-[-0.01em]"
                 title="Rename conversation"
               >
                 {conversation.title}
               </button>
             )}
-            <div className="truncate text-[10.5px]" style={{ color: "var(--faint)" }}>
-              {conversation.parentId ? "subagent transcript" : "local transcript"}
-            </div>
+            {conversation.parentId ? (
+              <span
+                className="shrink-0 rounded border px-1 py-0.5 text-[9px] uppercase tracking-wide"
+                style={{ borderColor: "var(--border)", color: "var(--faint)" }}
+              >
+                subagent
+              </span>
+            ) : null}
           </div>
-          <button
-            type="button"
-            onClick={() => setWorkspaceOpen((open) => !open)}
-            className={cn(
-              "focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)]",
-              workspaceOpen && "bg-[var(--panel-2)]",
-            )}
-            title={workspaceOpen ? "Close workspace files" : "Open workspace files"}
-            aria-label={workspaceOpen ? "Close workspace files" : "Open workspace files"}
-          >
-            <FolderTree size={16} />
-          </button>
-          <ConversationTools conversation={conversation} />
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              onClick={() => setWorkspaceOpen((open) => !open)}
+              className={cn(
+                "focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)]",
+                workspaceOpen && "bg-[var(--panel-2)]",
+              )}
+              title={workspaceOpen ? "Close workspace files" : "Open workspace files"}
+              aria-label={workspaceOpen ? "Close workspace files" : "Open workspace files"}
+            >
+              <FolderTree size={15} />
+            </button>
+            <ConversationTools conversation={conversation} />
+          </div>
         </header>
 
         {messages.length === 0 ? (
@@ -233,20 +254,17 @@ function EmptyChat({
 }) {
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
-      <header
-        className="flex h-14 shrink-0 items-center gap-2 border-b px-3"
-        style={{ borderColor: "var(--border)" }}
-      >
+      <header className="flex h-11 shrink-0 items-center gap-2 px-3">
         {!sidebarOpen ? (
           <button
             onClick={onToggleSidebar}
             className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)]"
             aria-label="Open sidebar"
           >
-            <PanelLeft size={16} />
+            <PanelLeft size={15} />
           </button>
         ) : null}
-        <div className="ml-1 text-[12.5px]" style={{ color: "var(--faint)" }}>
+        <div className="ml-1 text-[11.5px]" style={{ color: "var(--faint)" }}>
           No conversation open
         </div>
         <div className="ml-auto flex items-center gap-1.5">

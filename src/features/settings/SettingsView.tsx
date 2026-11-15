@@ -18,7 +18,6 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
-  Sparkles,
   Sun,
   Trash2,
 } from "lucide-react";
@@ -466,7 +465,6 @@ export function SettingsView() {
               className="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3"
               style={{ borderColor: "var(--border)", background: "var(--panel)" }}
             >
-              <Sparkles size={16} style={{ color: "var(--accent)" }} />
               <div className="min-w-0 flex-1">
                 <div className="text-[12.5px] font-medium">Global skill settings</div>
                 <div className="mt-0.5 text-[11.5px]" style={{ color: "var(--muted)" }}>

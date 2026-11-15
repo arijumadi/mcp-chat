@@ -1,16 +1,19 @@
 use std::path::{Path, PathBuf};
 
+use base64::Engine;
 use serde::Serialize;
 use tauri::State;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 
 use mcp_chat_core::agent::tools::workspace_root_for_conversation;
+use mcp_chat_core::attachments::image_mime;
 
 use crate::error::{CmdResult, cmd_err};
 use crate::state::AppState;
 
 const MAX_FILE_BYTES: u64 = 512 * 1024;
+const MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_ENTRIES: usize = 2_000;
 
 #[derive(Debug, Serialize)]
@@ -29,6 +32,8 @@ pub struct WorkspaceFile {
     pub size: u64,
     pub truncated: bool,
     pub binary: bool,
+    pub mime: Option<String>,
+    pub data_url: Option<String>,
 }
 
 fn skipped_dir(name: &str) -> bool {
@@ -154,6 +159,45 @@ pub async fn read_workspace_file(
         return Err("Path is not a file.".into());
     }
     let size = metadata.len();
+    let mut head = [0u8; 16];
+    let head_len = fs::File::open(&file)
+        .await
+        .map_err(|error| error.to_string())?
+        .read(&mut head)
+        .await
+        .map_err(|error| error.to_string())?;
+    if let Some(mime) = image_mime(&head[..head_len]) {
+        let data_url = if size > MAX_IMAGE_BYTES {
+            None
+        } else {
+            let mut bytes = Vec::with_capacity(size as usize);
+            fs::File::open(&file)
+                .await
+                .map_err(|error| error.to_string())?
+                .take(MAX_IMAGE_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .await
+                .map_err(|error| error.to_string())?;
+            if bytes.len() as u64 > MAX_IMAGE_BYTES {
+                None
+            } else {
+                Some(format!(
+                    "data:{mime};base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(&bytes)
+                ))
+            }
+        };
+        return Ok(WorkspaceFile {
+            path: relative_path(&root, &file),
+            content: String::new(),
+            size,
+            truncated: false,
+            binary: true,
+            mime: Some(mime.to_owned()),
+            data_url,
+        });
+    }
+
     let mut bytes = Vec::with_capacity(MAX_FILE_BYTES as usize + 1);
     fs::File::open(&file)
         .await
@@ -178,5 +222,7 @@ pub async fn read_workspace_file(
         size,
         truncated,
         binary,
+        mime: None,
+        data_url: None,
     })
 }

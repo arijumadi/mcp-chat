@@ -8,8 +8,8 @@ import {
   Plus,
   Search,
   Settings,
-  Sparkles,
   Trash2,
+  Workflow,
 } from "lucide-react";
 import { useApp } from "@/app/store";
 import { Button } from "@/components/Button";
@@ -285,7 +285,7 @@ export function Sidebar() {
               : "hover:bg-[var(--panel-2)]",
           )}
         >
-          <Sparkles size={14} />
+          <Workflow size={14} />
           <span className="flex-1">Skills</span>
         </button>
         <button
