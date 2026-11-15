@@ -67,6 +67,7 @@ pub struct ChatEngine {
     pub output_dir: PathBuf,
     pub attachments_dir: PathBuf,
     turns: Mutex<HashMap<String, CancellationToken>>,
+    pending_wakes: Mutex<HashSet<String>>,
     auto_approve: Mutex<HashSet<String>>,
 }
 
@@ -104,6 +105,7 @@ impl ChatEngine {
             output_dir,
             attachments_dir,
             turns: Mutex::new(HashMap::new()),
+            pending_wakes: Mutex::new(HashSet::new()),
             auto_approve: Mutex::new(HashSet::new()),
         });
         let host: Arc<dyn SubagentHost> = Arc::new(SubagentHostRef {
@@ -324,29 +326,6 @@ impl ChatEngine {
         }
     }
 
-    /// A background child must not start a parent turn after the user has
-    /// already sent a follow-up in the parent. That would interleave a new
-    /// parent turn with the user's work (and can race with a send). The
-    /// synthetic report is still persisted and will be in context next time.
-    fn should_wake_parent(history: &[crate::models::MessageWithParts], child_id: &str) -> bool {
-        let launch = history.iter().position(|message| {
-            message.parts.iter().any(|part| {
-                part.kind == "tool_call"
-                    && part
-                        .payload()
-                        .get("subagentSessionId")
-                        .and_then(serde_json::Value::as_str)
-                        == Some(child_id)
-            })
-        });
-        let Some(index) = launch else {
-            return true;
-        };
-        !history[index + 1..]
-            .iter()
-            .any(|message| message.message.role == "user" && message.message.status != "synthetic")
-    }
-
     async fn finish_subagent(
         self: &Arc<Self>,
         parent_id: &str,
@@ -356,9 +335,7 @@ impl ChatEngine {
         report: &str,
     ) {
         let preview = crate::util::truncate_chars(report, 4_000).0;
-        let mut wake_parent = true;
         if let Ok(history) = messages::list_for_conversation(&self.db.pool, parent_id).await {
-            wake_parent = Self::should_wake_parent(&history, child_id);
             for message in &history {
                 for part in &message.parts {
                     if part.kind != "tool_call" {
@@ -430,9 +407,7 @@ impl ChatEngine {
         let _ = self.events.send(CoreEvent::ConversationUpdated {
             conversation_id: parent_id.to_owned(),
         });
-        if wake_parent && !self.in_flight(parent_id) {
-            let _ = self.start_turn(parent_id);
-        }
+        self.queue_subagent_wake(parent_id);
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<CoreEvent> {
@@ -838,6 +813,49 @@ impl ChatEngine {
         ))
     }
 
+    /// Queue a subagent report wake. If the parent is already idle, start the
+    /// turn now; otherwise hold it until the current parent turn releases its
+    /// slot and `wake_if_pending` runs.
+    fn queue_subagent_wake(self: &Arc<Self>, parent_id: &str) {
+        if self.in_flight(parent_id) {
+            self.pending_wakes
+                .lock()
+                .expect("pending wakes lock")
+                .insert(parent_id.to_owned());
+            return;
+        }
+        if self.start_turn(parent_id).is_err() {
+            self.pending_wakes
+                .lock()
+                .expect("pending wakes lock")
+                .insert(parent_id.to_owned());
+        }
+    }
+
+    fn wake_if_pending(self: &Arc<Self>, conversation_id: &str) {
+        let pending = self
+            .pending_wakes
+            .lock()
+            .expect("pending wakes lock")
+            .remove(conversation_id);
+        if !pending {
+            return;
+        }
+        if self.in_flight(conversation_id) {
+            self.pending_wakes
+                .lock()
+                .expect("pending wakes lock")
+                .insert(conversation_id.to_owned());
+            return;
+        }
+        if self.start_turn(conversation_id).is_err() {
+            self.pending_wakes
+                .lock()
+                .expect("pending wakes lock")
+                .insert(conversation_id.to_owned());
+        }
+    }
+
     fn start_turn(self: &Arc<Self>, conversation_id: &str) -> Result<()> {
         drop(self.start_turn_with_done(conversation_id)?);
         Ok(())
@@ -855,12 +873,16 @@ impl ChatEngine {
         let id = conversation_id.to_owned();
         let (done_tx, done_rx) = oneshot::channel();
         tokio::spawn(async move {
-            // The slot is released when this task ends, however it ends.
-            let _slot = slot;
-            if let Err(error) = runner::run(engine.clone(), &id, token).await {
-                tracing::debug!(conversation = %id, error = %error.user_message(), "turn ended with error");
+            {
+                // Drop the slot before checking for a queued wake, otherwise
+                // the new turn would see this one as still in flight.
+                let _slot = slot;
+                if let Err(error) = runner::run(engine.clone(), &id, token).await {
+                    tracing::debug!(conversation = %id, error = %error.user_message(), "turn ended with error");
+                }
             }
             let _ = done_tx.send(());
+            engine.wake_if_pending(&id);
         });
         Ok(done_rx)
     }
@@ -1005,61 +1027,48 @@ fn subagent_report(history: &[crate::models::MessageWithParts]) -> (&'static str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{Message, Part};
+    use crate::db::Db;
+    use crate::db::repo::conversations;
+    use crate::mcp::McpManager;
+    use crate::secrets::MemoryStore;
 
-    fn message(
-        id: &str,
-        role: &str,
-        status: &str,
-        parts: Vec<Part>,
-    ) -> crate::models::MessageWithParts {
-        crate::models::MessageWithParts {
-            message: Message {
-                id: id.into(),
-                conversation_id: "c1".into(),
-                role: role.into(),
-                created_at: 0,
-                status: status.into(),
-                error: None,
-            },
-            parts,
-        }
-    }
-
-    fn subagent_part(id: &str, child_id: &str) -> Part {
-        Part {
-            id: id.into(),
-            message_id: "a1".into(),
-            idx: 0,
-            kind: "tool_call".into(),
-            payload_json: serde_json::json!({ "subagentSessionId": child_id }).to_string(),
-        }
-    }
-
-    #[test]
-    fn a_background_subagent_only_wakes_a_parent_without_a_real_follow_up() {
-        let initial = message("u1", "user", "completed", vec![]);
-        let launch = message(
-            "a1",
-            "assistant",
-            "completed",
-            vec![subagent_part("p1", "child")],
+    #[tokio::test]
+    async fn a_queued_subagent_wake_starts_after_the_parent_turn_releases_its_slot() {
+        let db = Db::open_memory().await.unwrap();
+        let conversation = conversations::create(&db.pool, "Parent", None, None)
+            .await
+            .unwrap();
+        let secrets = Arc::new(MemoryStore::default());
+        let mcp = Arc::new(McpManager::new(db.clone(), secrets.clone()));
+        let tmp = tempfile::tempdir().unwrap();
+        let engine = ChatEngine::new(
+            db,
+            secrets,
+            mcp,
+            tmp.path().join("tool-output"),
+            tmp.path().join("attachments"),
         );
-        assert!(ChatEngine::should_wake_parent(
-            &[initial.clone(), launch.clone()],
-            "child"
-        ));
+        let (slot, _token) = engine
+            .claim_turn(&conversation.id, "parent is busy")
+            .unwrap();
 
-        let synthetic = message("u2", "user", "synthetic", vec![]);
-        assert!(ChatEngine::should_wake_parent(
-            &[initial.clone(), launch.clone(), synthetic],
-            "child"
-        ));
+        engine.queue_subagent_wake(&conversation.id);
+        assert!(
+            engine
+                .pending_wakes
+                .lock()
+                .expect("pending wakes lock")
+                .contains(&conversation.id)
+        );
 
-        let follow_up = message("u3", "user", "completed", vec![]);
-        assert!(!ChatEngine::should_wake_parent(
-            &[initial, launch, follow_up],
-            "child"
-        ));
+        drop(slot);
+        engine.wake_if_pending(&conversation.id);
+        assert!(
+            !engine
+                .pending_wakes
+                .lock()
+                .expect("pending wakes lock")
+                .contains(&conversation.id)
+        );
     }
 }
