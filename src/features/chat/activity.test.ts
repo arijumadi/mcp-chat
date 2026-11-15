@@ -22,7 +22,7 @@ describe("summarizeTool", () => {
       tool({ name: "read", args: { filePath: "ChatRoom.tsx", offset: 168, limit: 50 } }),
     );
     expect(summary.label).toBe("Read");
-    expect(summary.target).toBe("ChatRoom.tsx offset=168 limit=50");
+    expect(summary.target).toBe("ChatRoom.tsx");
   });
 
   it("keeps the last three segments of a long path and the full text in the title", () => {

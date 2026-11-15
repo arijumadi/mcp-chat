@@ -6,6 +6,7 @@ import {
   Clock3,
   Copy,
   ExternalLink,
+  Image as ImageIcon,
   Loader2,
   XCircle,
 } from "lucide-react";
@@ -120,6 +121,10 @@ export function ToolCard({ part }: { part: Part }) {
   const exitCode = typeof payload.exitCode === "number" ? payload.exitCode : null;
   const nonzeroExit = state === "completed" && exitCode !== null && exitCode !== 0;
   const image = (payload.image ?? null) as ToolImage | null;
+  const imageSource = image?.path ? imageUrl(image.path) : "";
+  const isRead = payload.name === "read";
+  const readDetail = isRead && Boolean(image || (payload.error && state === "error"));
+  const expandable = !isRead || readDetail;
   const metaArgs = (payload.args ?? {}) as Record<string, unknown>;
   const isMetaCall = payload.name === "mcp_call_tool";
   const displayArgs =
@@ -193,13 +198,42 @@ export function ToolCard({ part }: { part: Part }) {
     }
   };
 
+  const errorBlock =
+    payload.error && state === "error" ? (
+      <div
+        role="alert"
+        className="rounded-md px-2.5 py-2 text-[length:var(--fs-mono)] whitespace-pre-wrap"
+        style={{ color: "var(--danger)", background: "var(--danger-soft)" }}
+      >
+        {payload.error}
+      </div>
+    ) : null;
+  const imageBlock =
+    image && image.path ? (
+      <div>
+        {imageSource ? (
+          <img
+            src={imageSource}
+            alt={image.name}
+            className="max-h-56 max-w-full rounded-md border object-contain"
+            style={{ borderColor: "var(--border)" }}
+          />
+        ) : (
+          <div className="text-[length:var(--fs-mono)]" style={{ color: "var(--muted)" }}>
+            Image: {image.name} ({image.mime})
+          </div>
+        )}
+      </div>
+    ) : null;
+
   return (
     <>
       <div className="my-px" data-tool-state={state} data-tool-name={payload.name}>
         <ActivityRow
           icon={<StatusIcon state={state} nonzeroExit={nonzeroExit} />}
-          expanded={open}
+          expanded={expandable ? open : false}
           onToggle={() => setOpen((value) => !value)}
+          expandable={expandable}
           controlsId={bodyId}
           title={summary.title}
           trailing={
@@ -238,6 +272,19 @@ export function ToolCard({ part }: { part: Part }) {
               {summary.result}
             </span>
           ) : null}
+          {isRead && image && image.path ? (
+            <span
+              className="ml-1 flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded border"
+              style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}
+              title={image.name}
+            >
+              {imageSource ? (
+                <img src={imageSource} alt={image.name} className="h-full w-full object-cover" />
+              ) : (
+                <ImageIcon size={12} style={{ color: "var(--muted)" }} />
+              )}
+            </span>
+          ) : null}
         </ActivityRow>
 
         {state === "running" && typeof raw.progress === "number" ? (
@@ -263,7 +310,12 @@ export function ToolCard({ part }: { part: Part }) {
             className="mt-0.5 mb-2 ml-[15px] space-y-2.5 border-l pl-4 text-[length:var(--fs-row)]"
             style={{ borderColor: "var(--border)" }}
           >
-            {mutationDiff ? (
+            {isRead ? (
+              <>
+                {errorBlock}
+                {imageBlock}
+              </>
+            ) : mutationDiff ? (
               <DiffView diff={mutationDiff} defaultOpen />
             ) : (
               <>
@@ -310,34 +362,10 @@ export function ToolCard({ part }: { part: Part }) {
                   </Section>
                 ) : null}
 
-                {payload.error && state === "error" ? (
-                  <div
-                    role="alert"
-                    className="rounded-md px-2.5 py-2 text-[length:var(--fs-mono)] whitespace-pre-wrap"
-                    style={{ color: "var(--danger)", background: "var(--danger-soft)" }}
-                  >
-                    {payload.error}
-                  </div>
-                ) : null}
+                {errorBlock}
+                {imageBlock}
 
-                {image && image.path ? (
-                  <div>
-                    {imageUrl(image.path) ? (
-                      <img
-                        src={imageUrl(image.path)}
-                        alt={image.name}
-                        className="max-h-56 max-w-full rounded-md border object-contain"
-                        style={{ borderColor: "var(--border)" }}
-                      />
-                    ) : (
-                      <div className="text-[length:var(--fs-mono)]" style={{ color: "var(--muted)" }}>
-                        Image: {image.name} ({image.mime})
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-
-    {diff ? <DiffView diff={diff} /> : null}
+                {diff ? <DiffView diff={diff} /> : null}
               </>
             )}
           </div>

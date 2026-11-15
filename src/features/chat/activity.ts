@@ -111,9 +111,7 @@ export function summarizeTool(payload: ToolCallPayload): ToolSummary {
     switch (name) {
       case "read": {
         const path = str(args.filePath);
-        target = [path && shortPath(path), ...keyValues(args, ["filePath"])]
-          .filter(Boolean)
-          .join(" ");
+        target = path ? shortPath(path) : "";
         break;
       }
       case "write":
