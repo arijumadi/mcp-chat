@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Loader2, SlidersHorizontal } from "lucide-react";
+import { Check, Loader2, Server } from "lucide-react";
 import { useApp } from "@/app/store";
 import { call } from "@/lib/ipc";
 import type { Conversation, ConversationToolsView } from "@/lib/types";
 import { Button } from "@/components/Button";
+import { cn } from "@/lib/cn";
 
 const LAZY_TOOL_MODE = "lazy";
 
@@ -107,18 +108,27 @@ export function ConversationTools({
   return (
     <div ref={ref} className="relative">
       <button
+        type="button"
         onClick={toggleOpen}
-        className="focus-ring flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)]"
-        style={{ borderColor: "var(--border)", color: "var(--muted)" }}
+        className={cn(
+          "focus-ring flex h-8 items-center gap-1 rounded-lg px-1.5 text-[10.5px] transition hover:bg-[var(--panel-2)]",
+          open && "bg-[var(--panel-2)]",
+        )}
+        style={{ color: "var(--muted)" }}
         title={
           mcpIssue
             ? `MCP issue: ${mcpIssue.name}${mcpIssue.lastError ? ` — ${mcpIssue.lastError}` : ""}`
-            : "Choose MCP tools for this chat"
+            : `MCP servers for this chat (${selectedCount}/${enabledServers.length} active)`
         }
+        aria-label={`MCP servers for this chat: ${selectedCount} of ${enabledServers.length} active`}
+        aria-expanded={open}
+        aria-haspopup="dialog"
       >
-        <SlidersHorizontal size={13} />
-        <span>MCP</span>
-        <span className="font-medium" style={{ color: "var(--fg)" }}>
+        <Server size={15} />
+        <span
+          className="font-medium tabular-nums"
+          style={{ color: mcpIssue ? "var(--danger)" : "var(--fg)" }}
+        >
           {selectedCount}/{enabledServers.length}
         </span>
         {mcpIssue ? (
@@ -128,7 +138,6 @@ export function ConversationTools({
             aria-label="MCP connection issue"
           />
         ) : null}
-        <ChevronDown size={11} />
       </button>
 
       {open ? (

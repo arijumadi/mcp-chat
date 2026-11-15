@@ -147,6 +147,7 @@ test("opens the workspace tree and adds a line comment to the composer", async (
   await page.getByRole("button", { name: "src", exact: true }).click();
   await page.getByRole("button", { name: "main.ts", exact: true }).click();
   await expect(page.getByText('return "hi";')).toBeVisible();
+  await expect(page.locator(".workspace-panel .hljs-keyword").first()).toBeVisible();
 
   await page.getByText('return "hi";').click();
   await page.getByRole("textbox", { name: "File context comment" }).fill("handle the empty case");

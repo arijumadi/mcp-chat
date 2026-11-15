@@ -114,6 +114,7 @@ export function WorkspacePanel({
   const [selected, setSelected] = useState<string | null>(null);
   const [file, setFile] = useState<WorkspaceFile | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
+  const [highlightedLines, setHighlightedLines] = useState<string[]>([]);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [comment, setComment] = useState("");
   const [commentFocus, setCommentFocus] = useState(false);
@@ -206,6 +207,25 @@ export function WorkspacePanel({
     if (!selection) return [];
     return lines.slice(selection.start - 1, selection.end);
   }, [lines, selection]);
+
+  useEffect(() => {
+    if (!file || file.binary) {
+      setHighlightedLines([]);
+      return;
+    }
+    let cancelled = false;
+    setHighlightedLines([]);
+    void import("@/lib/highlight")
+      .then(({ highlightLines }) => {
+        if (!cancelled) setHighlightedLines(highlightLines(file.content, file.path));
+      })
+      .catch(() => {
+        if (!cancelled) setHighlightedLines([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [file]);
 
   const selectLine = (line: number, shift: boolean) => {
     setSelection((current) => {
@@ -435,7 +455,7 @@ export function WorkspacePanel({
                   </div>
                 ) : (
                   <div className="min-w-max py-2 font-mono text-[11.5px] leading-[18px]">
-                    {lines.map((line, index) => {
+                    {lines.map((_, index) => {
                       const number = index + 1;
                       const active =
                         selection !== null &&
@@ -465,7 +485,16 @@ export function WorkspacePanel({
                           >
                             {number}
                           </span>
-                          <span className="pr-4">{line || " "}</span>
+                          {highlightedLines[index] !== undefined ? (
+                            <span
+                              className="pr-4"
+                              dangerouslySetInnerHTML={{
+                                __html: highlightedLines[index] ?? "",
+                              }}
+                            />
+                          ) : (
+                            <span className="pr-4">{lines[index] || " "}</span>
+                          )}
                         </div>
                       );
                     })}
