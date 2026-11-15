@@ -29,14 +29,14 @@ The deep details live in:
 - `crates/mcp-chat-core/migrations/` — sqlx migrations. Do not edit an applied
   migration; add the next numbered file.
 
-Current version at the time of this note: **0.3.24**.
+The release version is defined in `package.json`, the Cargo workspace, and `src-tauri/tauri.conf.json`.
 
 ## Commands
 
 ```bash
 pnpm install
 pnpm check          # version, lint, typecheck, Vitest, build, fmt, Rust tests, clippy
-pnpm test:e2e       # Playwright, 68 tests at 0.3.24
+pnpm test:e2e       # Playwright smoke, interaction and visual tests
 pnpm tauri dev      # requires WebKit/GTK development libraries on Linux
 pnpm version:check  # package.json, Cargo workspace, tauri.conf.json
 ```
