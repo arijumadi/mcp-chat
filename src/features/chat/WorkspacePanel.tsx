@@ -457,15 +457,13 @@ export function WorkspacePanel({
         }
       />
       <header
-        className="flex h-14 shrink-0 items-center gap-2 border-b px-3"
+        className="flex h-11 shrink-0 items-center gap-2 border-b px-3"
         style={{ borderColor: "var(--border)" }}
+        title={conversation.workspaceRoot ?? "workspace root"}
       >
-        <Folder size={15} style={{ color: "var(--warn)" }} />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[12.5px] font-medium">Workspace files</div>
-          <div className="truncate text-[10.5px]" style={{ color: "var(--faint)" }}>
-            {conversation.workspaceRoot ?? "workspace root"}
-          </div>
+        <Folder size={14} style={{ color: "var(--warn)" }} />
+        <div className="min-w-0 flex-1 truncate text-[12.5px] font-medium">
+          Workspace files
         </div>
         <button
           type="button"
