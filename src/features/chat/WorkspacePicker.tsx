@@ -93,15 +93,15 @@ export function WorkspacePicker({
         type="button"
         onClick={() => setOpenPicker((value) => !value)}
         disabled={disabled}
-        className="focus-ring flex max-w-[170px] items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
+        className="focus-ring flex max-w-[170px] items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-[10.5px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
         style={{ color: "var(--muted)" }}
         title={current || "Choose workspace"}
       >
-        <Folder size={12} className="shrink-0" />
+        <Folder size={11} className="shrink-0" />
         <span className="truncate" style={{ color: "var(--fg)" }}>
           {current ? baseName(current) : "Workspace"}
         </span>
-        <ChevronDown size={11} className="shrink-0" />
+        <ChevronDown size={10} className="shrink-0" />
       </button>
 
       {openPicker ? (

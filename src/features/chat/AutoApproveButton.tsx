@@ -27,7 +27,7 @@ export function AutoApproveButton() {
       <button
         type="button"
         onClick={() => void toggle()}
-        className="focus-ring flex items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-[11.5px] transition hover:bg-[var(--panel-2)]"
+        className="focus-ring flex items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-[10.5px] transition hover:bg-[var(--panel-2)]"
         style={{
           borderColor: enabled ? "var(--accent)" : "transparent",
           background: enabled ? "var(--accent-soft)" : "transparent",
@@ -39,7 +39,7 @@ export function AutoApproveButton() {
             : "Enable auto-approve for this chat"
         }
       >
-        <ShieldCheck size={12} />
+        <ShieldCheck size={11} />
         <span>Auto</span>
       </button>
 
