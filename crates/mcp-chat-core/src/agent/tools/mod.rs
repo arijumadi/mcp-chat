@@ -227,15 +227,18 @@ impl ToolExecutor {
         };
 
         if let Err(message) = validate_args(&tool.input_schema, &req.args) {
-            return self
-                .fail(
-                    req,
-                    "error",
-                    format!("Invalid tool input: {message}"),
-                    started,
-                    false,
+            let message = if builtin && req.remote_name == MCP_EXECUTE {
+                format!(
+                    "Invalid tool input: {message}. mcp_execute needs 2-8 calls in `calls`; every item needs server, tool and an arguments object. Use mcp_call_tool for one call, and mcp_get_tool_schema if you do not know a tool's arguments."
                 )
-                .await;
+            } else if builtin && req.remote_name == MCP_CALL_TOOL {
+                format!(
+                    "Invalid tool input: {message}. mcp_call_tool needs server, tool and an arguments object; call mcp_get_tool_schema first if you do not know them."
+                )
+            } else {
+                format!("Invalid tool input: {message}")
+            };
+            return self.fail(req, "error", message, started, false).await;
         }
 
         if builtin && req.remote_name == MCP_EXECUTE {

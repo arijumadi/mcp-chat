@@ -27,7 +27,8 @@ const HARNESS_TEMPLATE: &str = r#"# Harness rules
 - Ask only when the answer changes the action, file, format or target, or confirms a destructive step, and the workspace cannot answer it. A light question that does not change the next step goes in the final answer. Do not use `{ask_user}` for pleasantries, status, or anything you can read yourself.
 - Do not narrate routine tool use or write a preamble before a tool call. Call the tool directly.
 - When several reads, searches, or inspections are independent, issue them together in one step instead of serializing them. Tool execution runs up to 4 calls concurrently; keep batches focused.
-- Use `mcp_execute` when it is available for 2-8 independent MCP calls in one step. Do not batch calls that depend on each other's results.
+- For an MCP tool whose catalog line does not list every argument you need, call `mcp_get_tool_schema` before the first call. Never invent MCP parameter names.
+- Use `mcp_call_tool` for one MCP call. Use `mcp_execute` only for 2-8 independent calls, with a `calls` array of 2-8 items and an `arguments` object on every item. Do not batch calls that depend on each other's results.
 - Use `subagent` for a large, self-contained workstream that can run while you continue, or to keep bulky exploration out of the parent context. Give it complete context and instructions. Do not poll it; wait for its `<subagent>` report.
 - Use the returned subagent `sessionID` for follow-ups. Do not spawn a duplicate subagent for the same workstream, and do not use subagents for trivial tasks or tightly coupled steps.
 - Do not chain shell commands with separators only to print section headers; keep output clean.
@@ -316,6 +317,8 @@ mod tests {
         let rules = harness_rules();
         assert!(rules.contains("up to 4 calls concurrently"));
         assert!(rules.contains("mcp_execute"));
+        assert!(rules.contains("mcp_get_tool_schema"));
+        assert!(rules.contains("Never invent MCP parameter names"));
         assert!(rules.contains("subagent"));
         assert!(rules.contains("sessionID"));
         assert!(rules.contains("Do not poll"));
@@ -416,7 +419,8 @@ mod tests {
 - Ask only when the answer changes the action, file, format or target, or confirms a destructive step, and the workspace cannot answer it. A light question that does not change the next step goes in the final answer. Do not use `question` for pleasantries, status, or anything you can read yourself.
 - Do not narrate routine tool use or write a preamble before a tool call. Call the tool directly.
 - When several reads, searches, or inspections are independent, issue them together in one step instead of serializing them. Tool execution runs up to 4 calls concurrently; keep batches focused.
-- Use `mcp_execute` when it is available for 2-8 independent MCP calls in one step. Do not batch calls that depend on each other's results.
+- For an MCP tool whose catalog line does not list every argument you need, call `mcp_get_tool_schema` before the first call. Never invent MCP parameter names.
+- Use `mcp_call_tool` for one MCP call. Use `mcp_execute` only for 2-8 independent calls, with a `calls` array of 2-8 items and an `arguments` object on every item. Do not batch calls that depend on each other's results.
 - Use `subagent` for a large, self-contained workstream that can run while you continue, or to keep bulky exploration out of the parent context. Give it complete context and instructions. Do not poll it; wait for its `<subagent>` report.
 - Use the returned subagent `sessionID` for follow-ups. Do not spawn a duplicate subagent for the same workstream, and do not use subagents for trivial tasks or tightly coupled steps.
 - Do not chain shell commands with separators only to print section headers; keep output clean.
