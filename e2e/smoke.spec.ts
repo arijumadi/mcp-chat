@@ -140,6 +140,37 @@ test("connects a remote MCP server with OAuth", async ({ page }) => {
   await expect(page.getByText("T3 Code").first()).toBeVisible();
 });
 
+test("opens the workspace tree and adds a line comment to the composer", async ({ page }) => {
+  await page.goto("/?mock=1");
+  await page.getByText("Welcome to Jarvis").first().click();
+  await page.getByRole("button", { name: "Open workspace files" }).click();
+  await page.getByRole("button", { name: "src", exact: true }).click();
+  await page.getByRole("button", { name: "main.ts", exact: true }).click();
+  await expect(page.getByText('return "hi";')).toBeVisible();
+
+  await page.getByText('return "hi";').click();
+  await page.getByRole("textbox", { name: "File context comment" }).fill("handle the empty case");
+  await page.getByRole("button", { name: "Comment", exact: true }).click();
+
+  await expect(page.getByText("src/main.ts:2")).toBeVisible();
+  await expect(page.getByText("handle the empty case").first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Send message" }).click();
+  const userMessage = page.getByTestId("user-message").last();
+  await expect(userMessage.getByText("src/main.ts:2")).toBeVisible();
+  await expect(userMessage.getByText("handle the empty case")).toBeVisible();
+
+  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible({
+    timeout: 15_000,
+  });
+  await userMessage.hover();
+  await userMessage.getByRole("button", { name: "Revert message" }).click();
+  await page.getByRole("button", { name: "Revert", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Remove context from src/main.ts" }),
+  ).toBeVisible();
+});
+
 test("a long path without spaces wraps inside the user bubble", async ({ page }) => {
   await page.goto("/?mock=1");
   await page.getByRole("button", { name: "New chat" }).first().click();

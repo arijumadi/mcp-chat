@@ -69,6 +69,51 @@ async fn flush_tool_images(messages: &mut Vec<ChatMessage>, pending: &mut Vec<Co
     });
 }
 
+fn context_note(text: &str, context: &crate::models::MessageContext) -> String {
+    let range = match (context.start_line, context.end_line) {
+        (Some(start), Some(end)) if start == end => format!("line {start}"),
+        (Some(start), Some(end)) => format!("lines {start} through {end}"),
+        _ => "this file".to_owned(),
+    };
+    let mut out = format!(
+        "The user made the following comment regarding {range} of {}:",
+        context.path
+    );
+    if let Some(preview) = context
+        .preview
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        out.push_str(&format!("\n```text\n{preview}\n```"));
+    }
+    out.push('\n');
+    out.push_str(&context.comment);
+    if text.trim().is_empty() {
+        out
+    } else {
+        format!("{text}\n\n{out}")
+    }
+}
+
+fn part_context(part: &Part) -> Option<crate::models::MessageContext> {
+    if part.kind != "context" {
+        return None;
+    }
+    let payload = part.payload();
+    let path = payload.get("path")?.as_str()?.to_owned();
+    let comment = payload.get("comment")?.as_str()?.to_owned();
+    Some(crate::models::MessageContext {
+        path,
+        start_line: payload.get("startLine").and_then(Value::as_i64),
+        end_line: payload.get("endLine").and_then(Value::as_i64),
+        comment,
+        preview: payload
+            .get("preview")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    })
+}
+
 pub async fn build_messages(history: &[MessageWithParts]) -> (Vec<ChatMessage>, Option<String>) {
     let summary = latest_summary(history);
     let mut start = 0;
@@ -114,13 +159,21 @@ pub async fn build_messages(history: &[MessageWithParts]) -> (Vec<ChatMessage>, 
         match message.message.role.as_str() {
             "user" => {
                 flush_tool_images(&mut messages, &mut pending_tool_images).await;
-                let text = text_parts(&message.parts);
+                let mut text = text_parts(&message.parts);
+                let contexts = message
+                    .parts
+                    .iter()
+                    .filter_map(part_context)
+                    .collect::<Vec<_>>();
+                for context in &contexts {
+                    text = context_note(&text, context);
+                }
                 let attachments: Vec<&Part> = message
                     .parts
                     .iter()
                     .filter(|part| part.kind == "attachment")
                     .collect();
-                if text.trim().is_empty() && attachments.is_empty() {
+                if text.trim().is_empty() && attachments.is_empty() && contexts.is_empty() {
                     continue;
                 }
                 // Timestamp lives in the user message, not the system
@@ -441,6 +494,14 @@ pub fn transcript_for_summary(history: &[MessageWithParts]) -> String {
                         line.push_str(&format!("\n[previous summary] {text}"));
                     }
                 }
+                "context" => {
+                    let path = payload.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    let comment = payload
+                        .get("comment")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    line.push_str(&format!("\n[file context {path}] {comment}"));
+                }
                 "attachment" => {
                     let name = payload
                         .get("name")
@@ -532,6 +593,64 @@ mod tests {
             &messages[0].content[1],
             ContentBlock::Image { media_type, data } if media_type == "image/png" && data == "aW1hZ2UtYnl0ZXM="
         ));
+    }
+
+    #[tokio::test]
+    async fn file_context_is_inlined_for_the_model() {
+        let history = vec![message_with_parts(vec![
+            Part {
+                id: "text".into(),
+                message_id: "m1".into(),
+                idx: 0,
+                kind: "text".into(),
+                payload_json: json!({"text": "please check this"}).to_string(),
+            },
+            Part {
+                id: "context".into(),
+                message_id: "m1".into(),
+                idx: 1,
+                kind: "context".into(),
+                payload_json: json!({
+                    "path": "src/main.rs",
+                    "startLine": 10,
+                    "endLine": 12,
+                    "comment": "handle the empty case",
+                    "preview": "let value = read();\nuse(value);"
+                })
+                .to_string(),
+            },
+        ])];
+        let (messages, _) = build_messages(&history).await;
+        assert_eq!(messages.len(), 1);
+        let text = messages[0].text_content();
+        assert!(text.contains("please check this"));
+        assert!(text.contains("lines 10 through 12 of src/main.rs"));
+        assert!(text.contains("handle the empty case"));
+        assert!(text.contains("let value = read();"));
+    }
+
+    #[tokio::test]
+    async fn file_context_without_message_text_still_reaches_the_model() {
+        let history = vec![message_with_parts(vec![Part {
+            id: "context".into(),
+            message_id: "m1".into(),
+            idx: 0,
+            kind: "context".into(),
+            payload_json: json!({
+                "path": "README.md",
+                "startLine": 3,
+                "endLine": 3,
+                "comment": "this line is stale",
+                "preview": "Old install step"
+            })
+            .to_string(),
+        }])];
+        let (messages, _) = build_messages(&history).await;
+        assert_eq!(messages.len(), 1);
+        let text = messages[0].text_content();
+        assert!(text.contains("line 3 of README.md"));
+        assert!(text.contains("this line is stale"));
+        assert!(text.contains("Old install step"));
     }
 
     #[tokio::test]

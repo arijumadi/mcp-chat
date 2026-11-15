@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ClipboardEvent } from "react";
-import { ArrowUp, Loader2, Paperclip, Square, Upload } from "lucide-react";
+import { ArrowUp, FileText, Loader2, MessageSquareText, Paperclip, Square, Upload, X } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { BUSY_STATUSES, useApp } from "@/app/store";
@@ -34,13 +34,16 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const stageImageFile = useApp((state) => state.stageImageFile);
   const stageClipboardImage = useApp((state) => state.stageClipboardImage);
   const removeAttachment = useApp((state) => state.removeAttachment);
+  const contexts = useApp((state) => state.contexts);
+  const removeContext = useApp((state) => state.removeContext);
   const [attaching, setAttaching] = useState(false);
   const [steering, setSteering] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [dragCount, setDragCount] = useState(0);
   const active = BUSY_STATUSES.includes(status);
   const disabled = providers.length === 0;
-  const hasContent = value.trim().length > 0 || pendingAttachments.length > 0;
+  const hasContent =
+    value.trim().length > 0 || pendingAttachments.length > 0 || contexts.length > 0;
   const canSend = hasContent && !active && !disabled;
   const canSteer = hasContent && active && !disabled && !steering;
   const showDrop = dragging && !active && !disabled;
@@ -284,6 +287,47 @@ export function Composer({ conversation }: { conversation: Conversation }) {
                 compact
                 onRemove={(id) => void removeAttachment(id)}
               />
+            </div>
+          ) : null}
+          {contexts.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5 px-1 pt-1.5">
+              {contexts.map((context) => {
+                const range =
+                  context.startLine == null
+                    ? null
+                    : context.startLine === context.endLine
+                      ? `:${context.startLine}`
+                      : `:${context.startLine}-${context.endLine}`;
+                return (
+                  <span
+                    key={context.id}
+                    className="flex max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px]"
+                    style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}
+                    title={context.comment}
+                  >
+                    <FileText size={11} style={{ color: "var(--muted)" }} />
+                    <span className="max-w-[260px] truncate font-mono">
+                      {context.path}
+                      {range}
+                    </span>
+                    {context.comment ? (
+                      <span className="flex min-w-0 items-center gap-1" style={{ color: "var(--muted)" }}>
+                        <MessageSquareText size={11} />
+                        <span className="max-w-[180px] truncate">{context.comment}</span>
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => removeContext(context.id)}
+                      className="focus-ring rounded p-0.5 hover:bg-[var(--panel)]"
+                      title="Remove context"
+                      aria-label={`Remove context from ${context.path}`}
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                );
+              })}
             </div>
           ) : null}
           <textarea

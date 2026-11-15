@@ -3,6 +3,7 @@ import type {
   Conversation,
   CoreEvent,
   ExportResult,
+  MessageContext,
   MessageWithParts,
   Part,
   ProviderView,
@@ -599,6 +600,7 @@ export function installMock(): void {
       case "send_message": {
         const conversationId = String(args.conversationId);
         const text = String(args.text ?? "").trim();
+        const contexts = (args.contexts as MessageContext[] | undefined) ?? [];
         const user: MessageWithParts = {
           id: uid(),
           conversationId,
@@ -606,12 +608,22 @@ export function installMock(): void {
           createdAt: now(),
           status: "completed",
           error: null,
-          parts: [textPart("user", text)],
+          parts: [
+            ...(text ? [textPart("user", text)] : []),
+            ...contexts.map((context, index) => ({
+              id: `${conversationId}-context-${index}-${uid()}`,
+              messageId: "",
+              idx: index + 1,
+              kind: "context",
+              payloadJson: JSON.stringify(context),
+            })),
+          ],
         };
         addMessage(conversationId, user);
         const conversation = conversations.find((item) => item.id === conversationId);
         if (conversation && conversation.title === "New chat") {
-          conversation.title = text.slice(0, 60) || "New chat";
+          conversation.title =
+            text.slice(0, 60) || contexts[0]?.path || "File context";
         }
         if (conversation) conversation.updatedAt = now();
         emit({ type: "conversation_updated", conversationId });
@@ -640,6 +652,9 @@ export function installMock(): void {
         const target = list[index];
         if (!target) throw new Error("Message to revert was not found.");
         const text = plainText(target.parts).trim();
+        const contexts = target.parts
+          .filter((part) => part.kind === "context")
+          .map((part) => JSON.parse(part.payloadJson) as MessageContext);
         messages.set(conversationId, list.slice(0, index));
         const conversation = conversations.find((item) => item.id === conversationId);
         if (conversation) {
@@ -649,7 +664,7 @@ export function installMock(): void {
           }
         }
         emit({ type: "conversation_updated", conversationId });
-        return { text, attachments: [] };
+        return { text, attachments: [], contexts };
       }
       case "respond_approval": {
         // A scripted approval turn is waiting for this answer.
@@ -825,6 +840,38 @@ export function installMock(): void {
         } satisfies ConnectionReport;
       case "refresh_all_servers":
         return null;
+      case "list_workspace_dir": {
+        const path = String(args.path ?? "");
+        if (!path) {
+          return [
+            { name: "src", path: "src", kind: "dir" },
+            { name: "README.md", path: "README.md", kind: "file" },
+          ];
+        }
+        if (path === "src") {
+          return [{ name: "main.ts", path: "src/main.ts", kind: "file" }];
+        }
+        return [];
+      }
+      case "read_workspace_file": {
+        const path = String(args.path ?? "");
+        if (path === "src/main.ts") {
+          return {
+            path,
+            content: 'export function hello() {\n  return "hi";\n}\n',
+            size: 45,
+            truncated: false,
+            binary: false,
+          };
+        }
+        return {
+          path,
+          content: "# Demo workspace\n\nOpen **src/main.ts** to try line comments.\n",
+          size: 63,
+          truncated: false,
+          binary: false,
+        };
+      }
       case "list_server_tools":
         return [TOOL];
       case "run_server_tool":

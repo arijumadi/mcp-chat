@@ -44,6 +44,9 @@ export function MessageItem({
       .map(partText)
       .join("");
     const attachments = attachmentsFromParts(parts);
+    const contexts = parts
+      .filter((part) => part.kind === "context")
+      .map((part) => parsePayload(part) as Record<string, unknown>);
     return (
       <>
         <div className="animate-in flex justify-end py-(--message-py)">
@@ -55,6 +58,31 @@ export function MessageItem({
           {attachments.length > 0 ? (
             <div className="mb-1.5 max-w-full">
               <AttachmentGrid attachments={attachments} align="end" />
+            </div>
+          ) : null}
+          {contexts.length > 0 ? (
+            <div className="mb-1.5 flex max-w-full flex-col items-end gap-1">
+              {contexts.map((context, index) => {
+                const path = String(context.path ?? "");
+                const start = typeof context.startLine === "number" ? context.startLine : null;
+                const end = typeof context.endLine === "number" ? context.endLine : null;
+                const range =
+                  start == null ? "" : start === end ? `:${start}` : `:${start}-${end}`;
+                return (
+                  <div
+                    key={`${path}-${start ?? "file"}-${index}`}
+                    className="max-w-full rounded-lg border px-2.5 py-1.5 text-left text-[11px]"
+                    style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}
+                  >
+                    <div className="font-mono" style={{ color: "var(--muted)" }}>
+                      {path}{range}
+                    </div>
+                    {context.comment ? (
+                      <div className="mt-0.5 whitespace-pre-wrap">{String(context.comment)}</div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           ) : null}
           {text ? (

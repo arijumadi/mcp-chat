@@ -5,3 +5,4 @@ pub mod servers;
 pub mod settings;
 pub mod skills;
 pub mod updates;
+pub mod workspace;
