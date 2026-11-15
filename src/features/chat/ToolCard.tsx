@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import type { Part, ToolCallPayload, ToolImage } from "@/lib/types";
 import { parsePayload } from "@/app/store";
-import { formatJson } from "@/lib/format";
+import { formatDuration, formatJson } from "@/lib/format";
 import { call } from "@/lib/ipc";
 import { useApp } from "@/app/store";
 import { Button } from "@/components/Button";
@@ -30,6 +30,83 @@ const toneColor: Record<Tone, string> = {
 
 const IN_FLIGHT = ["streaming", "queued", "running"];
 
+/**
+ * A background subagent is a small status row plus a direct link into its
+ * transcript. Arguments and result previews are deliberately omitted: the
+ * child chat is the detail view.
+ */
+function SubagentRow({ payload }: { payload: ToolCallPayload }) {
+  const openConversation = useApp((store) => store.openConversation);
+  const state = payload.state ?? "running";
+  const failed = payload.subagentState === "failed" || state === "error";
+  const running = payload.subagentState === "running" || IN_FLIGHT.includes(state);
+  const rawDescription = payload.args?.description;
+  const description =
+    typeof rawDescription === "string" && rawDescription.trim()
+      ? rawDescription
+      : "Subagent";
+  const duration =
+    payload.startedAt && payload.endedAt
+      ? formatDuration(payload.endedAt - payload.startedAt)
+      : "";
+  const status = failed ? "failed" : running ? "running" : "completed";
+
+  return (
+    <div
+      className="my-px flex min-w-0 items-center gap-2 rounded-md px-2 py-(--row-py) leading-5"
+      style={{ fontSize: "var(--chat-fs)" }}
+      data-tool-name="subagent"
+      data-tool-state={state}
+      title={payload.error ?? payload.resultPreview ?? description}
+    >
+      <span className="flex w-4 shrink-0 items-center justify-center">
+        {running ? (
+          <Loader2 size={13} className="animate-spin" aria-label="subagent running" />
+        ) : failed ? (
+          <XCircle
+            size={13}
+            aria-label="subagent failed"
+            role="img"
+            style={{ color: "var(--danger)" }}
+          />
+        ) : (
+          <CheckCircle2 size={13} style={{ color: "var(--muted)" }} />
+        )}
+      </span>
+      <span className="shrink-0 font-medium">Subagent</span>
+      <span
+        className="min-w-0 flex-1 truncate font-mono text-[length:var(--fs-mono)]"
+        style={{ color: "var(--muted)" }}
+      >
+        {description}
+      </span>
+      <span
+        className="flex shrink-0 items-center gap-1.5 text-[length:var(--fs-meta)] tabular-nums"
+        style={{ color: failed ? "var(--danger)" : "var(--faint)" }}
+      >
+        {status}
+        {duration ? (
+          <span className="flex items-center gap-1">
+            <Clock3 size={10.5} aria-hidden /> {duration}
+          </span>
+        ) : null}
+      </span>
+      {payload.subagentSessionId ? (
+        <button
+          type="button"
+          onClick={() => void openConversation(payload.subagentSessionId!)}
+          className="focus-ring flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[length:var(--fs-meta)] transition hover:bg-[var(--panel-2)]"
+          style={{ color: "var(--accent)" }}
+          title="Open subagent chat"
+          aria-label="Open subagent chat"
+        >
+          <ExternalLink size={11} />
+          Open chat
+        </button>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * One tool call as a compact activity row. Collapsed it is a single line with
@@ -56,13 +133,14 @@ export function ToolCard({ part }: { part: Part }) {
   const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const toast = useApp((store) => store.toast);
-  const openConversation = useApp((store) => store.openConversation);
   const [copied, setCopied] = useState(false);
+
+  if (payload.name === "subagent") {
+    return <SubagentRow payload={payload} />;
+  }
 
   const summary = summarizeTool(payload);
   const inFlight = IN_FLIGHT.includes(state);
-  const subagentRunning = payload.subagentState === "running";
-  const subagentFailed = payload.subagentState === "failed";
   // The diff only exists once the tool has finished; never show an empty one.
   const diff = typeof payload.diff === "string" && payload.diff !== "" && !inFlight ? payload.diff : null;
   const resultIsError = state === "error" && payload.resultPreview === payload.error;
@@ -119,15 +197,7 @@ export function ToolCard({ part }: { part: Part }) {
     <>
       <div className="my-px" data-tool-state={state} data-tool-name={payload.name}>
         <ActivityRow
-          icon={
-            subagentRunning ? (
-              <Loader2 size={13} className="animate-spin" aria-label="subagent running" />
-            ) : subagentFailed ? (
-              <XCircle size={13} aria-label="subagent failed" role="img" style={{ color: "var(--danger)" }} />
-            ) : (
-              <StatusIcon state={state} nonzeroExit={nonzeroExit} />
-            )
-          }
+          icon={<StatusIcon state={state} nonzeroExit={nonzeroExit} />}
           expanded={open}
           onToggle={() => setOpen((value) => !value)}
           controlsId={bodyId}
@@ -247,19 +317,6 @@ export function ToolCard({ part }: { part: Part }) {
                     style={{ color: "var(--danger)", background: "var(--danger-soft)" }}
                   >
                     {payload.error}
-                  </div>
-                ) : null}
-
-                {payload.subagentSessionId ? (
-                  <div className="flex justify-end">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      icon={<ExternalLink size={12} />}
-                      onClick={() => void openConversation(payload.subagentSessionId!)}
-                    >
-                      Open subagent
-                    </Button>
                   </div>
                 ) : null}
 

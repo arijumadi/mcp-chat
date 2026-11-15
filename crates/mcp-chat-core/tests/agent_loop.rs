@@ -1533,6 +1533,10 @@ async fn subagent_runs_in_a_child_conversation() {
         .find(|conversation| conversation.parent_id.as_deref() == Some(&h.conversation_id))
         .expect("child conversation");
     assert_eq!(child.title, "Inspect workspace");
+    assert_eq!(
+        child.max_steps, 0,
+        "an unlimited parent should leave the child unlimited"
+    );
     let child_history = messages::list_for_conversation(&h.db.pool, &child.id)
         .await
         .unwrap();
@@ -1580,6 +1584,28 @@ async fn subagent_runs_in_a_child_conversation() {
         .filter_map(|tool| tool["function"]["name"].as_str())
         .collect::<Vec<_>>();
     assert!(!child_tools.contains(&"subagent"));
+}
+
+#[tokio::test]
+async fn subagent_inherits_an_explicit_parent_step_limit() {
+    let h = Harness::new("mock-text", None, 0).await;
+    conversations::set_max_steps(&h.db.pool, &h.conversation_id, 7)
+        .await
+        .unwrap();
+    let (child_id, _) = h
+        .engine
+        .launch_subagent(
+            &h.conversation_id,
+            "Limit check",
+            "Check the inherited step budget",
+            None,
+            "",
+        )
+        .await
+        .unwrap();
+    let child = conversations::get(&h.db.pool, &child_id).await.unwrap();
+    assert_eq!(child.max_steps, 7);
+    wait_for_child_assistants(&h, &child_id, 1).await;
 }
 
 #[tokio::test]

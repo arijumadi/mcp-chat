@@ -92,14 +92,19 @@ describe("ToolCard", () => {
     expect(screen.queryByRole("button", { name: /Changes/ })).not.toBeInTheDocument();
   });
 
-  it("links a background subagent to its child conversation", () => {
+  it("opens a background subagent directly without arguments or result", () => {
     const openConversation = vi.fn().mockResolvedValue(undefined);
     useApp.setState({ openConversation });
     render(<ToolCard part={subagent} />);
-    const row = screen.getByRole("button", { name: /Subagent/ });
-    expect(row).toHaveTextContent("Inspect workspace");
-    fireEvent.click(row);
-    fireEvent.click(screen.getByRole("button", { name: "Open subagent" }));
+    expect(screen.getByText("Subagent")).toBeInTheDocument();
+    expect(screen.getByText("Inspect workspace")).toBeInTheDocument();
+    expect(screen.queryByText("Arguments")).not.toBeInTheDocument();
+    expect(screen.queryByText("Result")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("The subagent is running in the background."),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open subagent chat" }));
     expect(openConversation).toHaveBeenCalledWith("child-1");
   });
 
