@@ -7,7 +7,7 @@ use mcp_chat_core::agent::runner;
 use mcp_chat_core::db::repo::{
     conversation_servers, conversations, messages, providers, servers, settings,
 };
-use mcp_chat_core::models::{Conversation, MessageWithParts, SearchHit};
+use mcp_chat_core::models::{Conversation, MessageContext, MessageWithParts, SearchHit};
 
 use crate::error::{CmdResult, cmd_err};
 use crate::state::AppState;
@@ -298,13 +298,15 @@ pub async fn send_message(
     conversation_id: String,
     text: String,
     attachment_ids: Option<Vec<String>>,
+    contexts: Option<Vec<MessageContext>>,
 ) -> CmdResult<MessageWithParts> {
     let message = state
         .engine
-        .send_message_with_attachments(
+        .send_message_with_contexts(
             &conversation_id,
             &text,
             attachment_ids.as_deref().unwrap_or(&[]),
+            contexts.as_deref().unwrap_or(&[]),
         )
         .await
         .map_err(cmd_err)?;
@@ -320,13 +322,15 @@ pub async fn steer_message(
     conversation_id: String,
     text: String,
     attachment_ids: Option<Vec<String>>,
+    contexts: Option<Vec<MessageContext>>,
 ) -> CmdResult<MessageWithParts> {
     let message = state
         .engine
-        .steer_message_with_attachments(
+        .steer_message_with_contexts(
             &conversation_id,
             &text,
             attachment_ids.as_deref().unwrap_or(&[]),
+            contexts.as_deref().unwrap_or(&[]),
         )
         .await
         .map_err(cmd_err)?;

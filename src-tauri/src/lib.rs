@@ -114,6 +114,8 @@ pub fn run() {
             commands::chat::get_messages_page,
             commands::chat::send_message,
             commands::chat::steer_message,
+            commands::workspace::list_workspace_dir,
+            commands::workspace::read_workspace_file,
             commands::chat::regenerate,
             commands::chat::continue_turn,
             commands::chat::revert_message,

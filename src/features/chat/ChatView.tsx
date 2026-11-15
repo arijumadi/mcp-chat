@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CornerUpLeft, PanelLeft, Plus, Settings, Plug } from "lucide-react";
+import { CornerUpLeft, FolderTree, PanelLeft, Plus, Settings, Plug } from "lucide-react";
 import { useApp } from "@/app/store";
 import { Button } from "@/components/Button";
 import { Logo } from "@/components/Logo";
@@ -8,6 +8,7 @@ import { ConversationTools } from "./ConversationTools";
 import { SetupChecklist } from "./SetupChecklist";
 import { Transcript } from "./Transcript";
 import { Composer } from "./Composer";
+import { WorkspacePanel } from "./WorkspacePanel";
 
 export function ChatView() {
   const activeId = useApp((state) => state.activeId);
@@ -29,6 +30,7 @@ export function ChatView() {
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [title, setTitle] = useState("");
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
 
   if (!conversation) {
     return (
@@ -60,94 +62,110 @@ export function ChatView() {
   };
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col">
-      <header
-        className="flex h-14 shrink-0 items-center gap-2 border-b px-3"
-        style={{ borderColor: "var(--border)", background: "var(--bg)" }}
-      >
-        {!sidebarOpen ? (
-          <button
-            onClick={toggleSidebar}
-            className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)]"
-            title="Open sidebar"
-            aria-label="Open sidebar"
-          >
-            <PanelLeft size={16} />
-          </button>
-        ) : null}
-        {conversation.parentId ? (
-          <button
-            onClick={() => void openConversation(conversation.parentId!)}
-            className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)]"
-            title="Back to parent chat"
-            aria-label="Back to parent chat"
-          >
-            <CornerUpLeft size={16} />
-          </button>
-        ) : null}
-        <div className="min-w-0 flex-1 px-1">
-          {editingTitle ? (
-            <input
-              autoFocus
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              onBlur={saveTitle}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") saveTitle();
-                if (event.key === "Escape") setEditingTitle(false);
-              }}
-              className="w-full max-w-[420px] rounded border bg-transparent px-1.5 py-0.5 text-[14px] font-medium outline-none"
-              style={{ borderColor: "var(--accent)" }}
-            />
-          ) : (
-            <button
-              onClick={() => {
-                setTitle(conversation.title);
-                setEditingTitle(true);
-              }}
-              className="focus-ring block max-w-full truncate rounded text-left text-[14px] font-medium tracking-[-0.01em]"
-              title="Rename conversation"
-            >
-              {conversation.title}
-            </button>
-          )}
-          <div className="truncate text-[10.5px]" style={{ color: "var(--faint)" }}>
-            {conversation.parentId ? "subagent transcript" : "local transcript"}
-          </div>
-        </div>
-        <ConversationTools conversation={conversation} />
-      </header>
-
-      {messages.length === 0 ? (
-        <div className="flex min-h-0 flex-1 items-center justify-center px-6">
-          <div className="w-full max-w-[640px] text-center">
-            <div className="mx-auto mb-3 flex items-center justify-center">
-              <Logo size={44} />
-            </div>
-            <div className="text-[16px] font-medium tracking-[-0.01em]">New conversation</div>
-            <p className="mt-1 text-[12.5px]" style={{ color: "var(--muted)" }}>
-              Ask a question, paste some code, or connect an MCP server and let the model use its
-              tools.
-            </p>
-            {providers.length > 0 ? (
-              <QuickStarts onSelect={(prompt) => setDraft(prompt)} />
-            ) : null}
-          </div>
-        </div>
-      ) : (
-        <Transcript />
-      )}
-      {conversation.parentId ? (
-        <div
-          className="border-t px-4 py-3 text-center text-[11.5px]"
-          style={{ borderColor: "var(--border)", color: "var(--faint)" }}
+    <div className="flex h-full min-w-0 flex-1">
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        <header
+          className="flex h-14 shrink-0 items-center gap-2 border-b px-3"
+          style={{ borderColor: "var(--border)", background: "var(--bg)" }}
         >
-          Subagent transcript · follow-ups are managed by the parent chat.
-        </div>
-      ) : (
-        <Composer conversation={conversation} />
-      )}
+          {!sidebarOpen ? (
+            <button
+              onClick={toggleSidebar}
+              className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)]"
+              title="Open sidebar"
+              aria-label="Open sidebar"
+            >
+              <PanelLeft size={16} />
+            </button>
+          ) : null}
+          {conversation.parentId ? (
+            <button
+              onClick={() => void openConversation(conversation.parentId!)}
+              className="focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)]"
+              title="Back to parent chat"
+              aria-label="Back to parent chat"
+            >
+              <CornerUpLeft size={16} />
+            </button>
+          ) : null}
+          <div className="min-w-0 flex-1 px-1">
+            {editingTitle ? (
+              <input
+                autoFocus
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                onBlur={saveTitle}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") saveTitle();
+                  if (event.key === "Escape") setEditingTitle(false);
+                }}
+                className="w-full max-w-[420px] rounded border bg-transparent px-1.5 py-0.5 text-[14px] font-medium outline-none"
+                style={{ borderColor: "var(--accent)" }}
+              />
+            ) : (
+              <button
+                onClick={() => {
+                  setTitle(conversation.title);
+                  setEditingTitle(true);
+                }}
+                className="focus-ring block max-w-full truncate rounded text-left text-[14px] font-medium tracking-[-0.01em]"
+                title="Rename conversation"
+              >
+                {conversation.title}
+              </button>
+            )}
+            <div className="truncate text-[10.5px]" style={{ color: "var(--faint)" }}>
+              {conversation.parentId ? "subagent transcript" : "local transcript"}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setWorkspaceOpen((open) => !open)}
+            className={cn(
+              "focus-ring rounded-lg p-1.5 transition hover:bg-[var(--panel-2)]",
+              workspaceOpen && "bg-[var(--panel-2)]",
+            )}
+            title={workspaceOpen ? "Close workspace files" : "Open workspace files"}
+            aria-label={workspaceOpen ? "Close workspace files" : "Open workspace files"}
+          >
+            <FolderTree size={16} />
+          </button>
+          <ConversationTools conversation={conversation} />
+        </header>
 
+        {messages.length === 0 ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center px-6">
+            <div className="w-full max-w-[640px] text-center">
+              <div className="mx-auto mb-3 flex items-center justify-center">
+                <Logo size={44} />
+              </div>
+              <div className="text-[16px] font-medium tracking-[-0.01em]">New conversation</div>
+              <p className="mt-1 text-[12.5px]" style={{ color: "var(--muted)" }}>
+                Ask a question, paste some code, or connect an MCP server and let the model use its
+                tools.
+              </p>
+              {providers.length > 0 ? (
+                <QuickStarts onSelect={(prompt) => setDraft(prompt)} />
+              ) : null}
+            </div>
+          </div>
+        ) : (
+          <Transcript />
+        )}
+        {conversation.parentId ? (
+          <div
+            className="border-t px-4 py-3 text-center text-[11.5px]"
+            style={{ borderColor: "var(--border)", color: "var(--faint)" }}
+          >
+            Subagent transcript · follow-ups are managed by the parent chat.
+          </div>
+        ) : (
+          <Composer conversation={conversation} />
+        )}
+      </div>
+      {workspaceOpen ? (
+        <WorkspacePanel conversation={conversation} onClose={() => setWorkspaceOpen(false)} />
+      ) : null}
     </div>
   );
 }

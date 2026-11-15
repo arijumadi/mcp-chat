@@ -69,6 +69,32 @@ export interface MessagePage {
   hasMore: boolean;
 }
 
+export interface MessageContext {
+  path: string;
+  startLine: number | null;
+  endLine: number | null;
+  comment: string;
+  preview: string | null;
+}
+
+export interface ContextItem extends MessageContext {
+  id: string;
+}
+
+export interface WorkspaceEntry {
+  name: string;
+  path: string;
+  kind: "file" | "dir" | string;
+}
+
+export interface WorkspaceFile {
+  path: string;
+  content: string;
+  size: number;
+  truncated: boolean;
+  binary: boolean;
+}
+
 export interface Attachment {
   id: string;
   name: string;
@@ -83,6 +109,7 @@ export interface Attachment {
 export interface RevertResult {
   text: string;
   attachments: Attachment[];
+  contexts: MessageContext[];
 }
 
 export interface SearchHit {

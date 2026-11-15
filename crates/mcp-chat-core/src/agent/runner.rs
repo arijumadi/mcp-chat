@@ -1574,6 +1574,26 @@ fn message_tokens(message: &crate::models::MessageWithParts) -> usize {
                     .chars()
                     .count()
             }
+            "context" => {
+                chars += payload
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .chars()
+                    .count();
+                chars += payload
+                    .get("comment")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .chars()
+                    .count();
+                chars += payload
+                    .get("preview")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .chars()
+                    .count();
+            }
             _ => {}
         }
     }

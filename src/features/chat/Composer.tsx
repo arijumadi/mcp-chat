@@ -1,18 +1,36 @@
 import { useEffect, useRef, useState, type ClipboardEvent } from "react";
-import { ArrowUp, Loader2, Paperclip, Square, Upload } from "lucide-react";
+import {
+  ArrowUp,
+  FileText,
+  Loader2,
+  MessageSquareText,
+  Paperclip,
+  Pencil,
+  Square,
+  Upload,
+  X,
+} from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { BUSY_STATUSES, useApp } from "@/app/store";
 import { Button } from "@/components/Button";
+import { inputClass } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { formatTokens } from "@/lib/format";
-import type { Conversation } from "@/lib/types";
+import type { ContextItem, Conversation } from "@/lib/types";
 import { ModelPicker } from "./ModelPicker";
 import { ReasoningPicker } from "./ReasoningPicker";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { AutoApproveButton } from "./AutoApproveButton";
 import { AttachmentGrid } from "./Attachments";
 import { parseCompactCommand } from "./slashCommands";
+
+function contextRange(context: Pick<ContextItem, "startLine" | "endLine">): string {
+  if (context.startLine == null) return "";
+  return context.startLine === context.endLine
+    ? `:${context.startLine}`
+    : `:${context.startLine}-${context.endLine}`;
+}
 
 export function Composer({ conversation }: { conversation: Conversation }) {
   const value = useApp((state) => state.draft);
@@ -34,13 +52,20 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const stageImageFile = useApp((state) => state.stageImageFile);
   const stageClipboardImage = useApp((state) => state.stageClipboardImage);
   const removeAttachment = useApp((state) => state.removeAttachment);
+  const contexts = useApp((state) => state.contexts);
+  const updateContextComment = useApp((state) => state.updateContextComment);
+  const removeContext = useApp((state) => state.removeContext);
+  const [editingContextId, setEditingContextId] = useState<string | null>(null);
+  const [editingComment, setEditingComment] = useState("");
+  const editingContext = contexts.find((context) => context.id === editingContextId) ?? null;
   const [attaching, setAttaching] = useState(false);
   const [steering, setSteering] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [dragCount, setDragCount] = useState(0);
   const active = BUSY_STATUSES.includes(status);
   const disabled = providers.length === 0;
-  const hasContent = value.trim().length > 0 || pendingAttachments.length > 0;
+  const hasContent =
+    value.trim().length > 0 || pendingAttachments.length > 0 || contexts.length > 0;
   const canSend = hasContent && !active && !disabled;
   const canSteer = hasContent && active && !disabled && !steering;
   const showDrop = dragging && !active && !disabled;
@@ -286,6 +311,109 @@ export function Composer({ conversation }: { conversation: Conversation }) {
               />
             </div>
           ) : null}
+          {contexts.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5 px-1 pt-1.5">
+              {contexts.map((context) => {
+                const range = contextRange(context);
+                return (
+                  <span
+                    key={context.id}
+                    className="flex max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px]"
+                    style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}
+                    title={context.comment}
+                  >
+                    <FileText size={11} style={{ color: "var(--muted)" }} />
+                    <span className="max-w-[260px] truncate font-mono">
+                      {context.path}
+                      {range}
+                    </span>
+                    {context.comment ? (
+                      <span className="flex min-w-0 items-center gap-1" style={{ color: "var(--muted)" }}>
+                        <MessageSquareText size={11} />
+                        <span className="max-w-[180px] truncate">{context.comment}</span>
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingContextId(context.id);
+                        setEditingComment(context.comment);
+                      }}
+                      className="focus-ring rounded p-0.5 hover:bg-[var(--panel)]"
+                      title="Edit comment"
+                      aria-label={`Edit context from ${context.path}`}
+                    >
+                      <Pencil size={11} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeContext(context.id)}
+                      className="focus-ring rounded p-0.5 hover:bg-[var(--panel)]"
+                      title="Remove context"
+                      aria-label={`Remove context from ${context.path}`}
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          ) : null}
+          {editingContext ? (
+            <div
+              className="mx-1 mt-1.5 rounded-lg border p-2"
+              style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}
+            >
+              <div className="flex min-w-0 items-center gap-1.5 text-[11px]">
+                <FileText size={11} style={{ color: "var(--muted)" }} />
+                <span className="truncate font-mono">
+                  {editingContext.path}
+                  {contextRange(editingContext)}
+                </span>
+              </div>
+              <textarea
+                autoFocus
+                value={editingComment}
+                onChange={(event) => setEditingComment(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setEditingContextId(null);
+                  }
+                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                    event.preventDefault();
+                    const text = editingComment.trim();
+                    if (!text) return;
+                    updateContextComment(editingContext.id, text);
+                    setEditingContextId(null);
+                  }
+                }}
+                aria-label="Edit file context comment"
+                className={cn(inputClass, "mt-1.5 min-h-[56px] resize-y text-[11.5px]")}
+                style={{ borderColor: "var(--border)" }}
+              />
+              <div className="mt-1.5 flex justify-end gap-1.5">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setEditingContextId(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={!editingComment.trim()}
+                  onClick={() => {
+                    updateContextComment(editingContext.id, editingComment.trim());
+                    setEditingContextId(null);
+                  }}
+                >
+                  Save comment
+                </Button>
+              </div>
+            </div>
+          ) : null}
           <textarea
             ref={ref}
             value={value}
@@ -304,7 +432,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
             style={{ fontSize: "var(--chat-fs)" }}
             aria-label="Message"
           />
-          <div className="mt-1 flex items-center gap-1.5 px-1">
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 px-1">
             <button
               type="button"
               onClick={() => void chooseFiles()}

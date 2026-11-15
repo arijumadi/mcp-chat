@@ -266,6 +266,19 @@ impl Usage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageContext {
+    pub path: String,
+    #[serde(default)]
+    pub start_line: Option<i64>,
+    #[serde(default)]
+    pub end_line: Option<i64>,
+    pub comment: String,
+    #[serde(default)]
+    pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
     rename_all = "snake_case",
@@ -274,6 +287,16 @@ impl Usage {
 pub enum PartPayload {
     Text {
         text: String,
+    },
+    Context {
+        path: String,
+        #[serde(default)]
+        start_line: Option<i64>,
+        #[serde(default)]
+        end_line: Option<i64>,
+        comment: String,
+        #[serde(default)]
+        preview: Option<String>,
     },
     Attachment {
         id: String,

@@ -24,7 +24,7 @@ use crate::db::Db;
 use crate::db::repo::{conversation_servers, conversations, messages, providers, settings};
 use crate::events::CoreEvent;
 use crate::mcp::McpManager;
-use crate::models::{Conversation, Message, PartPayload, Provider};
+use crate::models::{Conversation, Message, MessageContext, PartPayload, Provider};
 use crate::secrets::SecretStore;
 use crate::{CoreError, Result};
 
@@ -37,6 +37,7 @@ use futures::future::BoxFuture;
 pub struct RevertedMessage {
     pub text: String,
     pub attachments: Vec<crate::attachments::Attachment>,
+    pub contexts: Vec<MessageContext>,
 }
 
 /// Holds a conversation's turn slot while alive. See [`ChatEngine::claim_turn`].
@@ -458,9 +459,22 @@ impl ChatEngine {
         text: &str,
         attachment_ids: &[String],
     ) -> Result<Message> {
+        self.send_message_with_contexts(conversation_id, text, attachment_ids, &[])
+            .await
+    }
+
+    pub async fn send_message_with_contexts(
+        self: &Arc<Self>,
+        conversation_id: &str,
+        text: &str,
+        attachment_ids: &[String],
+        contexts: &[MessageContext],
+    ) -> Result<Message> {
         let text = text.trim();
-        if text.is_empty() && attachment_ids.is_empty() {
-            return Err(CoreError::invalid("message has no text or attachments"));
+        if text.is_empty() && attachment_ids.is_empty() && contexts.is_empty() {
+            return Err(CoreError::invalid(
+                "message has no text, attachments or context",
+            ));
         }
         if text.chars().count() > 100_000 {
             return Err(CoreError::invalid("message is too long"));
@@ -470,6 +484,21 @@ impl ChatEngine {
                 "Attach at most {} files at once.",
                 crate::attachments::MAX_ATTACHMENTS
             )));
+        }
+        if contexts.len() > 12 {
+            return Err(CoreError::invalid(
+                "Attach at most 12 file contexts at once.",
+            ));
+        }
+        if contexts.iter().any(|context| {
+            context.path.trim().is_empty()
+                || context.comment.chars().count() > 8_000
+                || context
+                    .preview
+                    .as_ref()
+                    .is_some_and(|preview| preview.chars().count() > 12_000)
+        }) {
+            return Err(CoreError::invalid("File context is invalid or too large."));
         }
         if self.in_flight(conversation_id) {
             return Err(CoreError::Message(
@@ -498,6 +527,21 @@ impl ChatEngine {
             },
         )
         .await?;
+        for context in contexts {
+            messages::append_part(
+                &self.db.pool,
+                &message.id,
+                "context",
+                &PartPayload::Context {
+                    path: context.path.clone(),
+                    start_line: context.start_line,
+                    end_line: context.end_line,
+                    comment: context.comment.clone(),
+                    preview: context.preview.clone(),
+                },
+            )
+            .await?;
+        }
         let attachments = match crate::attachments::attach_to_message(
             &self.attachments_dir,
             conversation_id,
@@ -532,9 +576,14 @@ impl ChatEngine {
         }
         if conversation.title == "New chat" || conversation.title.trim().is_empty() {
             let title_source = if text.is_empty() {
-                attachments
+                contexts
                     .first()
-                    .map(|attachment| attachment.name.as_str())
+                    .map(|context| context.path.as_str())
+                    .or_else(|| {
+                        attachments
+                            .first()
+                            .map(|attachment| attachment.name.as_str())
+                    })
                     .unwrap_or("New chat")
             } else {
                 text
@@ -563,9 +612,20 @@ impl ChatEngine {
         text: &str,
         attachment_ids: &[String],
     ) -> Result<Message> {
+        self.steer_message_with_contexts(conversation_id, text, attachment_ids, &[])
+            .await
+    }
+
+    pub async fn steer_message_with_contexts(
+        self: &Arc<Self>,
+        conversation_id: &str,
+        text: &str,
+        attachment_ids: &[String],
+        contexts: &[MessageContext],
+    ) -> Result<Message> {
         if !self.in_flight(conversation_id) {
             return self
-                .send_message_with_attachments(conversation_id, text, attachment_ids)
+                .send_message_with_contexts(conversation_id, text, attachment_ids, contexts)
                 .await;
         }
         self.stop(conversation_id);
@@ -578,7 +638,7 @@ impl ChatEngine {
             }
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
-        self.send_message_with_attachments(conversation_id, text, attachment_ids)
+        self.send_message_with_contexts(conversation_id, text, attachment_ids, contexts)
             .await
     }
 
@@ -654,6 +714,24 @@ impl ChatEngine {
             return Err(CoreError::invalid("only user messages can be reverted"));
         }
         let text = crate::agent::context::text_parts(&target.parts);
+        let contexts = target
+            .parts
+            .iter()
+            .filter(|part| part.kind == "context")
+            .filter_map(|part| {
+                let payload = part.payload();
+                Some(MessageContext {
+                    path: payload.get("path")?.as_str()?.to_owned(),
+                    start_line: payload.get("startLine").and_then(serde_json::Value::as_i64),
+                    end_line: payload.get("endLine").and_then(serde_json::Value::as_i64),
+                    comment: payload.get("comment")?.as_str()?.to_owned(),
+                    preview: payload
+                        .get("preview")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                })
+            })
+            .collect::<Vec<_>>();
         let attachment_paths: Vec<String> = target
             .parts
             .iter()
@@ -666,9 +744,9 @@ impl ChatEngine {
             })
             .filter(|path| std::path::Path::new(path).is_file())
             .collect();
-        if text.trim().is_empty() && attachment_paths.is_empty() {
+        if text.trim().is_empty() && attachment_paths.is_empty() && contexts.is_empty() {
             return Err(CoreError::invalid(
-                "message has no text or attachments to revert",
+                "message has no text, attachments or context to revert",
             ));
         }
 
@@ -715,6 +793,7 @@ impl ChatEngine {
         Ok(RevertedMessage {
             text,
             attachments: restored,
+            contexts,
         })
     }
 

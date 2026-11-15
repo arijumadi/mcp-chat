@@ -11,9 +11,11 @@ import type {
   AppInfo,
   ApprovalEvent,
   Attachment,
+  ContextItem,
   Conversation,
   CoreEvent,
   InputRequestEvent,
+  MessageContext,
   MessagePage,
   MessageWithParts,
   Part,
@@ -61,6 +63,7 @@ export interface AppStore {
   messageHasMore: boolean;
   loadingOlder: boolean;
   pendingAttachments: Attachment[];
+  contexts: ContextItem[];
   draft: string;
   providers: ProviderView[];
   servers: ServerView[];
@@ -99,6 +102,9 @@ export interface AppStore {
   newChat: (seed?: string) => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
   steerMessage: (text: string) => Promise<void>;
+  addContext: (context: MessageContext) => void;
+  updateContextComment: (id: string, comment: string) => void;
+  removeContext: (id: string) => void;
   stageAttachments: (paths: string[]) => Promise<void>;
   stageImageFile: (file: File) => Promise<void>;
   stageClipboardImage: () => Promise<void>;
@@ -169,6 +175,7 @@ export const useApp = create<AppStore>()((set, get) => ({
   messageHasMore: false,
   loadingOlder: false,
   pendingAttachments: [],
+  contexts: [],
   draft: "",
   providers: [],
   servers: [],
@@ -400,6 +407,7 @@ export const useApp = create<AppStore>()((set, get) => ({
       autoApprove: false,
       draft: "",
       pendingAttachments: [],
+      contexts: [],
     });
     await get().reloadActive();
     const generating = await call<boolean>("is_generating", { conversationId: id }).catch(
@@ -454,6 +462,7 @@ export const useApp = create<AppStore>()((set, get) => ({
         messageHasMore: false,
         loadingOlder: false,
         pendingAttachments: [],
+        contexts: [],
         draft: seed,
         view: "chat",
         status: "idle",
@@ -470,7 +479,8 @@ export const useApp = create<AppStore>()((set, get) => ({
   async sendMessage(text) {
     const conversationId = get().activeId;
     const attachments = get().pendingAttachments;
-    if (!conversationId || (!text.trim() && attachments.length === 0)) return;
+    const contexts = get().contexts;
+    if (!conversationId || (!text.trim() && attachments.length === 0 && contexts.length === 0)) return;
     if (get().providers.length === 0) {
       get().toast("Add a provider in Settings before sending a message.", "error");
       set({ view: "settings" });
@@ -508,6 +518,21 @@ export const useApp = create<AppStore>()((set, get) => ({
         }),
       });
     });
+    contexts.forEach((context, index) => {
+      parts.push({
+        id: `${tempId}-context-${index}`,
+        messageId: tempId,
+        idx: parts.length,
+        kind: "context",
+        payloadJson: JSON.stringify({
+          path: context.path,
+          startLine: context.startLine,
+          endLine: context.endLine,
+          comment: context.comment,
+          preview: context.preview,
+        }),
+      });
+    });
     sendingConversationId = conversationId;
     stopRequestedFor = null;
     const optimistic: MessageWithParts = {
@@ -522,6 +547,7 @@ export const useApp = create<AppStore>()((set, get) => ({
     set((state) => ({
       messages: [...state.messages, optimistic],
       draft: "",
+      contexts: [],
       status: "thinking",
       approvals: state.approvals.filter(
         (item) => item.conversationId !== conversationId,
@@ -539,6 +565,7 @@ export const useApp = create<AppStore>()((set, get) => ({
         conversationId,
         text,
         attachmentIds: attachments.map((attachment) => attachment.id),
+        contexts: contexts.map(({ id: _id, ...context }) => context),
       });
       set((state) => ({
         pendingAttachments: [],
@@ -559,6 +586,7 @@ export const useApp = create<AppStore>()((set, get) => ({
         messages: state.messages.filter((item) => item.id !== tempId),
         status: "error",
         draft: text,
+        contexts,
       }));
       get().toast(String(error), "error", [
         { label: "Retry", onClick: () => void get().sendMessage(text) },
@@ -581,18 +609,20 @@ export const useApp = create<AppStore>()((set, get) => ({
   async steerMessage(text) {
     const conversationId = get().activeId;
     const attachments = get().pendingAttachments;
-    if (!conversationId || (!text.trim() && attachments.length === 0)) return;
+    const contexts = get().contexts;
+    if (!conversationId || (!text.trim() && attachments.length === 0 && contexts.length === 0)) return;
     if (get().providers.length === 0) {
       get().toast("Add a provider in Settings before sending a message.", "error");
       set({ view: "settings" });
       return;
     }
-    set({ draft: "" });
+    set({ draft: "", contexts: [] });
     try {
       const message = await call<MessageWithParts>("steer_message", {
         conversationId,
         text,
         attachmentIds: attachments.map((attachment) => attachment.id),
+        contexts: contexts.map(({ id: _id, ...context }) => context),
       });
       set((state) => {
         const exists = state.messages.some((item) => item.id === message.id);
@@ -619,7 +649,7 @@ export const useApp = create<AppStore>()((set, get) => ({
       });
       void get().refreshConversations();
     } catch (error) {
-      set({ draft: text });
+      set({ draft: text, contexts });
       get().toast(String(error), "error", [
         { label: "Retry", onClick: () => void get().steerMessage(text) },
       ]);
@@ -695,6 +725,31 @@ export const useApp = create<AppStore>()((set, get) => ({
     } catch (error) {
       get().toast(String(error), "error");
     }
+  },
+
+  addContext(context) {
+    const existing = get().contexts;
+    if (existing.length >= 12) {
+      get().toast("You can attach up to 12 file contexts per message.", "error");
+      return;
+    }
+    const id =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `context-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    set({ contexts: [...existing, { ...context, id }] });
+  },
+
+  updateContextComment(id, comment) {
+    set((state) => ({
+      contexts: state.contexts.map((context) =>
+        context.id === id ? { ...context, comment } : context,
+      ),
+    }));
+  },
+
+  removeContext(id) {
+    set((state) => ({ contexts: state.contexts.filter((context) => context.id !== id) }));
   },
 
   async removeAttachment(id) {
@@ -802,6 +857,10 @@ export const useApp = create<AppStore>()((set, get) => ({
       set((state) => ({
         draft: result.text,
         pendingAttachments: result.attachments,
+        contexts: (result.contexts ?? []).map((context, index) => ({
+          ...context,
+          id: `revert-${Date.now()}-${index}`,
+        })),
         status: "idle",
         usage: null,
         step: null,
