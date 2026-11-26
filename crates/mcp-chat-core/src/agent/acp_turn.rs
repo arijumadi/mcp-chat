@@ -371,9 +371,10 @@ fn permission_handler(
     cancel: &CancellationToken,
 ) -> PermissionHandler {
     let cancel = cancel.clone();
+    let child_id = child_id.to_owned();
     Arc::new(move |info: PermissionRequestInfo| {
         let engine = engine.clone();
-        let child_id = child_id.to_owned();
+        let child_id = child_id.clone();
         let cancel = cancel.clone();
         Box::pin(async move {
             let call_id = format!("acp-{}", uuid::Uuid::new_v4());
