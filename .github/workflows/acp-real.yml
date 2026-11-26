@@ -33,7 +33,9 @@ env:
 jobs:
   antigravity:
     name: Antigravity handshake
-    if: inputs.agent == 'antigravity'
+    # `inputs.agent` is empty outside workflow_dispatch, so treat that as the
+    # default rather than skipping the job on a pull request.
+    if: inputs.agent == '' || inputs.agent == 'antigravity'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
