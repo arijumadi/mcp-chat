@@ -274,6 +274,19 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn set_enabled(pool: &SqlitePool, id: &str, enabled: bool) -> Result<AcpAgent> {
+    let row = sqlx::query_as::<_, AcpAgent>(
+        r#"UPDATE acp_agents SET enabled = ?2, updated_at = ?3 WHERE id = ?1 RETURNING *"#,
+    )
+    .bind(id)
+    .bind(enabled)
+    .bind(now_ms())
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| CoreError::NotFound("acp agent".into()))?;
+    Ok(row)
+}
+
 pub async fn set_health(pool: &SqlitePool, id: &str, error: Option<&str>) -> Result<AcpAgent> {
     let row = sqlx::query_as::<_, AcpAgent>(
         r#"UPDATE acp_agents

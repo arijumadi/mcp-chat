@@ -337,3 +337,46 @@ async fn wait_for_assistant_text(
     }
     panic!("no assistant answer arrived");
 }
+
+#[tokio::test]
+async fn probing_a_working_agent_reports_its_name() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "echo").await;
+    let agent = acp_agents::get_by_slug(&harness.db.pool, "mock")
+        .await
+        .unwrap()
+        .unwrap();
+    let workspace = harness._tmp.path().join("workspace");
+
+    let probe = ChatEngine::probe_acp_agent(&agent, &workspace)
+        .await
+        .expect("probe should reach the agent");
+    assert!(probe.ok, "{}", probe.message);
+    assert_eq!(probe.agent_name.as_deref(), Some("mock-acp"));
+    assert!(probe.session_id.is_some(), "the probe must open a session");
+}
+
+#[tokio::test]
+async fn probing_a_missing_binary_explains_what_is_wrong() {
+    let harness = Harness::new().await;
+    let config = AcpAgentConfig {
+        name: "Broken".into(),
+        slug: "broken".into(),
+        command: "jarvis-missing-acp-agent".into(),
+        args_json: "[]".into(),
+        env_json: "{}".into(),
+        permission_policy: "ask".into(),
+        enabled: true,
+    };
+    let agent = acp_agents::create(&harness.db.pool, &config).await.unwrap();
+    let workspace = harness._tmp.path().join("workspace");
+
+    let error = ChatEngine::probe_acp_agent(&agent, &workspace)
+        .await
+        .expect_err("a missing binary must fail");
+    assert!(
+        error.user_message().contains("was not found"),
+        "{}",
+        error.user_message()
+    );
+}

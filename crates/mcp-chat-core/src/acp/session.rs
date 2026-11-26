@@ -57,6 +57,8 @@ pub struct AcpSession {
     /// Whether the agent advertised `sessionCapabilities.close`. Most do not,
     /// and sending the request anyway would report a method-not-found error.
     pub supports_close: bool,
+    /// Name and version the agent reported during `initialize`, if any.
+    pub agent_info: Option<(String, String)>,
     /// Cleared by the pump when the process or connection ends, so the manager
     /// can drop a dead session instead of leaking one of its slots.
     alive: Arc<std::sync::atomic::AtomicBool>,
@@ -240,6 +242,7 @@ struct SessionReady {
     /// True when the agent accepted the requested resume id, false when a new
     /// session was created (including after a failed resume).
     resumed: bool,
+    agent_info: Option<(String, String)>,
 }
 
 async fn drive<T>(
@@ -272,6 +275,10 @@ where
             let session_caps = &initialized.agent_capabilities.session_capabilities;
             let supports_close = session_caps.close.is_some();
             let supports_resume = session_caps.resume.is_some();
+            let agent_info = initialized
+                .agent_info
+                .as_ref()
+                .map(|info| (info.name.clone(), info.version.clone()));
 
             // ACP requires an absolute cwd; callers canonicalize it.
             // `start_session` returns a `'static` session, so the pump can loop
@@ -328,6 +335,7 @@ where
                 session_id: session.session_id().to_string(),
                 supports_close,
                 resumed,
+                agent_info,
             }));
 
             // Every turn failure is reported exactly once, right where it

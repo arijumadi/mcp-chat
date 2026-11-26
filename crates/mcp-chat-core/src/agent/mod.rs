@@ -230,6 +230,66 @@ impl ChatEngine {
         Ok((child.id, content))
     }
 
+    /// Start an agent, initialize it, open a session, then close it.
+    ///
+    /// Used by the settings probe. A wrong flag, a missing binary, and an
+    /// unauthenticated agent all look identical in the config, so the only
+    /// honest check is to speak the protocol once.
+    pub async fn probe_acp_agent(
+        agent: &crate::models::AcpAgent,
+        workspace: &std::path::Path,
+    ) -> Result<crate::acp::AcpProbe> {
+        use crate::acp::session::PermissionDecision;
+
+        let args = acp_agents::agent_args(agent)?;
+        let env = acp_agents::agent_env(agent)?;
+        let no_permissions: crate::acp::PermissionHandler = Arc::new(|_| {
+            // A probe must never approve anything: decline and let the agent
+            // finish the handshake.
+            Box::pin(async { PermissionDecision::Cancel })
+        });
+        let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
+        let session = crate::acp::session::open(
+            crate::acp::session::SessionSpec {
+                local_id: "probe".into(),
+                command: &agent.command,
+                args: &args,
+                env: &env,
+                cwd: workspace,
+                resume: None,
+                permissions: no_permissions,
+            },
+            events_tx,
+        )
+        .await;
+
+        match session {
+            Ok(session) => {
+                let (name, version) = match &session.agent_info {
+                    Some((name, version)) => (Some(name.clone()), Some(version.clone())),
+                    None => (None, None),
+                };
+                let session_id = session.acp_session_id.clone();
+                // Closing is best effort: the handle is dropped either way, and
+                // the pump terminates the process.
+                let _ = session.close();
+                Ok(crate::acp::AcpProbe {
+                    ok: true,
+                    message: match (&name, &version) {
+                        (Some(name), Some(version)) => {
+                            format!("Connected to {name} {version}.")
+                        }
+                        _ => "Connected successfully.".to_owned(),
+                    },
+                    session_id: Some(session_id),
+                    agent_name: name,
+                    agent_version: version,
+                })
+            }
+            Err(error) => Err(CoreError::Message(error.user_message())),
+        }
+    }
+
     /// Bind a conversation to an ACP agent, or clear the binding.
     ///
     /// The agent then runs every turn of that conversation instead of the LLM

@@ -95,6 +95,16 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::acp::list_acp_agents,
+            commands::acp::list_acp_presets,
+            commands::acp::list_acp_agents_for_chat,
+            commands::acp::create_acp_agent,
+            commands::acp::update_acp_agent,
+            commands::acp::delete_acp_agent,
+            commands::acp::set_acp_agent_enabled,
+            commands::acp::test_acp_agent,
+            commands::acp::set_conversation_acp_agent,
+            commands::acp::get_conversation_acp_agent,
             commands::chat::list_conversations,
             commands::attachments::stage_attachments,
             commands::attachments::stage_attachment_bytes,
