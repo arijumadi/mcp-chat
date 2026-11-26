@@ -33,6 +33,7 @@ async fn open_session(
 ) {
     let argv = vec![scenario.to_owned()];
     let command = mock_agent();
+    let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel();
     let active = manager
         .open(SessionSpec {
             local_id: local_id.to_owned(),
@@ -112,6 +113,7 @@ async fn missing_binary_is_reported_as_not_found() {
     let cwd = dir.path().canonicalize().unwrap();
     let manager = AcpManager::new();
     let args: Vec<String> = Vec::new();
+    let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
     let error = manager
         .open(SessionSpec {
             local_id: "child-missing".into(),
