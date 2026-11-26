@@ -601,6 +601,8 @@ fn permission_info(request: &RequestPermissionRequest) -> PermissionRequestInfo 
             .iter()
             .map(|option| (option.option_id.to_string(), Some(wire_name(&option.kind))))
             .collect(),
+        diffs: permission_diffs(request),
+        locations: permission_locations(request),
     }
 }
 
