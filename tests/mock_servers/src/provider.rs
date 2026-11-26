@@ -308,10 +308,13 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
             } else if tools_done {
                 text_response("Parent still busy.")
             } else {
+                // The server namespaces its tools, so the bare name would be
+                // an unknown tool and never reach the approval gate.
+                let name = tool_name(tools.as_ref(), "sleep");
                 sse(tool_call_frames(&[(
                     0,
                     "call_sleep",
-                    "sleep",
+                    &name,
                     r#"{"seconds":1}"#,
                 )]))
             }
