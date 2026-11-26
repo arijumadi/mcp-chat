@@ -63,8 +63,11 @@ export function AgentCommandMenu({
           event.preventDefault();
           setActive((index) => (index - 1 + matches.length) % matches.length);
         } else if (event.key === "Enter" || event.key === "Tab") {
+          // `active` is always in range, but the compiler cannot know that.
+          const chosen = matches[active];
+          if (!chosen) return;
           event.preventDefault();
-          onPick(matches[active]);
+          onPick(chosen);
         }
       }}
       tabIndex={-1}

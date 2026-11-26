@@ -420,7 +420,7 @@ struct Pump {
     resume: Option<String>,
     commands: CommandStore,
     config: ConfigStore,
-    changes: mpsc::UnboundedSender<ConfigChange>,
+    changes: mpsc::UnboundedReceiver<ConfigChange>,
     ready: oneshot::Sender<Result<SessionReady, AcpError>>,
 }
 
@@ -571,7 +571,7 @@ where
                         let request = SetSessionConfigOptionRequest::new(
                             session.session_id().clone(),
                             change.config_id,
-                            SessionConfigOptionValue::new(change.value),
+                            SessionConfigOptionValue::value_id(change.value),
                         );
                         match session
                             .connection()
@@ -725,6 +725,7 @@ async fn handle_dispatch(
                 notification.update,
                 &events_for_update,
                 &commands_for_update,
+                &config_for_update,
             );
             Ok(())
         })
