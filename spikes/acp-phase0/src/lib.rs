@@ -11,7 +11,8 @@ use agent_client_protocol::ByteStreams;
 use agent_client_protocol::v1::schema::{CloseSessionRequest, InitializeRequest};
 use agent_client_protocol::v1::SessionSetup;
 use agent_client_protocol::{AcpAgent, Client, ConnectTo};
-use tokio::process::{Command, Stdio};
+use std::process::Stdio;
+use tokio::process::Command;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Run one ACP session with two prompts, then close it.
@@ -33,7 +34,7 @@ pub async fn run_multi_turn_manual(script: &str) -> anyhow::Result<(String, Stri
         .spawn()?;
     let stdout = child.stdout.take().expect("child stdout");
     let stdin = child.stdin.take().expect("child stdin");
-    let transport = ByteStreams::new(stdout.compat_write(), stdin.compat());
+    let transport = ByteStreams::new(stdin.compat_write(), stdout.compat());
     let result = run_with_transport(transport).await;
     let _ = child.kill().await;
     let _ = child.wait().await;
@@ -42,7 +43,7 @@ pub async fn run_multi_turn_manual(script: &str) -> anyhow::Result<(String, Stri
 
 async fn run_with_transport<T>(transport: T) -> anyhow::Result<(String, String)>
 where
-    T: ConnectTo<agent_client_protocol::Agent> + Send + 'static,
+    T: ConnectTo<agent_client_protocol::Client> + Send + 'static,
 {
     let captured = Arc::new(Mutex::new(Vec::<String>::new()));
     let emit = captured.clone();
