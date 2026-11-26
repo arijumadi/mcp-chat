@@ -130,7 +130,36 @@ pub async fn runtime_context(
         }
         parts.push(lines.join("\n"));
     }
+    let agents = acp_agents_block(pool).await?;
+    if let Some(agents) = agents {
+        parts.push(agents);
+    }
     Ok(parts.join("\n\n"))
+}
+
+/// The ACP agents the model may name in the `subagent` tool.
+///
+/// Only the slug and label are shown. Commands and environment values are
+/// configuration, not prompt material, and env can hold credentials.
+async fn acp_agents_block(pool: &SqlitePool) -> Result<Option<String>> {
+    let agents = crate::db::repo::acp_agents::list_enabled(pool).await?;
+    if agents.is_empty() {
+        return Ok(None);
+    }
+    let mut lines = vec![
+        "# ACP agents".to_owned(),
+        "Pass one of these slugs as `agent` to the `subagent` tool to run the task in that external agent instead of the internal subagent."
+            .to_owned(),
+    ];
+    for agent in agents {
+        let label = if agent.name.trim().is_empty() {
+            agent.slug.clone()
+        } else {
+            format!("{} ({})", agent.slug, agent.name)
+        };
+        lines.push(format!("- {label}"));
+    }
+    Ok(Some(lines.join("\n")))
 }
 
 const JARVIS_EXCLUDE_MARKER: &str = "# Jarvis local runtime";

@@ -79,12 +79,15 @@ pub struct ToolExecutor {
 }
 
 pub trait SubagentHost: Send + Sync {
+    #[allow(clippy::too_many_arguments)]
     fn run_subagent<'a>(
         &'a self,
         parent_id: &'a str,
         description: &'a str,
         prompt: &'a str,
         session_id: Option<&'a str>,
+        /// ACP agent slug; `None` runs the internal subagent.
+        agent: Option<&'a str>,
         part_id: &'a str,
     ) -> BoxFuture<'a, crate::Result<(String, String)>>;
 }

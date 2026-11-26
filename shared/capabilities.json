@@ -19,16 +19,67 @@
     "code_exec": "ask"
   },
   "routes": [
-    { "task": "Baca file", "use": ["read_file"] },
-    { "task": "Cari pola/file", "use": ["search_text", "find_files"] },
-    { "task": "File baru", "use": ["create_file"] },
-    { "task": "Ubah file existing", "use": ["modify_file"] },
-    { "task": "Satu exact replacement", "use": ["replace_once"] },
-    { "task": "Build/test/git/package manager", "use": ["shell"] },
-    { "task": "Rename/move/delete massal", "use": ["shell"] },
-    { "task": "Proses/port/disk/env", "use": ["shell"] },
-    { "task": "Workstream besar di background", "use": ["delegate_work"] },
-    { "task": "Klarifikasi blocking", "use": ["ask_user"] }
+    {
+      "task": "Baca file",
+      "use": [
+        "read_file"
+      ]
+    },
+    {
+      "task": "Cari pola/file",
+      "use": [
+        "search_text",
+        "find_files"
+      ]
+    },
+    {
+      "task": "File baru",
+      "use": [
+        "create_file"
+      ]
+    },
+    {
+      "task": "Ubah file existing",
+      "use": [
+        "modify_file"
+      ]
+    },
+    {
+      "task": "Satu exact replacement",
+      "use": [
+        "replace_once"
+      ]
+    },
+    {
+      "task": "Build/test/git/package manager",
+      "use": [
+        "shell"
+      ]
+    },
+    {
+      "task": "Rename/move/delete massal",
+      "use": [
+        "shell"
+      ]
+    },
+    {
+      "task": "Proses/port/disk/env",
+      "use": [
+        "shell"
+      ]
+    },
+    {
+      "task": "Workstream besar di background",
+      "use": [
+        "delegate_work"
+      ]
+    },
+    {
+      "task": "Klarifikasi blocking",
+      "use": [
+        "ask_user"
+      ]
+    }
   ],
   "selfCheck": "Sebelum {shell}: apakah command ini mengubah isi file? Kalau ya, tool-nya salah.",
   "tools": [
@@ -50,7 +101,10 @@
         "Do not use {shell} to read or modify file contents; use {read_file}, {create_file}, or {modify_file} instead.",
         "Before calling {shell}, ask: does this command change the contents of a file? If yes, use a file tool."
       ],
-      "dangerous": { "kind": "shell_command", "arg": "command" },
+      "dangerous": {
+        "kind": "shell_command",
+        "arg": "command"
+      },
       "guard": {
         "kind": "shell_content_write",
         "override": "allowFileWrites",
@@ -78,7 +132,11 @@
         "Use {replace_once} for a single exact replacement; use {modify_file} for multiple hunks, multiple files, add/delete/move, or context-anchored changes.",
         "Matching tolerates CRLF/LF, typographic punctuation, and trailing whitespace. Outside-workspace targets need approval."
       ],
-      "access": { "kind": "write", "arg": "filePath", "format": "path" }
+      "access": {
+        "kind": "write",
+        "arg": "filePath",
+        "format": "path"
+      }
     },
     {
       "name": "apply_patch",
@@ -90,8 +148,15 @@
         "Use this for existing-file changes, multiple hunks, multiple files, or context anchors.",
         "Format: `*** Begin Patch`, Add/Update/Delete File markers, `*** End Patch`. Update hunks start with `@@` (optional context anchor); `*** End of File` anchors EOF. Context/removed/added lines use space/-/+; Add lines use +. Optional `*** Move to: path`. Outside paths need approval."
       ],
-      "access": { "kind": "write", "arg": "patchText", "format": "patch" },
-      "dangerous": { "kind": "patch_delete", "arg": "patchText" }
+      "access": {
+        "kind": "write",
+        "arg": "patchText",
+        "format": "patch"
+      },
+      "dangerous": {
+        "kind": "patch_delete",
+        "arg": "patchText"
+      }
     },
     {
       "name": "write",
@@ -103,7 +168,11 @@
         "Existing files are rejected unless {override} is true.",
         "Use {modify_file} to modify an existing file."
       ],
-      "access": { "kind": "write", "arg": "filePath", "format": "path" },
+      "access": {
+        "kind": "write",
+        "arg": "filePath",
+        "format": "path"
+      },
       "guard": {
         "kind": "no_overwrite",
         "override": "overwrite",
@@ -121,7 +190,11 @@
         "Read a text file with line numbers, or an image shown in the tool card.",
         "Explicit outside paths need approval unless auto mode is on. Use offset and limit for large text files."
       ],
-      "access": { "kind": "read", "arg": "filePath", "format": "path" }
+      "access": {
+        "kind": "read",
+        "arg": "filePath",
+        "format": "path"
+      }
     },
     {
       "name": "grep",
@@ -131,7 +204,11 @@
         "Search text with a regular expression; returns path:line:text.",
         "Explicit outside paths need approval unless auto mode is on."
       ],
-      "access": { "kind": "read", "arg": "path", "format": "path" }
+      "access": {
+        "kind": "read",
+        "arg": "path",
+        "format": "path"
+      }
     },
     {
       "name": "glob",
@@ -141,7 +218,11 @@
         "Find files by glob pattern; build and dependency directories are skipped.",
         "Explicit outside paths need approval unless auto mode is on."
       ],
-      "access": { "kind": "read", "arg": "path", "format": "path" }
+      "access": {
+        "kind": "read",
+        "arg": "path",
+        "format": "path"
+      }
     },
     {
       "name": "skill",
@@ -156,8 +237,7 @@
       "label": "Subagent",
       "risk": "code_exec",
       "description": [
-        "Launch a subagent in a background child conversation with fresh context.",
-        "Include all relevant context and instructions. The call returns immediately; a <subagent> report arrives later. Pass sessionID to send a follow-up. The child runs in the same workspace and cannot start another subagent."
+        "Launch a subagent in a background child conversation with fresh context. Include everything it needs. The call returns immediately; a <subagent> report arrives later. Pass sessionID to follow up, or agent to run it in an ACP agent. The child shares the workspace and cannot nest."
       ]
     },
     {
