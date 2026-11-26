@@ -18,6 +18,10 @@ export interface Conversation {
   maxSteps: number;
   toolMode: "direct" | "lazy";
   serversConfigured: boolean;
+  /** Set when this conversation is a child backed by an external ACP agent. */
+  acpAgent?: string | null;
+  /** ACP `session/new` id; only valid while its process is alive. */
+  acpSessionId?: string | null;
 }
 
 export interface ConversationToolsView {

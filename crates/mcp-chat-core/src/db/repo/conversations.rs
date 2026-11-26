@@ -143,6 +143,38 @@ pub async fn set_parent(pool: &SqlitePool, id: &str, parent_id: &str) -> Result<
     Ok(())
 }
 
+/// Mark a conversation as backed by an external ACP agent.
+///
+/// `acp_session_id` is only meaningful while the process that created it is
+/// alive; after a restart the marker proves the child is ACP but the session is
+/// gone.
+pub async fn set_acp(
+    pool: &SqlitePool,
+    id: &str,
+    agent: &str,
+    acp_session_id: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE conversations SET acp_agent = ?2, acp_session_id = ?3, updated_at = ?4 WHERE id = ?1",
+    )
+    .bind(id)
+    .bind(agent)
+    .bind(acp_session_id)
+    .bind(now_ms())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_acp_session_id(pool: &SqlitePool, id: &str, session_id: &str) -> Result<()> {
+    sqlx::query("UPDATE conversations SET acp_session_id = ?2 WHERE id = ?1")
+        .bind(id)
+        .bind(session_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn set_max_steps(pool: &SqlitePool, id: &str, max_steps: i64) -> Result<()> {
     sqlx::query("UPDATE conversations SET max_steps = ?2, updated_at = ?3 WHERE id = ?1")
         .bind(id)
@@ -324,6 +356,27 @@ mod tests {
 
         delete(&db.pool, &b.id).await.unwrap();
         assert_eq!(list(&db.pool, 20, 0).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn acp_markers_survive_a_reload() {
+        let db = Db::open_memory().await.unwrap();
+        let conversation = create(&db.pool, "ACP child", None, None).await.unwrap();
+        assert_eq!(conversation.acp_agent, None);
+        assert_eq!(conversation.acp_session_id, None);
+
+        set_acp(&db.pool, &conversation.id, "opencode", None)
+            .await
+            .unwrap();
+        let marked = get(&db.pool, &conversation.id).await.unwrap();
+        assert_eq!(marked.acp_agent.as_deref(), Some("opencode"));
+        assert_eq!(marked.acp_session_id, None);
+
+        set_acp_session_id(&db.pool, &conversation.id, "sess-1")
+            .await
+            .unwrap();
+        let live = get(&db.pool, &conversation.id).await.unwrap();
+        assert_eq!(live.acp_session_id.as_deref(), Some("sess-1"));
     }
 
     #[tokio::test]
