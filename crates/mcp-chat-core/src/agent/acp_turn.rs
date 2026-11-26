@@ -59,9 +59,17 @@ pub async fn run_turn(
 ) -> Result<()> {
     let args = acp_agents::agent_args(spec.agent)?;
     let env = acp_agents::agent_env(spec.agent)?;
-    let policy =
+    // Two switches, like the built-in tools: the agent's own stored policy and
+    // the per-chat Auto button. Auto is the stronger of the two, so enabling it
+    // now applies here instead of being silently ignored.
+    let stored =
         crate::db::repo::acp_agents::PermissionPolicy::parse(&spec.agent.permission_policy)
             .unwrap_or(crate::db::repo::acp_agents::PermissionPolicy::Ask);
+    let policy = if engine.auto_approve(spec.child_id) {
+        crate::db::repo::acp_agents::PermissionPolicy::Auto
+    } else {
+        stored
+    };
     let handler = permission_handler(engine.clone(), spec.child_id, &cancel, policy);
 
     let active = match engine.acp.take(spec.child_id).await {
@@ -604,6 +612,29 @@ mod tests {
         // An unreported kind must not be guessed as harmless.
         assert!(!policy_allows(PermissionPolicy::AutoReads, None));
         assert!(!policy_allows(PermissionPolicy::AutoReads, Some("mystery")));
+    }
+
+    #[test]
+    fn auto_policy_allows_everything_except_delete() {
+        use crate::db::repo::acp_agents::PermissionPolicy;
+        assert!(policy_allows(PermissionPolicy::Auto, Some("read")));
+        assert!(policy_allows(PermissionPolicy::Auto, Some("edit")));
+        assert!(policy_allows(PermissionPolicy::Auto, Some("execute")));
+        assert!(policy_allows(PermissionPolicy::Auto, Some("move")));
+        // Irreversible, so it still asks even in Auto.
+        assert!(!policy_allows(PermissionPolicy::Auto, Some("delete")));
+        // An unreported kind is allowed here: the user asked for automatic
+        // approval, and refusing unknown kinds would make the setting look
+        // broken as soon as an agent adds a tool.
+        assert!(policy_allows(PermissionPolicy::Auto, None));
+        assert!(policy_allows(PermissionPolicy::Auto, Some("mystery")));
+    }
+
+    #[test]
+    fn auto_reads_still_refuses_edits_even_though_auto_allows_them() {
+        use crate::db::repo::acp_agents::PermissionPolicy;
+        assert!(!policy_allows(PermissionPolicy::AutoReads, Some("edit")));
+        assert!(policy_allows(PermissionPolicy::Auto, Some("edit")));
     }
 
     #[test]

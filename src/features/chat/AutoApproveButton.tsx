@@ -35,8 +35,8 @@ export function AutoApproveButton() {
         }}
         title={
           enabled
-            ? "Auto-approve is on for this chat"
-            : "Enable auto-approve for this chat"
+            ? "Auto-approve is on for this chat, including its ACP agent. Deletes still ask."
+            : "Enable auto-approve for this chat, including its ACP agent"
         }
       >
         <ShieldCheck size={11} />

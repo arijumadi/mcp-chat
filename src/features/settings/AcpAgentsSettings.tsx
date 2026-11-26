@@ -246,7 +246,12 @@ export function AcpAgentsSettings() {
                       {[agent.command, ...agent.args].join(" ")}
                     </div>
                     <div className="mt-1 text-[10.5px]" style={{ color: "var(--muted)" }}>
-                      Permissions: {agent.permissionPolicy === "auto_reads" ? "auto-approve reads" : "always ask"}
+                      Permissions:{" "}
+                      {agent.permissionPolicy === "auto"
+                        ? "auto-approve, except deletes"
+                        : agent.permissionPolicy === "auto_reads"
+                          ? "auto-approve reads"
+                          : "always ask"}
                       {agent.envKeys.length > 0
                         ? ` · env: ${agent.envKeys.join(", ")}`
                         : ""}
@@ -385,6 +390,9 @@ export function AcpAgentsSettings() {
               >
                 <option value="ask">Ask for every tool call</option>
                 <option value="auto_reads">Auto-approve reads and searches</option>
+                <option value="auto">
+                  Auto-approve everything except deletes
+                </option>
               </select>
             </label>
             <label className="flex items-center gap-2 text-[11.5px]">

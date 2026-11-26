@@ -12,6 +12,7 @@ use mcp_chat_core::agent::ChatEngine;
 use mcp_chat_core::db::Db;
 use mcp_chat_core::db::repo::acp_agents::AcpAgentConfig;
 use mcp_chat_core::db::repo::{acp_agents, conversations, messages};
+use mcp_chat_core::events::CoreEvent;
 use mcp_chat_core::mcp::McpManager;
 use mcp_chat_core::secrets::MemoryStore;
 use serde_json::json;
@@ -378,5 +379,77 @@ async fn probing_a_missing_binary_explains_what_is_wrong() {
         error.user_message().contains("was not found"),
         "{}",
         error.user_message()
+    );
+}
+
+/// The per-chat Auto button must reach the ACP agent, not only the built-in
+/// tools. Before this, the switch looked enabled and changed nothing here.
+#[tokio::test]
+async fn auto_approve_on_a_chat_applies_to_its_acp_agent() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "permission").await;
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("mock"))
+        .await
+        .unwrap();
+    harness.engine.set_auto_approve(&harness.parent_id, true);
+
+    harness
+        .engine
+        .send_message(&harness.parent_id, "touch a file")
+        .await
+        .expect("send");
+
+    // Nobody answers the prompt: if the policy were ignored, the turn would sit
+    // waiting for an approval that never comes.
+    let answer = wait_for_assistant_text(&harness, &harness.parent_id, 80).await;
+    assert!(
+        answer.contains("permission=selected option=allow-once"),
+        "auto mode should approve without asking: {answer}"
+    );
+}
+
+/// Auto is not a blanket yes: deleting stays reviewed, matching the built-in
+/// tools' rule that irreversible actions still ask.
+#[tokio::test]
+async fn auto_approve_does_not_cover_a_delete() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "permission-delete").await;
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("mock"))
+        .await
+        .unwrap();
+    harness.engine.set_auto_approve(&harness.parent_id, true);
+
+    harness
+        .engine
+        .send_message(&harness.parent_id, "delete a file")
+        .await
+        .expect("send");
+
+    // The approval must appear instead of being auto-approved. Listen on the
+    // event stream, which is what the UI uses to show the prompt.
+    let mut events = harness.engine.subscribe();
+    let mut saw_approval = false;
+    for _ in 0..80 {
+        match tokio::time::timeout(std::time::Duration::from_millis(100), events.recv()).await {
+            Ok(Ok(CoreEvent::Approval {
+                conversation_id,
+                tool,
+                ..
+            })) if conversation_id == harness.parent_id => {
+                assert!(tool.contains("Delete"), "unexpected approval: {tool}");
+                saw_approval = true;
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => {}
+        }
+    }
+    assert!(
+        saw_approval,
+        "a delete must still ask the user, even in Auto mode"
     );
 }
