@@ -9,4 +9,5 @@ publish = false
 [dependencies]
 agent-client-protocol = { version = "=5.6.0", features = ["process"] }
 anyhow = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "process"] }
+tokio-util = { version = "0.7", features = ["compat"] }

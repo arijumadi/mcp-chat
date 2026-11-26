@@ -70,6 +70,27 @@ jobs:
         shell: bash
         run: cargo test --manifest-path spikes/acp-phase0/Cargo.toml -- --nocapture
 
+      - name: Windows process tree probe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $wrapper = Join-Path $env:RUNNER_TEMP "acp-phase0-wrapper.cmd"
+          @"
+          @echo off
+          start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 30"
+          "@ | Set-Content -Encoding ascii $wrapper
+          $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/C `"$wrapper`"" -PassThru
+          Start-Sleep -Milliseconds 750
+          Stop-Process -Id $proc.Id -Force
+          Start-Sleep -Milliseconds 750
+          $children = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*Start-Sleep -Seconds 30*" }
+          if ($children) {
+            "ORPHAN=YES count=$($children.Count)"
+            $children | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          } else {
+            "ORPHAN=NO"
+          }
+
       - name: Release build
         shell: bash
         run: cargo build --release --manifest-path spikes/acp-phase0/Cargo.toml
