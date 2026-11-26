@@ -20,10 +20,8 @@ fn text_of(params: &Value) -> String {
         .map(|blocks| {
             blocks
                 .iter()
-                .filter_map(|block| {
-                    (block.get("type").and_then(Value::as_str) == Some("text"))
-                        .then(|| block.get("text").and_then(Value::as_str).unwrap_or(""))
-                })
+                .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+                .map(|block| block.get("text").and_then(Value::as_str).unwrap_or(""))
                 .collect::<Vec<_>>()
                 .join("")
         })

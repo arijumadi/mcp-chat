@@ -187,16 +187,20 @@ impl StderrTail {
         }
     }
 
-    pub fn to_string(&self) -> String {
-        self.lines
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     pub fn is_empty(&self) -> bool {
         self.lines.is_empty()
+    }
+}
+
+impl std::fmt::Display for StderrTail {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, line) in self.lines.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str("\n")?;
+            }
+            formatter.write_str(line)?;
+        }
+        Ok(())
     }
 }
 
