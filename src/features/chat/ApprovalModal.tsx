@@ -49,6 +49,10 @@ export function ApprovalModal() {
   }, [approval?.callId]);
 
   if (!approval) return null;
+  // An external ACP agent owns its own history and only receives an option id,
+  // so a typed rejection reason would be silently discarded. Hide the box
+  // rather than invite text that cannot arrive.
+  const supportsFeedback = approval.server !== "ACP";
   return (
     <Modal
       open
@@ -175,18 +179,25 @@ export function ApprovalModal() {
         {formatJson(approval.args)}
       </pre>
       {rejecting ? (
-        <div className="mt-3">
-          <label className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
-            Optional feedback for the model
-          </label>
-          <textarea
-            value={feedback}
-            onChange={(event) => setFeedback(event.target.value)}
-            placeholder="e.g. use the read-only search tool instead"
-            className={inputClass}
-            style={{ borderColor: "var(--border)", minHeight: 72 }}
-          />
-        </div>
+        supportsFeedback ? (
+          <div className="mt-3">
+            <label className="mb-1 block text-[11.5px]" style={{ color: "var(--muted)" }}>
+              Optional feedback for the model
+            </label>
+            <textarea
+              value={feedback}
+              onChange={(event) => setFeedback(event.target.value)}
+              placeholder="e.g. use the read-only search tool instead"
+              className={inputClass}
+              style={{ borderColor: "var(--border)", minHeight: 72 }}
+            />
+          </div>
+        ) : (
+          <p className="mt-3 text-[11.5px]" style={{ color: "var(--muted)" }}>
+            This decision goes back to the external agent as a plain reject; it
+            does not accept a written reason.
+          </p>
+        )
       ) : null}
     </Modal>
   );

@@ -217,6 +217,18 @@ async fn approving_a_permission_selects_allow_once_and_never_allow_always() {
             .any(|(_, kind)| kind.as_deref() == Some("allow_always")),
         "the mock offers allow_always and it must still be visible to the UI"
     );
+    // The agent sends whole files; the client must render them as a diff so the
+    // approval modal can show what will change.
+    assert_eq!(requests[0].diffs.len(), 1, "the diff must reach the caller");
+    assert!(
+        requests[0].diffs[0].contains("new()"),
+        "the rendered diff should show the new code: {}",
+        requests[0].diffs[0]
+    );
+    assert_eq!(
+        requests[0].locations,
+        vec!["/tmp/example/src/main.rs".to_owned()]
+    );
 
     // The agent echoes what the client actually selected on the wire.
     assert!(

@@ -168,4 +168,55 @@ describe("ApprovalModal", () => {
       expect.stringMatching(/Backspace$/),
     );
   });
+
+  it("hides the rejection feedback box for an external ACP agent", async () => {
+    useApp.setState({
+      activeId: "c1",
+      respondApproval: vi.fn().mockResolvedValue(undefined),
+      approvals: [
+        {
+          type: "approval",
+          conversationId: "c1",
+          callId: "call-acp",
+          server: "ACP",
+          tool: "Run tests",
+          args: { kind: "execute", options: ["allow_once", "reject_once"] },
+          allowAlways: false,
+        },
+      ],
+    });
+    render(<ApprovalModal />);
+    const { fireEvent } = await import("@testing-library/react");
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    // ACP only receives an option id, so a typed reason would be discarded.
+    expect(
+      screen.getByText(/does not accept a written reason/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText(/Optional feedback for the model/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("never offers Always allow for an ACP request", () => {
+    useApp.setState({
+      activeId: "c1",
+      respondApproval: vi.fn().mockResolvedValue(undefined),
+      approvals: [
+        {
+          type: "approval",
+          conversationId: "c1",
+          callId: "call-acp-2",
+          server: "ACP",
+          tool: "Run tests",
+          args: { kind: "execute", options: ["allow_once", "allow_always"] },
+          allowAlways: false,
+        },
+      ],
+    });
+    render(<ApprovalModal />);
+    expect(
+      screen.queryByRole("button", { name: "Always allow" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeInTheDocument();
+  });
 });
