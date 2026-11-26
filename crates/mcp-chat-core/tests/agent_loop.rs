@@ -1588,33 +1588,37 @@ async fn subagent_runs_in_a_child_conversation() {
 
 #[tokio::test]
 async fn subagent_wake_waits_for_a_busy_parent() {
-    // `ask` keeps the parent turn blocked on an approval prompt, so "parent is
-    // busy" is a real state instead of a timing race. The child itself is a
-    // text-only turn and needs no approval.
-    let h = Harness::new("mock-subagent-busy", Some("ask"), 0).await;
+    // `auto` keeps this about ordering, not approval. Waiting for the parent's
+    // own tool to reach `running` proves the turn is mid-flight without polling
+    // `in_flight`, which races the runner.
+    let h = Harness::new("mock-subagent-busy", Some("auto"), 0).await;
     let mut receiver = h.engine.subscribe();
     h.engine
         .send_message(&h.conversation_id, "work while child runs")
         .await
         .unwrap();
 
-    let approval = loop {
+    let parent_call = loop {
         let event = tokio::time::timeout(Duration::from_secs(20), receiver.recv())
             .await
-            .expect("parent approval timed out")
+            .expect("parent tool never started")
             .expect("event channel");
-        if let CoreEvent::Approval {
+        if let CoreEvent::Tool {
             conversation_id,
             call_id,
+            state,
             ..
         } = &event
         {
-            if conversation_id == &h.conversation_id {
+            if conversation_id == &h.conversation_id && state == "running" {
                 break call_id.clone();
             }
         }
     };
-    assert!(h.engine.in_flight(&h.conversation_id), "parent is not busy");
+    assert!(
+        h.engine.in_flight(&h.conversation_id),
+        "parent should still be running tool {parent_call}"
+    );
 
     let (child_id, _) = h
         .engine
@@ -1629,8 +1633,9 @@ async fn subagent_wake_waits_for_a_busy_parent() {
         .unwrap();
     wait_for_child_assistants(&h, &child_id, 1).await;
 
-    // Let the supervisor persist the report while the parent is still blocked.
-    for _ in 0..200 {
+    // Let the supervisor persist the report while the parent is still working.
+    let report_wait = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
         let parent = h.history().await;
         let delivered = parent.iter().any(|message| {
             message.message.role == "user"
@@ -1643,22 +1648,13 @@ async fn subagent_wake_waits_for_a_busy_parent() {
         if delivered {
             break;
         }
+        if tokio::time::Instant::now() >= report_wait {
+            panic!("the subagent report was not persisted while the parent was busy");
+        }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    assert!(
-        h.engine.in_flight(&h.conversation_id),
-        "the queued wake must not start while the parent turn is blocked"
-    );
 
-    h.engine.respond_approval(
-        &approval,
-        ApprovalAnswer {
-            decision: ApprovalDecision::Once,
-            feedback: None,
-        },
-    );
-
-    for _ in 0..400 {
+    for _ in 0..600 {
         if h.assistant_text()
             .await
             .contains("Parent got the subagent report.")
