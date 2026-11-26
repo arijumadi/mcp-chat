@@ -8,6 +8,7 @@ import {
 import { create } from "zustand";
 import { call, subscribe } from "@/lib/ipc";
 import type {
+  AgentCommand,
   AppInfo,
   ApprovalEvent,
   Attachment,
@@ -57,6 +58,8 @@ export interface AppStore {
   booted: boolean;
   /// Why boot data could not be loaded, when the shell is shown anyway.
   bootError: string | null;
+  /// Slash commands of the ACP agent bound to the active chat.
+  agentCommands: AgentCommand[];
   conversations: Conversation[];
   conversationLimit: number;
   conversationHasMore: boolean;
@@ -94,6 +97,7 @@ export interface AppStore {
   searching: boolean;
   init: () => Promise<void>;
   refreshConversations: () => Promise<void>;
+  refreshAgentCommands: (conversationId: string) => Promise<void>;
   loadMoreConversations: () => Promise<void>;
   refreshProviders: () => Promise<void>;
   refreshServers: () => Promise<void>;
@@ -170,6 +174,7 @@ function discardStaged(attachments: Attachment[]): void {
 export const useApp = create<AppStore>()((set, get) => ({
   booted: false,
   bootError: null,
+  agentCommands: [],
   conversations: [],
   conversationLimit: 200,
   conversationHasMore: false,
@@ -244,6 +249,19 @@ export const useApp = create<AppStore>()((set, get) => ({
       get().toast(String(error), "error");
     } finally {
       initializing = false;
+    }
+  },
+
+  async refreshAgentCommands(conversationId: string) {
+    try {
+      const commands = await call<AgentCommand[]>("get_agent_commands", {
+        conversationId,
+      });
+      set({ agentCommands: commands });
+    } catch {
+      // An internal chat simply has none; a failure here must not disturb the
+      // composer.
+      set({ agentCommands: [] });
     }
   },
 

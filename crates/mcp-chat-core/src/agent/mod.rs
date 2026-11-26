@@ -230,6 +230,17 @@ impl ChatEngine {
         Ok((child.id, content))
     }
 
+    /// The slash commands the external agent advertised for this chat.
+    ///
+    /// Empty for an internal conversation, and empty before the agent's first
+    /// session exists, which is why the composer also refreshes after a turn.
+    pub async fn agent_commands(&self, conversation_id: &str) -> Vec<crate::acp::AgentCommand> {
+        match self.acp.get(conversation_id).await {
+            Some(session) => session.commands(),
+            None => Vec::new(),
+        }
+    }
+
     /// Start an agent, initialize it, open a session, then close it.
     ///
     /// Used by the settings probe. A wrong flag, a missing binary, and an

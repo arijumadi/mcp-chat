@@ -33,6 +33,15 @@ pub struct AcpAgentView {
     pub last_checked_at: Option<i64>,
 }
 
+/// A slash command the external agent understands.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCommandView {
+    pub name: String,
+    pub description: String,
+    pub input_hint: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpPresetView {
@@ -241,4 +250,24 @@ pub async fn get_conversation_acp_agent(
         .await
         .map_err(cmd_err)?;
     Ok(conversation.acp_agent)
+}
+
+/// Slash commands the agent advertised for this chat.
+///
+/// The agent executes them; Jarvis only offers them so the user does not have
+/// to memorise which external agent supports what.
+#[tauri::command]
+pub async fn get_agent_commands(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> CmdResult<Vec<AgentCommandView>> {
+    let commands = state.engine.agent_commands(&conversation_id).await;
+    Ok(commands
+        .into_iter()
+        .map(|command| AgentCommandView {
+            name: command.name,
+            description: command.description,
+            input_hint: command.input_hint,
+        })
+        .collect())
 }

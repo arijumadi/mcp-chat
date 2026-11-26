@@ -1675,6 +1675,18 @@ pub async fn compact_now(
     conversation_id: &str,
     focus: Option<&str>,
 ) -> Result<()> {
+    // An ACP agent keeps its own history; summarising Jarvis's copy would
+    // change nothing the agent sees and would silently diverge from it.
+    if let Ok(conversation) =
+        crate::db::repo::conversations::get(&engine.db.pool, conversation_id).await
+    {
+        if conversation.acp_agent.is_some() {
+            return Err(CoreError::Message(
+                "This chat is run by an ACP agent, which owns its own history. Use the agent's own /compact command instead."
+                    .into(),
+            ));
+        }
+    }
     let (_slot, cancel) =
         engine.claim_turn(conversation_id, "Stop the current turn before compacting.")?;
     let _ = engine.events.send(CoreEvent::Status {

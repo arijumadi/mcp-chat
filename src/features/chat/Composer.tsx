@@ -25,6 +25,7 @@ import { WorkspacePicker } from "./WorkspacePicker";
 import { AutoApproveButton } from "./AutoApproveButton";
 import { AttachmentGrid } from "./Attachments";
 import { parseCompactCommand } from "./slashCommands";
+import { AgentCommandMenu } from "./AgentCommandMenu";
 
 function contextRange(context: Pick<ContextItem, "startLine" | "endLine">): string {
   if (context.startLine == null) return "";
@@ -64,12 +65,23 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const [dragging, setDragging] = useState(false);
   const [dragCount, setDragCount] = useState(0);
   const active = BUSY_STATUSES.includes(status);
+  const agentCommands = useApp((state) => state.agentCommands);
+  const refreshAgentCommands = useApp((state) => state.refreshAgentCommands);
+  const isAcp = Boolean(conversation.acpAgent);
   const disabled = providers.length === 0;
   const hasContent =
     value.trim().length > 0 || pendingAttachments.length > 0 || contexts.length > 0;
   const canSend = hasContent && !active && !disabled;
   const canSteer = hasContent && active && !disabled && !steering;
   const showDrop = dragging && !active && !disabled;
+
+  useEffect(() => {
+    void refreshAgentCommands(conversation.id);
+  }, [conversation.id, refreshAgentCommands]);
+
+  useEffect(() => {
+    if (!active) void refreshAgentCommands(conversation.id);
+  }, [active, conversation.id, refreshAgentCommands]);
 
   useEffect(() => {
     const textarea = ref.current;
@@ -152,7 +164,10 @@ export function Composer({ conversation }: { conversation: Conversation }) {
     if (disabled || steering) return;
     // `/compact [focus]` is a command, not a message. It must not reach the
     // model, not even as a steer message while a turn runs.
-    const compact = pendingAttachments.length === 0 ? parseCompactCommand(text) : null;
+    // An ACP agent may implement /compact itself, so Jarvis must not intercept
+    // it: the text is forwarded and the agent decides.
+    const compact =
+      pendingAttachments.length === 0 && !isAcp ? parseCompactCommand(text) : null;
     if (compact) {
       // The draft stays until the user confirms, so Cancel loses nothing.
       openCompact(compact.focus);
@@ -415,6 +430,16 @@ export function Composer({ conversation }: { conversation: Conversation }) {
               </div>
             </div>
           ) : null}
+          {isAcp ? (
+            <AgentCommandMenu
+              draft={value}
+              commands={agentCommands}
+              onPick={(command) => {
+                setValue(`/${command.name}${command.inputHint ? " " : ""}`);
+                ref.current?.focus();
+              }}
+            />
+          ) : null}
           <textarea
             ref={ref}
             value={value}
@@ -428,7 +453,13 @@ export function Composer({ conversation }: { conversation: Conversation }) {
             onPaste={onPaste}
             rows={1}
             disabled={disabled}
-            placeholder={disabled ? "Configure a provider first…" : "Message the model…"}
+            placeholder={
+              disabled
+                ? "Configure a provider first…"
+                : isAcp
+                  ? "Message the agent, or type / for its commands…"
+                  : "Message the model…"
+            }
             className="max-h-[240px] min-h-[38px] w-full resize-none bg-transparent px-2 py-2 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:cursor-not-allowed"
             style={{ fontSize: "var(--chat-fs)" }}
             aria-label="Message"
