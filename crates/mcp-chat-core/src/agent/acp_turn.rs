@@ -37,6 +37,9 @@ pub struct TurnSpec<'a> {
     pub child_id: &'a str,
     /// The prompt text to send.
     pub prompt: &'a str,
+    /// Attachments and file contexts from the same user message.
+    pub attachments: Vec<crate::acp::prompt::AttachmentInput>,
+    pub contexts: Vec<crate::models::MessageContext>,
     /// The registry row the child was configured with.
     pub agent: &'a crate::models::AcpAgent,
     /// Absolute working directory, already checked to be inside the parent's
@@ -92,10 +95,19 @@ pub async fn run_turn(
         }
     };
 
+    // Only blocks the agent advertised are sent; the builder degrades the rest
+    // to a visible note rather than provoking a protocol error.
+    let caps = crate::acp::prompt::PromptCapabilities {
+        images: active.handle.accepts_images,
+        embedded_context: active.handle.accepts_embedded_context,
+    };
+    let blocks =
+        crate::acp::prompt::build_prompt(spec.prompt, &spec.attachments, &spec.contexts, caps);
+
     let events = stream_turn(
         engine.clone(),
         spec.child_id,
-        spec.prompt,
+        blocks,
         &active.handle,
         active.events,
         cancel,
@@ -122,7 +134,7 @@ struct TurnRun<'a> {
 async fn stream_turn(
     engine: Arc<ChatEngine>,
     child_id: &str,
-    prompt: &str,
+    blocks: Vec<agent_client_protocol::v1::schema::ContentBlock>,
     handle: &Arc<crate::acp::AcpSession>,
     events: mpsc::UnboundedReceiver<AcpEvent>,
     cancel: CancellationToken,
@@ -139,7 +151,7 @@ async fn stream_turn(
         failure: None,
     };
 
-    if handle.prompt(prompt).is_err() {
+    if handle.prompt_blocks(blocks).is_err() {
         // Recorded on the turn so the caller still gets its stream back.
         run.failure = Some("That ACP session has ended. Start a new session.".into());
         run.finish().await;
