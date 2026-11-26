@@ -909,7 +909,10 @@ mod tests {
             refresh_token: None,
             token_type: None,
             scope: None,
-            expires_at: Some(now_ms() + REFRESH_WINDOW_MS + 1),
+            // A one-millisecond margin is below the Windows clock resolution
+            // (~15 ms), so this test was flaky there. Use a margin that is
+            // unambiguous on every platform.
+            expires_at: Some(now_ms() + REFRESH_WINDOW_MS + 1_000),
             issuer: None,
             client_id: None,
             client_secret: None,
@@ -918,7 +921,7 @@ mod tests {
             auth_method: None,
         };
         assert!(!needs_refresh(&token));
-        token.expires_at = Some(now_ms() + REFRESH_WINDOW_MS - 1);
+        token.expires_at = Some(now_ms() + REFRESH_WINDOW_MS - 1_000);
         assert!(needs_refresh(&token));
     }
 

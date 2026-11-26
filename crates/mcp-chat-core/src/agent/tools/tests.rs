@@ -13,8 +13,8 @@ use super::shell::{
 use super::skills::{set_skill_enabled, skill_roots_with_home};
 use super::ui::take_ui_diff;
 use super::workspace::{
-    outside_read_target, path_is_outside, resolve_in_workspace, resolve_write_path, workspace_root,
-    workspace_root_for_conversation,
+    outside_read_target, path_is_outside, resolve_in_workspace, resolve_write_path, simplify_path,
+    workspace_root, workspace_root_for_conversation,
 };
 use super::{
     Rendered, ToolExecRequest, ToolExecResult, ToolExecutor, meta_tool_defs, meta_tool_info,
@@ -55,7 +55,9 @@ fn absolute_paths_inside_the_workspace_are_accepted() {
     let workspace = root.path().canonicalize().unwrap();
     let target = workspace.join("notes").join("inside.txt");
     let resolved = resolve_in_workspace(&workspace, target.to_str().unwrap()).unwrap();
-    assert_eq!(resolved, target);
+    // `canonicalize` on Windows returns a `\\?\` path, while the resolver
+    // strips that prefix. Compare the simplified form so both platforms agree.
+    assert_eq!(resolved, simplify_path(&target));
 }
 
 #[test]
@@ -339,7 +341,10 @@ async fn workspace_root_uses_the_saved_setting() {
     settings::set(&db.pool, "workspace.root", &workspace.display().to_string())
         .await
         .unwrap();
-    assert_eq!(workspace_root(&db.pool).await.unwrap(), workspace);
+    assert_eq!(
+        workspace_root(&db.pool).await.unwrap(),
+        simplify_path(&workspace)
+    );
 }
 
 #[tokio::test]
@@ -368,7 +373,7 @@ async fn conversation_workspace_overrides_the_global_default() {
         workspace_root_for_conversation(&db.pool, &conversation.id)
             .await
             .unwrap(),
-        local.path().canonicalize().unwrap()
+        simplify_path(&local.path().canonicalize().unwrap())
     );
 }
 
