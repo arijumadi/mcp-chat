@@ -9,6 +9,7 @@ license = "MIT"
 rust-version = "1.90"
 
 [workspace.dependencies]
+agent-client-protocol = { version = "5.6.0", default-features = false }
 anyhow = "1.0.104"
 async-trait = "0.1.92"
 axum = "0.8.9"
@@ -30,7 +31,7 @@ tempfile = "3.27.0"
 thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["serde", "formatting", "parsing"] }
 tokio = { version = "1.54.1", features = ["full"] }
-tokio-util = "0.7.20"
+tokio-util = { version = "0.7.20", features = ["compat"] }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }

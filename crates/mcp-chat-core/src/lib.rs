@@ -1,3 +1,8 @@
+// `mcp::client::RpcError` carries an HTTP status plus a response body so tool
+// errors stay actionable. That predates ACP and is out of scope here; boxing it
+// would change every MCP tool error path for no functional gain.
+#![allow(clippy::result_large_err)]
+
 pub mod acp;
 pub mod agent;
 pub mod attachments;
