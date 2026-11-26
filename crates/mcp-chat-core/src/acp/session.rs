@@ -314,9 +314,16 @@ where
                                     break;
                                 }
                                 Ok(SessionMessage::PromptResponse(Err(error))) => {
-                                    let _ = events.send(AcpEvent::TurnFailed {
-                                        message: map_sdk_error(error).user_message(),
-                                    });
+                                    let fatal = connection_is_gone(&error);
+                                    let message = map_sdk_error(error).user_message();
+                                    let _ = events.send(AcpEvent::TurnFailed { message });
+                                    // A failed prompt is usually recoverable,
+                                    // but a closed transport is not: waiting
+                                    // for another prompt would keep the slot
+                                    // reserved forever.
+                                    if fatal {
+                                        break 'turn;
+                                    }
                                     break;
                                 }
                                 Ok(SessionMessage::Message(dispatch)) => {
@@ -469,6 +476,12 @@ fn permission_response(
         RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome,
     };
 
+    // Cancelling a turn is not a rejection: the protocol requires the
+    // `cancelled` outcome so the agent stops instead of remembering a refusal.
+    if decision == PermissionDecision::Cancel {
+        return RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
+    }
+
     let options = info
         .options
         .iter()
@@ -492,6 +505,11 @@ fn stop_reason(response: &agent_client_protocol::v1::schema::PromptResponse) -> 
     wire_name(&response.stop_reason)
 }
 
+fn connection_is_gone(error: &agent_client_protocol::Error) -> bool {
+    agent_client_protocol::is_incoming_transport_closed(error)
+        || agent_client_protocol::is_connection_terminated(error)
+}
+
 fn map_sdk_error(error: agent_client_protocol::Error) -> AcpError {
     let message = error.to_string();
     let lower = message.to_lowercase();
@@ -500,9 +518,7 @@ fn map_sdk_error(error: agent_client_protocol::Error) -> AcpError {
             agent: "ACP agent".to_owned(),
         };
     }
-    if agent_client_protocol::is_incoming_transport_closed(&error)
-        || agent_client_protocol::is_connection_terminated(&error)
-    {
+    if connection_is_gone(&error) {
         return AcpError::Crashed {
             stderr_tail: String::new(),
         };
@@ -573,6 +589,28 @@ mod tests {
         let response = permission_response(&info, PermissionDecision::Approve);
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["outcome"]["outcome"], "cancelled");
+    }
+
+    #[test]
+    fn cancelling_answers_cancelled_not_a_rejection() {
+        let info = PermissionRequestInfo {
+            title: "Run tests".into(),
+            kind: Some(wire_name(&ToolKind::Execute)),
+            options: [
+                PermissionOptionKind::AllowOnce,
+                PermissionOptionKind::RejectOnce,
+            ]
+            .into_iter()
+            .map(|kind| (wire_name(&kind), Some(wire_name(&kind))))
+            .collect(),
+        };
+        let response = permission_response(&info, PermissionDecision::Cancel);
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            json["outcome"]["outcome"], "cancelled",
+            "cancel must not look like a rejection: {json}"
+        );
+        assert!(json["outcome"].get("optionId").is_none());
     }
 
     #[test]
