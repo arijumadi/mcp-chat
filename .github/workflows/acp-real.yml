@@ -7,6 +7,13 @@ name: ACP real agent probe
 # when changing the client, a preset, or the auth handling.
 
 on:
+  # Also runs on the pull request that changes this workflow, so the download
+  # and probe are verified before it becomes manual-only.
+  pull_request:
+    paths:
+      - ".github/workflows/acp-real.yml"
+      - "crates/mcp-chat-core/tests/acp_real_agent.rs"
+      - "crates/mcp-chat-core/src/acp/**"
   workflow_dispatch:
     inputs:
       agent:
