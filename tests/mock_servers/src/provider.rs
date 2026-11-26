@@ -105,6 +105,41 @@ fn bump(state: &ProviderState, key: &str) -> u32 {
     *value
 }
 
+/// True when this request belongs to a spawned subagent conversation. The
+/// child prompt is injected as the first user turn, so it survives later turns.
+fn is_subagent_child(messages: &Value) -> bool {
+    messages
+        .as_array()
+        .map(|items| {
+            items.iter().any(|message| {
+                message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains("You are a subagent spawned"))
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// True when the synthetic `<subagent>` report is already a user turn in the
+/// parent transcript. The build step prefixes a time note, so the text does not
+/// start with the tag; matching only user messages avoids the parent's own tool
+/// result text, which mentions the child but is not a report.
+fn has_subagent_report(messages: &Value) -> bool {
+    messages
+        .as_array()
+        .map(|items| {
+            items.iter().any(|message| {
+                message.get("role").and_then(Value::as_str) == Some("user")
+                    && message
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| text.contains("<subagent state="))
+            })
+        })
+        .unwrap_or(false)
+}
+
 fn has_tool_result(messages: &Value) -> bool {
     messages
         .as_array()
@@ -264,18 +299,22 @@ async fn openai(State(state): State<ProviderState>, Json(body): Json<Value>) -> 
     match scenario.as_str() {
         "text" => text_response("Hello from the mock provider."),
         "subagent-busy" => {
-            let last = last_user_text(&messages);
-            if last.contains("You are a subagent spawned") {
+            // The parent turn must finish *before* the queued wake runs, so it
+            // must never look like the turn that answers the subagent report.
+            if is_subagent_child(&messages) {
                 text_response("Subagent report: the workspace looks healthy.")
-            } else if messages.to_string().contains("<subagent state=") {
+            } else if has_subagent_report(&messages) {
                 text_response("Parent got the subagent report.")
             } else if tools_done {
                 text_response("Parent still busy.")
             } else {
+                // The server namespaces its tools, so the bare name would be
+                // an unknown tool and never reach the approval gate.
+                let name = tool_name(tools.as_ref(), "sleep");
                 sse(tool_call_frames(&[(
                     0,
                     "call_sleep",
-                    "sleep",
+                    &name,
                     r#"{"seconds":1}"#,
                 )]))
             }

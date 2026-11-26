@@ -21,6 +21,12 @@ pub struct Conversation {
     pub max_steps: i64,
     pub tool_mode: String,
     pub servers_configured: bool,
+    /// Set on a child conversation that is backed by an external ACP agent.
+    /// `None` means the child (if any) is an internal Jarvis subagent.
+    pub acp_agent: Option<String>,
+    /// The ACP `sessionId` returned by `session/new`. Only valid while the
+    /// process for that session is alive.
+    pub acp_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -211,6 +217,27 @@ pub struct ServerView {
     pub has_api_key: bool,
     pub has_oauth_token: bool,
     pub tool_count: usize,
+}
+
+/// A registered external ACP agent that can be used as a subagent backend.
+///
+/// `env_json` is a JSON object of environment variables for the child process.
+/// It is stored in SQLite like `servers.env_json`; treat its values as secrets.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAgent {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub command: String,
+    pub args_json: String,
+    pub env_json: String,
+    pub permission_policy: String,
+    pub enabled: bool,
+    pub last_error: Option<String>,
+    pub last_checked_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

@@ -1586,54 +1586,121 @@ async fn subagent_runs_in_a_child_conversation() {
     assert!(!child_tools.contains(&"subagent"));
 }
 
+/// Queueing is unit-tested directly in `agent::tests`. This covers the wiring:
+/// a completion must persist its report while the parent is mid-turn, and the
+/// queued wake must only start after that turn releases its slot.
 #[tokio::test]
-async fn subagent_wake_waits_for_a_busy_parent() {
-    let h = Harness::new("mock-subagent-busy", Some("auto"), 0).await;
+async fn subagent_report_is_persisted_while_the_parent_is_busy() {
+    // `ask` blocks the parent's tool call on an approval prompt, so "busy" is a
+    // real state rather than a timing race.
+    let h = Harness::new("mock-subagent-busy", Some("ask"), 0).await;
+    let mut receiver = h.engine.subscribe();
     h.engine
         .send_message(&h.conversation_id, "work while child runs")
         .await
         .unwrap();
-    for _ in 0..200 {
-        if h.engine.in_flight(&h.conversation_id) {
-            break;
+
+    let approval = loop {
+        let event = tokio::time::timeout(Duration::from_secs(20), receiver.recv())
+            .await
+            .expect("the parent tool never asked for approval")
+            .expect("event channel");
+        if let CoreEvent::Approval {
+            conversation_id,
+            call_id,
+            ..
+        } = &event
+        {
+            if conversation_id == &h.conversation_id {
+                break call_id.clone();
+            }
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(
-        h.engine.in_flight(&h.conversation_id),
-        "parent did not start"
-    );
+    };
 
     let (child_id, _) = h
         .engine
         .launch_subagent(
             &h.conversation_id,
             "Busy parent check",
-            "Report while the parent is working",
+            "Report while the parent is busy",
             None,
             "",
         )
         .await
         .unwrap();
+    wait_for_child_assistants(&h, &child_id, 1).await;
 
-    for _ in 0..400 {
-        if h.assistant_text()
-            .await
-            .contains("Parent got the subagent report.")
-        {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let report = loop {
+        let parent = h.history().await;
+        let found = parent.iter().find(|message| {
+            message.message.role == "user"
+                && message.parts.iter().any(|part| {
+                    part.payload()["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("<subagent state="))
+                })
+        });
+        if let Some(message) = found {
+            break message.clone();
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("the subagent report was never persisted while the parent was busy");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    let text = report
+        .parts
+        .iter()
+        .filter_map(|part| part.payload()["text"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(
+        text.contains("Subagent report"),
+        "unexpected report: {text}"
+    );
+    assert!(
+        h.engine.in_flight(&h.conversation_id),
+        "the queued wake must not start while the parent turn is blocked"
+    );
+
+    h.engine.respond_approval(
+        &approval,
+        ApprovalAnswer {
+            decision: ApprovalDecision::Once,
+            feedback: None,
+        },
+    );
+
+    // The parent's own turn continues and already sees the persisted report, so
+    // what matters is that the wake ran as a separate turn afterwards.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let history = h.history().await;
+        let report_index = history
+            .iter()
+            .position(|message| {
+                message.message.role == "user"
+                    && message.message.status == "synthetic"
+                    && message.parts.iter().any(|part| {
+                        part.payload()["text"]
+                            .as_str()
+                            .is_some_and(|text| text.contains("<subagent state="))
+                    })
+            })
+            .expect("report message");
+        let later_assistant = history[report_index + 1..]
+            .iter()
+            .any(|message| message.message.role == "assistant");
+        if later_assistant && !h.engine.in_flight(&h.conversation_id) {
             break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("the queued subagent wake never produced a turn after the report");
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    let text = h.assistant_text().await;
-    assert!(
-        text.contains("Parent still busy."),
-        "the user's parent turn was lost: {text}"
-    );
-    assert!(
-        text.contains("Parent got the subagent report."),
-        "the queued subagent wake did not run: {text}"
-    );
+
     let child = conversations::get(&h.db.pool, &child_id).await.unwrap();
     assert_eq!(child.parent_id.as_deref(), Some(h.conversation_id.as_str()));
 }
