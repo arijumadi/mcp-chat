@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal } from "lucide-react";
 import type { AgentCommand } from "@/lib/types";
 
@@ -19,32 +19,56 @@ export function AgentCommandMenu({
   onPick: (command: AgentCommand) => void;
 }) {
   const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
 
   // Only offer suggestions while the user is still typing the name.
-  const query = useMemo(() => {
+  const query = (() => {
     const trimmed = draft.trimStart();
     if (!trimmed.startsWith("/")) return null;
     const body = trimmed.slice(1);
     if (body.includes(" ") || body.includes("\n")) return null;
     return body.toLowerCase();
-  }, [draft]);
+  })();
 
-  const matches = useMemo(() => {
-    if (query === null) return [];
-    return commands.filter((command) => command.name.toLowerCase().startsWith(query));
-  }, [commands, query]);
+  const matches =
+    query === null
+      ? []
+      : commands.filter((command) => command.name.toLowerCase().startsWith(query));
 
   useEffect(() => {
     setActive(0);
   }, [query, commands.length]);
 
+  // Keep the highlighted row in view: agents can advertise 20+ commands and
+  // the list is taller than the menu.
+  useEffect(() => {
+    const selected = listRef.current?.querySelector('[aria-selected="true"]');
+    selected?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+
   if (matches.length === 0) return null;
 
   return (
+    // Anchored above the composer instead of flowing in the scroll area: a
+    // static list used to push the textarea down and fill the screen.
     <div
+      ref={listRef}
       role="listbox"
       aria-label="Agent commands"
-      className="mb-1 overflow-hidden rounded-xl border"
+      onKeyDown={(event) => {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          setActive((index) => (index + 1) % matches.length);
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          setActive((index) => (index - 1 + matches.length) % matches.length);
+        } else if (event.key === "Enter" || event.key === "Tab") {
+          event.preventDefault();
+          onPick(matches[active]);
+        }
+      }}
+      tabIndex={-1}
+      className="absolute bottom-full left-0 z-30 mb-1 max-h-[min(50vh,320px)] w-full overflow-y-auto overscroll-contain rounded-xl border shadow-xl"
       style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}
     >
       {matches.map((command, index) => (
@@ -66,7 +90,7 @@ export function AgentCommandMenu({
           }}
         >
           <Terminal size={11} className="mt-0.5 shrink-0" style={{ color: "var(--muted)" }} />
-          <span className="min-w-0">
+          <span className="min-w-0 flex-1">
             <span className="font-mono text-[11.5px]">/{command.name}</span>
             {command.inputHint ? (
               <span className="ml-1.5 font-mono text-[10.5px]" style={{ color: "var(--faint)" }}>
@@ -74,7 +98,7 @@ export function AgentCommandMenu({
               </span>
             ) : null}
             {command.description ? (
-              <span className="ml-2 text-[10.5px]" style={{ color: "var(--muted)" }}>
+              <span className="mt-0.5 block text-[10.5px] leading-snug" style={{ color: "var(--muted)" }}>
                 {command.description}
               </span>
             ) : null}
@@ -82,10 +106,10 @@ export function AgentCommandMenu({
         </button>
       ))}
       <div
-        className="border-t px-2.5 py-1 text-[10px]"
-        style={{ borderColor: "var(--border)", color: "var(--faint)" }}
+        className="sticky bottom-0 border-t px-2.5 py-1 text-[10px]"
+        style={{ borderColor: "var(--border)", background: "var(--panel-2)", color: "var(--faint)" }}
       >
-        Sent to the external agent, which runs the command itself.
+        {matches.length} command{matches.length === 1 ? "" : "s"} · run by the agent itself
       </div>
     </div>
   );

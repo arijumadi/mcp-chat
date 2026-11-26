@@ -19,6 +19,32 @@ pub struct AgentCommand {
     pub input_hint: Option<String>,
 }
 
+/// One value of a session configuration option.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigChoice {
+    pub value: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+/// A model, thinking level, or mode the agent lets the user pick.
+///
+/// Agents differ in where they put this: Antigravity returns it in the
+/// `session/new` response, OpenCode announces changes later. Both are
+/// normalised into this shape so the UI has one thing to render.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigOption {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub current_value: String,
+    /// Empty for a boolean option; `kind` says which this is.
+    pub choices: Vec<ConfigChoice>,
+    /// `select` or `boolean`.
+    pub kind: String,
+}
+
 /// One update streamed by an ACP agent.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AcpEvent {
@@ -40,6 +66,8 @@ pub enum AcpEvent {
     Plan(String),
     /// The set of slash commands the agent supports, replaced wholesale.
     Commands(Vec<AgentCommand>),
+    /// The agent's configurable options, replaced wholesale.
+    ConfigOptions(Vec<ConfigOption>),
     /// A permission request that needs an answer.
     PermissionRequested {
         request_id: String,

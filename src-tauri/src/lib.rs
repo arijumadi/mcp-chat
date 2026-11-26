@@ -86,6 +86,8 @@ pub fn run() {
             commands::acp::set_conversation_acp_agent,
             commands::acp::get_conversation_acp_agent,
             commands::acp::get_agent_commands,
+            commands::acp::get_agent_config,
+            commands::acp::set_agent_config,
             commands::chat::list_conversations,
             commands::attachments::stage_attachments,
             commands::attachments::stage_attachment_bytes,

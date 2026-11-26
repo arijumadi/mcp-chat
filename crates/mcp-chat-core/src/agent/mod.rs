@@ -241,6 +241,44 @@ impl ChatEngine {
         }
     }
 
+    /// The agent's configurable options for this chat: model, mode, effort.
+    pub async fn agent_config(&self, conversation_id: &str) -> Vec<crate::acp::ConfigOption> {
+        match self.acp.get(conversation_id).await {
+            Some(session) => session.config_options(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Ask the agent to change one option. The agent answers with the full
+    /// updated list, which the next `agent_config` call returns.
+    pub async fn set_agent_config(
+        &self,
+        conversation_id: &str,
+        config_id: &str,
+        value: &str,
+    ) -> Result<Vec<crate::acp::ConfigOption>> {
+        let session =
+            self.acp.get(conversation_id).await.ok_or_else(|| {
+                CoreError::Message("This chat has no live ACP session yet.".into())
+            })?;
+        session
+            .set_config(config_id, value)
+            .map_err(|error| CoreError::Message(error.user_message()))?;
+        // The answer arrives asynchronously; give the pump a moment to apply it
+        // so the caller can return the new list instead of the old one.
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            let now = session.config_options();
+            if now
+                .iter()
+                .any(|option| option.id == config_id && option.current_value == value)
+            {
+                return Ok(now);
+            }
+        }
+        Ok(session.config_options())
+    }
+
     /// Start an agent, initialize it, open a session, then close it.
     ///
     /// Used by the settings probe. A wrong flag, a missing binary, and an

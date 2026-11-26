@@ -34,6 +34,20 @@ describe("AgentCommandMenu", () => {
     expect(onPick).toHaveBeenCalledWith(commands[1]);
   });
 
+  it("scrolls inside a bounded box instead of growing with the composer", () => {
+    const many = Array.from({ length: 25 }, (_, index) => ({
+      name: `command-${index}`,
+      description: "x",
+    }));
+    render(<AgentCommandMenu draft="/" commands={many} onPick={vi.fn()} />);
+    const listbox = screen.getByRole("listbox");
+    // A static list used to push the textarea down and fill the screen.
+    expect(listbox.className).toContain("absolute");
+    expect(listbox.className).toContain("overflow-y-auto");
+    expect(listbox.className).toContain("max-h-");
+    expect(screen.getByText("25 commands · run by the agent itself")).toBeInTheDocument();
+  });
+
   it("shows the argument hint so the shape is obvious", () => {
     render(<AgentCommandMenu draft="/" commands={commands} onPick={vi.fn()} />);
     expect(screen.getByText("<query>")).toBeInTheDocument();

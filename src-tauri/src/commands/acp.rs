@@ -42,6 +42,51 @@ pub struct AgentCommandView {
     pub input_hint: Option<String>,
 }
 
+/// One selectable value of an agent config option.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentConfigChoiceView {
+    pub value: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+/// A model, thinking level, mode, or any other option the agent exposes.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentConfigOptionView {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub current_value: String,
+    pub choices: Vec<AgentConfigChoiceView>,
+    pub kind: String,
+}
+
+fn config_view(options: Vec<mcp_chat_core::acp::ConfigOption>) -> Vec<AgentConfigOptionView> {
+    options
+        .into_iter()
+        .map(|option| AgentConfigOptionView {
+            id: option.id,
+            name: option.name,
+            description: option.description,
+            category: option.category,
+            current_value: option.current_value,
+            kind: option.kind,
+            choices: option
+                .choices
+                .into_iter()
+                .map(|choice| AgentConfigChoiceView {
+                    value: choice.value,
+                    name: choice.name,
+                    description: choice.description,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpPresetView {
@@ -270,4 +315,31 @@ pub async fn get_agent_commands(
             input_hint: command.input_hint,
         })
         .collect())
+}
+
+/// The agent's configurable options for this chat.
+#[tauri::command]
+pub async fn get_agent_config(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> CmdResult<Vec<AgentConfigOptionView>> {
+    Ok(config_view(
+        state.engine.agent_config(&conversation_id).await,
+    ))
+}
+
+/// Change one agent option, such as the model or mode.
+#[tauri::command]
+pub async fn set_agent_config(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    config_id: String,
+    value: String,
+) -> CmdResult<Vec<AgentConfigOptionView>> {
+    let options = state
+        .engine
+        .set_agent_config(&conversation_id, &config_id, &value)
+        .await
+        .map_err(cmd_err)?;
+    Ok(config_view(options))
 }

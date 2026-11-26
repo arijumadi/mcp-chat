@@ -549,3 +549,25 @@ export interface AgentCommand {
   description: string;
   inputHint?: string | null;
 }
+
+export interface AgentConfigChoice {
+  value: string;
+  name: string;
+  description?: string | null;
+}
+
+/**
+ * A model, thinking level, mode, or other option the agent exposes. Agents
+ * differ in where they publish this: Antigravity returns it with the session,
+ * OpenCode also announces changes later.
+ */
+export interface AgentConfigOption {
+  id: string;
+  name: string;
+  description?: string | null;
+  category?: string | null;
+  currentValue: string;
+  choices: AgentConfigChoice[];
+  /** `select` or `boolean`. */
+  kind: string;
+}
