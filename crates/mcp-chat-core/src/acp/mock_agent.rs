@@ -28,6 +28,34 @@ fn text_of(params: &Value) -> String {
         .unwrap_or_default()
 }
 
+/// Two models, so a test can change one and observe the result.
+fn mock_config_options(current: &str) -> Value {
+    json!([
+        {
+            "id": "model",
+            "name": "Model",
+            "category": "model",
+            "type": "select",
+            "currentValue": current,
+            "options": [
+                { "value": "mock-model-a", "name": "Mock Model A" },
+                { "value": "mock-model-b", "name": "Mock Model B" }
+            ]
+        },
+        {
+            "id": "mode",
+            "name": "Mode",
+            "category": "mode",
+            "type": "select",
+            "currentValue": "build",
+            "options": [
+                { "value": "build", "name": "Build" },
+                { "value": "plan", "name": "Plan" }
+            ]
+        }
+    ])
+}
+
 fn chunk(session: &str, text: &str) {
     write(json!({
         "jsonrpc": "2.0",
@@ -114,6 +142,7 @@ pub fn run(scenario: &str) {
     let mut reader = stdin.lock();
     let mut turn = 0_u32;
     let mut session_id = "mock-session".to_owned();
+    let mut session_config = "mock-model-a".to_owned();
     let mut pending: Option<PendingTurn> = None;
     let mut line = String::new();
 
@@ -173,9 +202,30 @@ pub fn run(scenario: &str) {
                 write(json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "result": { "sessionId": session_id }
+                    "result": {
+                        "sessionId": session_id,
+                        "configOptions": mock_config_options(&session_config)
+                    }
                 }));
                 announce_commands(&session_id);
+            }
+            "session/set_config_option" => {
+                let config_id = params
+                    .get("configId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("model");
+                let value = params
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .unwrap_or("mock-model-a");
+                if config_id == "model" {
+                    session_config = value.to_owned();
+                }
+                write(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": { "configOptions": mock_config_options(&session_config) }
+                }));
             }
             "session/resume" => {
                 // Echo the id the client asked for, as a real agent does.
@@ -187,7 +237,10 @@ pub fn run(scenario: &str) {
                 write(json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "result": { "sessionId": session_id }
+                    "result": {
+                        "sessionId": session_id,
+                        "configOptions": mock_config_options(&session_config)
+                    }
                 }));
                 announce_commands(&session_id);
             }

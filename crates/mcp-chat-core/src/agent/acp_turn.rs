@@ -191,9 +191,12 @@ async fn stream_turn(
                 run.upsert_tool(&call_id, &title, kind, &status, detail)
                     .await;
             }
-            // Plans and the agent's command list are metadata: the pump already
-            // stored the commands, and neither belongs in the transcript.
-            AcpEvent::Plan(_) | AcpEvent::PermissionRequested { .. } | AcpEvent::Commands(_) => {}
+            // Plans, the command list, and config options are metadata: the pump
+            // already stored them, and none belongs in the transcript.
+            AcpEvent::Plan(_)
+            | AcpEvent::PermissionRequested { .. }
+            | AcpEvent::Commands(_)
+            | AcpEvent::ConfigOptions(_) => {}
             AcpEvent::TurnEnded { .. } => break,
             AcpEvent::TurnFailed { message } => {
                 run.failure = Some(message);

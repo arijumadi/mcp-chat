@@ -9,6 +9,7 @@ import { create } from "zustand";
 import { call, subscribe } from "@/lib/ipc";
 import type {
   AgentCommand,
+  AgentConfigOption,
   AppInfo,
   ApprovalEvent,
   Attachment,
@@ -60,6 +61,8 @@ export interface AppStore {
   bootError: string | null;
   /// Slash commands of the ACP agent bound to the active chat.
   agentCommands: AgentCommand[];
+  /// Model, thinking level, mode, and anything else the agent exposes.
+  agentConfig: AgentConfigOption[];
   conversations: Conversation[];
   conversationLimit: number;
   conversationHasMore: boolean;
@@ -98,6 +101,8 @@ export interface AppStore {
   init: () => Promise<void>;
   refreshConversations: () => Promise<void>;
   refreshAgentCommands: (conversationId: string) => Promise<void>;
+  refreshAgentConfig: (conversationId: string) => Promise<void>;
+  setAgentConfig: (conversationId: string, configId: string, value: string) => Promise<void>;
   loadMoreConversations: () => Promise<void>;
   refreshProviders: () => Promise<void>;
   refreshServers: () => Promise<void>;
@@ -175,6 +180,7 @@ export const useApp = create<AppStore>()((set, get) => ({
   booted: false,
   bootError: null,
   agentCommands: [],
+  agentConfig: [],
   conversations: [],
   conversationLimit: 200,
   conversationHasMore: false,
@@ -262,6 +268,30 @@ export const useApp = create<AppStore>()((set, get) => ({
       // An internal chat simply has none; a failure here must not disturb the
       // composer.
       set({ agentCommands: [] });
+    }
+  },
+
+  async refreshAgentConfig(conversationId: string) {
+    try {
+      const config = await call<AgentConfigOption[]>("get_agent_config", {
+        conversationId,
+      });
+      set({ agentConfig: config });
+    } catch {
+      set({ agentConfig: [] });
+    }
+  },
+
+  async setAgentConfig(conversationId: string, configId: string, value: string) {
+    try {
+      const config = await call<AgentConfigOption[]>("set_agent_config", {
+        conversationId,
+        configId,
+        value,
+      });
+      set({ agentConfig: config });
+    } catch (error) {
+      get().toast(String(error), "error");
     }
   },
 

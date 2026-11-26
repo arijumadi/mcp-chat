@@ -26,6 +26,7 @@ import { AutoApproveButton } from "./AutoApproveButton";
 import { AttachmentGrid } from "./Attachments";
 import { parseCompactCommand } from "./slashCommands";
 import { AgentCommandMenu } from "./AgentCommandMenu";
+import { AgentConfigPicker } from "./AgentConfigPicker";
 
 function contextRange(context: Pick<ContextItem, "startLine" | "endLine">): string {
   if (context.startLine == null) return "";
@@ -67,6 +68,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const active = BUSY_STATUSES.includes(status);
   const agentCommands = useApp((state) => state.agentCommands);
   const refreshAgentCommands = useApp((state) => state.refreshAgentCommands);
+  const refreshAgentConfig = useApp((state) => state.refreshAgentConfig);
   const isAcp = Boolean(conversation.acpAgent);
   const disabled = providers.length === 0;
   const hasContent =
@@ -77,11 +79,15 @@ export function Composer({ conversation }: { conversation: Conversation }) {
 
   useEffect(() => {
     void refreshAgentCommands(conversation.id);
-  }, [conversation.id, refreshAgentCommands]);
+    void refreshAgentConfig(conversation.id);
+  }, [conversation.id, refreshAgentCommands, refreshAgentConfig]);
 
   useEffect(() => {
-    if (!active) void refreshAgentCommands(conversation.id);
-  }, [active, conversation.id, refreshAgentCommands]);
+    if (!active) {
+      void refreshAgentCommands(conversation.id);
+      void refreshAgentConfig(conversation.id);
+    }
+  }, [active, conversation.id, refreshAgentCommands, refreshAgentConfig]);
 
   useEffect(() => {
     const textarea = ref.current;
@@ -431,20 +437,36 @@ export function Composer({ conversation }: { conversation: Conversation }) {
             </div>
           ) : null}
           {isAcp ? (
-            <AgentCommandMenu
-              draft={value}
-              commands={agentCommands}
-              onPick={(command) => {
-                setValue(`/${command.name}${command.inputHint ? " " : ""}`);
-                ref.current?.focus();
-              }}
-            />
+            <div className="relative">
+              <AgentCommandMenu
+                draft={value}
+                commands={agentCommands}
+                onPick={(command) => {
+                  setValue(`/${command.name}${command.inputHint ? " " : ""}`);
+                  ref.current?.focus();
+                }}
+              />
+            </div>
           ) : null}
           <textarea
             ref={ref}
             value={value}
             onChange={(event) => setValue(event.target.value)}
             onKeyDown={(event) => {
+              // While the suggestion menu is open it owns arrows and Enter, so
+              // the composer does not send a half-typed command.
+              const menu = document.querySelector('[role="listbox"][aria-label="Agent commands"]');
+              if (
+                menu &&
+                (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter")
+              ) {
+                event.preventDefault();
+                (menu as HTMLElement).focus();
+                menu.dispatchEvent(
+                  new KeyboardEvent("keydown", { key: event.key, bubbles: true }),
+                );
+                return;
+              }
               if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 submit();
@@ -481,6 +503,9 @@ export function Composer({ conversation }: { conversation: Conversation }) {
               )}
             </button>
             <AgentPicker conversation={conversation} disabled={active} />
+            {conversation.acpAgent ? (
+              <AgentConfigPicker conversation={conversation} disabled={active} />
+            ) : null}
             {conversation.acpAgent ? null : (
               <>
                 <ModelPicker conversation={conversation} disabled={active} />

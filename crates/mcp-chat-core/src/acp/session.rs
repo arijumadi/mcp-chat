@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::error::AcpError;
-use super::events::{AcpEvent, AgentCommand};
+use super::events::{AcpEvent, AgentCommand, ConfigChoice, ConfigOption};
 use super::process::AgentProcess;
 
 /// How to answer one permission request.
@@ -48,6 +48,9 @@ pub struct PermissionRequestInfo {
 /// The agent's slash commands, shared between the pump and the handle.
 type CommandStore = Arc<std::sync::Mutex<Vec<AgentCommand>>>;
 
+/// The agent's configurable options, shared the same way.
+type ConfigStore = Arc<std::sync::Mutex<Vec<ConfigOption>>>;
+
 pub type PermissionHandler =
     Arc<dyn Fn(PermissionRequestInfo) -> BoxFuture<'static, PermissionDecision> + Send + Sync>;
 
@@ -55,6 +58,13 @@ pub type PermissionHandler =
 enum Command {
     Prompt(Vec<agent_client_protocol::v1::schema::ContentBlock>),
     Close,
+}
+
+/// A config change waiting for the pump to send it.
+#[derive(Debug, Clone)]
+pub struct ConfigChange {
+    pub config_id: String,
+    pub value: String,
 }
 
 /// Handle to one live session.
@@ -76,6 +86,9 @@ pub struct AcpSession {
     /// new set. Kept on the handle so the composer can ask at any time without
     /// needing a turn in flight.
     commands: CommandStore,
+    /// Model, thinking level, mode and any other option the agent exposes.
+    config: ConfigStore,
+    changes: mpsc::UnboundedSender<ConfigChange>,
     /// Cleared by the pump when the process or connection ends, so the manager
     /// can drop a dead session instead of leaking one of its slots.
     alive: Arc<std::sync::atomic::AtomicBool>,
@@ -120,6 +133,31 @@ impl AcpSession {
         self.commands
             .lock()
             .map(|commands| commands.clone())
+            .unwrap_or_default()
+    }
+
+    /// Ask the agent to change one option, such as the model or mode.
+    ///
+    /// The authoritative list comes back through `config_option_update`; this
+    /// only sends the request.
+    pub fn set_config(
+        &self,
+        config_id: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Result<(), AcpError> {
+        self.changes
+            .send(ConfigChange {
+                config_id: config_id.into(),
+                value: value.into(),
+            })
+            .map_err(|_| AcpError::Inactive)
+    }
+
+    /// The agent's current configurable options.
+    pub fn config_options(&self) -> Vec<ConfigOption> {
+        self.config
+            .lock()
+            .map(|options| options.clone())
             .unwrap_or_default()
     }
 
@@ -207,6 +245,7 @@ pub async fn open(
 
     let transport = ByteStreams::new(stdin.compat_write(), stdout.compat());
     let (prompt_tx, prompt_rx) = mpsc::unbounded_channel();
+    let (change_tx, change_rx) = mpsc::unbounded_channel();
     let (ready_tx, ready_rx) = oneshot::channel::<Result<SessionReady, AcpError>>();
     let permissions = spec.permissions.clone();
     let cwd = spec.cwd.to_path_buf();
@@ -216,6 +255,8 @@ pub async fn open(
     let pump_alive = alive.clone();
     let commands: CommandStore = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pump_commands = commands.clone();
+    let config: ConfigStore = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pump_config = config.clone();
     let pump_tail = stderr_tail.clone();
     let pump = tokio::spawn(async move {
         let result = drive(
@@ -227,6 +268,8 @@ pub async fn open(
                 cwd,
                 resume,
                 commands: pump_commands,
+                config: pump_config,
+                changes: change_rx,
                 ready: ready_tx,
             },
         )
@@ -271,6 +314,8 @@ pub async fn open(
         supports_close: ready.supports_close,
         agent_info: ready.agent_info,
         commands,
+        config,
+        changes: change_tx,
         accepts_images: ready.accepts_images,
         accepts_embedded_context: ready.accepts_embedded_context,
         alive,
@@ -279,6 +324,124 @@ pub async fn open(
         connection: ready.connection,
         acp_id: ready.session_id,
     })
+}
+
+/// Normalise one protocol config option into the app's shape.
+fn normalise_option(
+    option: &agent_client_protocol::v1::schema::SessionConfigOption,
+) -> ConfigOption {
+    use agent_client_protocol::v1::schema::{SessionConfigKind, SessionConfigSelectOptions};
+    let (kind, current_value, choices) = match &option.kind {
+        SessionConfigKind::Select(select) => {
+            let choices = match &select.options {
+                SessionConfigSelectOptions::Ungrouped(items) => items
+                    .iter()
+                    .map(|item| ConfigChoice {
+                        value: item.value.to_string(),
+                        name: item.name.clone(),
+                        description: item.description.clone(),
+                    })
+                    .collect(),
+                SessionConfigSelectOptions::Grouped(groups) => groups
+                    .iter()
+                    .flat_map(|group| group.options.iter())
+                    .map(|item| ConfigChoice {
+                        value: item.value.to_string(),
+                        name: item.name.clone(),
+                        description: item.description.clone(),
+                    })
+                    .collect(),
+                // Non-exhaustive: an unknown shape simply shows no choices.
+                _ => Vec::new(),
+            };
+            (
+                "select".to_owned(),
+                select.current_value.to_string(),
+                choices,
+            )
+        }
+        SessionConfigKind::Boolean(boolean) => (
+            "boolean".to_owned(),
+            boolean.current_value.to_string(),
+            Vec::new(),
+        ),
+        _ => ("unknown".to_owned(), String::new(), Vec::new()),
+    };
+    ConfigOption {
+        id: option.id.to_string(),
+        name: option.name.clone(),
+        description: option.description.clone(),
+        category: option.category.as_ref().map(wire_name),
+        current_value,
+        choices,
+        kind,
+    }
+}
+
+/// Read the options an agent returned with a new or resumed session.
+///
+/// Both responses carry the same stable `SessionConfigOption` list; agents that
+/// do not support options simply omit it.
+fn config_from_new(
+    response: &agent_client_protocol::v1::schema::NewSessionResponse,
+) -> Vec<ConfigOption> {
+    response
+        .config_options
+        .as_ref()
+        .map(|options| options.iter().map(normalise_option).collect())
+        .unwrap_or_default()
+}
+
+fn config_from_resume(
+    response: &agent_client_protocol::v1::schema::ResumeSessionResponse,
+) -> Vec<ConfigOption> {
+    response
+        .config_options
+        .as_ref()
+        .map(|options| options.iter().map(normalise_option).collect())
+        .unwrap_or_default()
+}
+
+/// Also fold in the legacy `modes` field, which older agents send instead of a
+/// `mode` config option.
+fn modes_as_option(
+    modes: &Option<agent_client_protocol::v1::schema::SessionModeState>,
+) -> Option<ConfigOption> {
+    let modes = modes.as_ref()?;
+    if modes.available_modes.is_empty() {
+        return None;
+    }
+    Some(ConfigOption {
+        id: "mode".to_owned(),
+        name: "Mode".to_owned(),
+        description: None,
+        category: Some("mode".to_owned()),
+        current_value: modes.current_mode_id.to_string(),
+        choices: modes
+            .available_modes
+            .iter()
+            .map(|mode| ConfigChoice {
+                value: mode.id.to_string(),
+                name: mode.name.clone(),
+                description: mode.description.clone(),
+            })
+            .collect(),
+        kind: "select".to_owned(),
+    })
+}
+
+/// Merge the stable option list with the legacy modes field, preferring the
+/// explicit `mode` option when an agent sends both.
+fn merge_modes(
+    mut options: Vec<ConfigOption>,
+    modes: &Option<agent_client_protocol::v1::schema::SessionModeState>,
+) -> Vec<ConfigOption> {
+    if let Some(legacy) = modes_as_option(modes) {
+        if !options.iter().any(|option| option.id == "mode") {
+            options.push(legacy);
+        }
+    }
+    options
 }
 
 /// What the caller needs once the connection is live.
@@ -302,6 +465,8 @@ struct Pump {
     cwd: std::path::PathBuf,
     resume: Option<String>,
     commands: CommandStore,
+    config: ConfigStore,
+    changes: mpsc::UnboundedReceiver<ConfigChange>,
     ready: oneshot::Sender<Result<SessionReady, AcpError>>,
 }
 
@@ -316,6 +481,8 @@ where
         cwd,
         resume,
         commands,
+        config,
+        mut changes,
         ready,
     } = pump;
     let outcome = Client
@@ -355,14 +522,11 @@ where
             // or the app was restarted against a different agent state) must
             // fall back to a fresh session rather than fail the turn.
             let mut resumed = false;
-            let new_session = || async {
-                cx.build_session(&cwd)
-                    .block_task()
-                    .start_session()
-                    .await
-                    .map(|setup| setup.session)
-            };
-            let mut session = match (resume, supports_resume) {
+            let new_session =
+                || async { cx.build_session(&cwd).block_task().start_session().await };
+            // Both arms must yield the same pair, so the option list always
+            // belongs to the session that actually opened.
+            let (mut session, session_config) = match (resume, supports_resume) {
                 (Some(session_id), true) => {
                     match cx
                         .resume_session(session_id, &cwd)
@@ -372,14 +536,24 @@ where
                     {
                         Ok(setup) => {
                             resumed = true;
-                            setup.session
+                            let config = merge_modes(
+                                config_from_resume(&setup.response),
+                                &setup.response.modes,
+                            );
+                            (setup.session, config)
                         }
                         Err(error) => {
                             tracing::debug!(
                                 "ACP session resume failed, starting a new session: {error}"
                             );
                             match new_session().await {
-                                Ok(session) => session,
+                                Ok(setup) => {
+                                    let config = merge_modes(
+                                        config_from_new(&setup.response),
+                                        &setup.response.modes,
+                                    );
+                                    (setup.session, config)
+                                }
                                 Err(error) => {
                                     let _ = ready.send(Err(map_error(error, &facts)));
                                     return Ok(());
@@ -389,13 +563,26 @@ where
                     }
                 }
                 _ => match new_session().await {
-                    Ok(session) => session,
+                    Ok(setup) => {
+                        let config =
+                            merge_modes(config_from_new(&setup.response), &setup.response.modes);
+                        (setup.session, config)
+                    }
                     Err(error) => {
                         let _ = ready.send(Err(map_error(error, &facts)));
                         return Ok(());
                     }
                 },
             };
+
+            // Agents put the initial options in the setup response; the UI can
+            // read them the moment the session is announced.
+            if let Ok(mut stored) = config.lock() {
+                *stored = session_config.clone();
+            }
+            if !session_config.is_empty() {
+                let _ = events.send(AcpEvent::ConfigOptions(session_config));
+            }
 
             let _ = ready.send(Ok(SessionReady {
                 connection: session.connection().clone(),
@@ -422,13 +609,59 @@ where
                         None => break 'turn,
                     },
                     update = session.read_update() => Next::Update(Box::new(update)),
+                    change = changes.recv() => match change {
+                        Some(change) => Next::Change(change),
+                        None => break 'turn,
+                    },
                 };
 
                 match next {
+                    Next::Change(change) => {
+                        // The response carries the full updated list, which is
+                        // authoritative; store it before the UI asks again.
+                        use agent_client_protocol::v1::schema::{
+                            SessionConfigOptionValue, SetSessionConfigOptionRequest,
+                        };
+                        let request = SetSessionConfigOptionRequest::new(
+                            session.session_id().clone(),
+                            change.config_id,
+                            SessionConfigOptionValue::value_id(change.value),
+                        );
+                        match session
+                            .connection()
+                            .send_request(request)
+                            .block_task()
+                            .await
+                        {
+                            Ok(response) => {
+                                let next: Vec<ConfigOption> = response
+                                    .config_options
+                                    .iter()
+                                    .map(normalise_option)
+                                    .collect();
+                                if let Ok(mut stored) = config.lock() {
+                                    *stored = next.clone();
+                                }
+                                let _ = events.send(AcpEvent::ConfigOptions(next));
+                            }
+                            Err(error) => {
+                                tracing::debug!("ACP config change failed: {error}");
+                                let _ = events.send(AcpEvent::TurnFailed {
+                                    message: format!("The agent rejected that setting: {error}"),
+                                });
+                            }
+                        }
+                    }
                     Next::Update(result) => match *result {
                         Ok(SessionMessage::Message(dispatch)) => {
-                            handle_dispatch(dispatch.into_raw(), &events, &permissions, &commands)
-                                .await;
+                            handle_dispatch(
+                                dispatch.into_raw(),
+                                &events,
+                                &permissions,
+                                &commands,
+                                &config,
+                            )
+                            .await;
                         }
                         // A prompt response with no turn in flight is stale;
                         // there is nothing to settle.
@@ -491,6 +724,7 @@ where
                                         &events,
                                         &permissions,
                                         &commands,
+                                        &config,
                                     )
                                     .await;
                                 }
@@ -522,6 +756,7 @@ where
 /// What the idle pump can wake up for.
 enum Next {
     Command(Command),
+    Change(ConfigChange),
     // Boxed: a `Result<SessionMessage, _>` is far larger than a `Command`, and
     // the pump wakes up for one or the other thousands of times a turn.
     Update(Box<Result<SessionMessage, agent_client_protocol::Error>>),
@@ -532,9 +767,11 @@ async fn handle_dispatch(
     events: &mpsc::UnboundedSender<AcpEvent>,
     permissions: &PermissionHandler,
     commands: &CommandStore,
+    config: &ConfigStore,
 ) {
     let events_for_update = events.clone();
     let commands_for_update = commands.clone();
+    let config_for_update = config.clone();
     let permissions = permissions.clone();
     let result = agent_client_protocol::util::MatchDispatch::new(dispatch)
         .if_notification(|notification: SessionNotification| async move {
@@ -542,6 +779,7 @@ async fn handle_dispatch(
                 notification.update,
                 &events_for_update,
                 &commands_for_update,
+                &config_for_update,
             );
             Ok(())
         })
@@ -573,6 +811,7 @@ fn emit_update(
     update: SessionUpdate,
     events: &mpsc::UnboundedSender<AcpEvent>,
     commands: &CommandStore,
+    config: &ConfigStore,
 ) {
     match update {
         SessionUpdate::AgentMessageChunk(chunk) => {
@@ -612,6 +851,14 @@ fn emit_update(
                 "{} plan entries",
                 plan.entries.len()
             )));
+        }
+        SessionUpdate::ConfigOptionUpdate(update) => {
+            let next: Vec<ConfigOption> =
+                update.config_options.iter().map(normalise_option).collect();
+            if let Ok(mut stored) = config.lock() {
+                *stored = next.clone();
+            }
+            let _ = events.send(AcpEvent::ConfigOptions(next));
         }
         SessionUpdate::AvailableCommandsUpdate(update) => {
             // The protocol replaces the whole set, so store and emit the same

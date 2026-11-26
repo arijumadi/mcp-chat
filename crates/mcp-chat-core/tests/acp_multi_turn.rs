@@ -370,3 +370,42 @@ async fn a_stored_session_id_is_resumed() {
 
     manager.close("child-resume").await.unwrap();
 }
+
+/// Agents publish the model, mode and effort with the session, not as slash
+/// commands. Antigravity and OpenCode both do this; `/model` in their own CLI
+/// is a shortcut for this option.
+#[tokio::test]
+async fn session_config_options_are_available_and_changeable() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    let manager = AcpManager::new();
+    let (handle, _events) = open_session(&manager, "child-config", &cwd, "echo").await;
+
+    let options = handle.config_options();
+    assert_eq!(options.len(), 2, "model and mode: {options:?}");
+    let model = options.iter().find(|option| option.id == "model").unwrap();
+    assert_eq!(model.kind, "select");
+    assert_eq!(model.current_value, "mock-model-a");
+    assert_eq!(model.choices.len(), 2);
+    assert_eq!(model.category.as_deref(), Some("model"));
+
+    handle.set_config("model", "mock-model-b").unwrap();
+    let mut updated = handle.config_options();
+    for _ in 0..100 {
+        updated = handle.config_options();
+        if updated
+            .iter()
+            .any(|option| option.id == "model" && option.current_value == "mock-model-b")
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let model = updated.iter().find(|option| option.id == "model").unwrap();
+    assert_eq!(
+        model.current_value, "mock-model-b",
+        "the agent's answer must replace the stored value"
+    );
+
+    manager.close("child-config").await.unwrap();
+}
