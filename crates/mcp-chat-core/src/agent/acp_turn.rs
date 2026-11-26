@@ -23,7 +23,7 @@ use crate::acp::AcpEvent;
 use crate::acp::session::{PermissionDecision, PermissionHandler, PermissionRequestInfo};
 use crate::agent::ChatEngine;
 use crate::agent::approvals::ApprovalDecision;
-use crate::db::repo::{acp_agents, messages};
+use crate::db::repo::{acp_agents, conversations, messages};
 use crate::events::{CoreEvent, TurnStatus};
 use crate::models::{MessageWithParts, PartPayload};
 use crate::{CoreError, Result};
@@ -60,18 +60,36 @@ pub async fn run_turn(
 
     let active = match engine.acp.take(spec.child_id).await {
         Some(active) => active,
-        None => engine
-            .acp
-            .open(crate::acp::session::SessionSpec {
-                local_id: spec.child_id.to_owned(),
-                command: &spec.agent.command,
-                args: &args,
-                env: &env,
-                cwd: spec.cwd,
-                permissions: handler,
-            })
+        None => {
+            // A stored id lets the agent continue the conversation after an
+            // app restart; the client falls back to a fresh session when the
+            // agent no longer knows it.
+            let resume = conversations::get(&engine.db.pool, spec.child_id)
+                .await
+                .ok()
+                .and_then(|conversation| conversation.acp_session_id);
+            let active = engine
+                .acp
+                .open(crate::acp::session::SessionSpec {
+                    local_id: spec.child_id.to_owned(),
+                    command: &spec.agent.command,
+                    args: &args,
+                    env: &env,
+                    cwd: spec.cwd,
+                    resume,
+                    permissions: handler,
+                })
+                .await
+                .map_err(|error| CoreError::Message(error.user_message()))?;
+            conversations::set_acp_session_id(
+                &engine.db.pool,
+                spec.child_id,
+                &active.handle.acp_session_id,
+            )
             .await
-            .map_err(|error| CoreError::Message(error.user_message()))?,
+            .ok();
+            active
+        }
     };
 
     let events = stream_turn(

@@ -58,6 +58,7 @@ async fn open_session_with(
             args: &argv,
             env: &[],
             cwd,
+            resume: None,
             permissions,
         })
         .await
