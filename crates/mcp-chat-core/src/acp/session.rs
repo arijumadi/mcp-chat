@@ -281,7 +281,14 @@ where
             // or the app was restarted against a different agent state) must
             // fall back to a fresh session rather than fail the turn.
             let mut resumed = false;
-            let setup = match (resume, supports_resume) {
+            let new_session = || async {
+                cx.build_session(&cwd)
+                    .block_task()
+                    .start_session()
+                    .await
+                    .map(|setup| setup.session)
+            };
+            let mut session = match (resume, supports_resume) {
                 (Some(session_id), true) => {
                     match cx
                         .resume_session(session_id, &cwd)
@@ -291,24 +298,29 @@ where
                     {
                         Ok(setup) => {
                             resumed = true;
-                            Ok(setup)
+                            setup.session
                         }
                         Err(error) => {
                             tracing::debug!(
                                 "ACP session resume failed, starting a new session: {error}"
                             );
-                            cx.build_session(&cwd).block_task().start_session().await
+                            match new_session().await {
+                                Ok(session) => session,
+                                Err(error) => {
+                                    let _ = ready.send(Err(map_sdk_error(error)));
+                                    return Ok(());
+                                }
+                            }
                         }
                     }
                 }
-                _ => cx.build_session(&cwd).block_task().start_session().await,
-            };
-            let SessionSetup { mut session, .. } = match setup {
-                Ok(setup) => setup,
-                Err(error) => {
-                    let _ = ready.send(Err(map_sdk_error(error)));
-                    return Ok(());
-                }
+                _ => match new_session().await {
+                    Ok(session) => session,
+                    Err(error) => {
+                        let _ = ready.send(Err(map_sdk_error(error)));
+                        return Ok(());
+                    }
+                },
             };
 
             let _ = ready.send(Ok(SessionReady {
