@@ -131,7 +131,7 @@ async fn an_acp_subagent_runs_and_reports_back() {
 }
 
 #[tokio::test]
-async fn an_acp_child_refuses_a_direct_message() {
+async fn an_acp_child_accepts_a_message_but_refuses_a_history_edit() {
     let harness = Harness::new().await;
     harness.register_agent("mock", "echo").await;
     let (_message_id, part_id) = harness.parent_tool_part().await;
@@ -149,28 +149,23 @@ async fn an_acp_child_refuses_a_direct_message() {
         .unwrap();
     let _ = wait_for_report(&harness, 40).await;
 
-    // ACP children are driven by the agent, so a direct send must be refused
-    // rather than silently starting the LLM loop.
-    let error = harness
+    // A message is fine: the agent runs the turn. What Jarvis must refuse is
+    // rewriting the history the agent owns.
+    harness
         .engine
         .send_message(&child_id, "direct")
         .await
-        .expect_err("ACP child must refuse a direct message");
+        .expect("a message is routed to the agent");
+
+    let error = harness
+        .engine
+        .regenerate(&child_id)
+        .await
+        .expect_err("regenerate must be refused");
     assert!(
-        error.user_message().contains("ACP agent"),
+        error.user_message().contains("keeps its own history"),
         "{}",
         error.user_message()
-    );
-
-    // And the refusal must not have written a message.
-    let history = messages::list_for_conversation(&harness.db.pool, &child_id)
-        .await
-        .unwrap();
-    assert!(
-        !history
-            .iter()
-            .any(|item| matches!(&item.parts[..], [part] if part.payload()["text"] == "direct")),
-        "a refused send must leave no message behind"
     );
 }
 
