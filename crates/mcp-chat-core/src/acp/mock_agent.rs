@@ -28,12 +28,12 @@ fn text_of(params: &Value) -> String {
         .unwrap_or_default()
 }
 
-fn chunk(text: &str) {
+fn chunk(session: &str, text: &str) {
     write(json!({
         "jsonrpc": "2.0",
         "method": "session/update",
         "params": {
-            "sessionId": "mock-session",
+            "sessionId": session,
             "update": {
                 "sessionUpdate": "agent_message_chunk",
                 "content": { "type": "text", "text": text }
@@ -46,12 +46,12 @@ fn chunk(text: &str) {
 ///
 /// Real agents send this right after a session is created, which is before any
 /// prompt, so the client has to read updates while idle to see it.
-fn announce_commands() {
+fn announce_commands(session: &str) {
     write(json!({
         "jsonrpc": "2.0",
         "method": "session/update",
         "params": {
-            "sessionId": "mock-session",
+            "sessionId": session,
             "update": {
                 "sessionUpdate": "available_commands_update",
                 "availableCommands": [
@@ -113,6 +113,7 @@ pub fn run(scenario: &str) {
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
     let mut turn = 0_u32;
+    let mut session_id = "mock-session".to_owned();
     let mut pending: Option<PendingTurn> = None;
     let mut line = String::new();
 
@@ -147,10 +148,10 @@ pub fn run(scenario: &str) {
                     .and_then(|outcome| outcome.get("optionId"))
                     .and_then(Value::as_str)
                     .unwrap_or("none");
-                chunk(&format!(
-                    "{} permission={kind} option={option}",
-                    waiting.answer
-                ));
+                chunk(
+                    &session_id,
+                    &format!("{} permission={kind} option={option}", waiting.answer),
+                );
                 finish(&waiting.prompt_id, "end_turn");
             }
             continue;
@@ -168,16 +169,17 @@ pub fn run(scenario: &str) {
                 }
             })),
             "session/new" => {
+                session_id = "mock-session".to_owned();
                 write(json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "result": { "sessionId": "mock-session" }
+                    "result": { "sessionId": session_id }
                 }));
-                announce_commands();
+                announce_commands(&session_id);
             }
             "session/resume" => {
                 // Echo the id the client asked for, as a real agent does.
-                let requested = params
+                session_id = params
                     .get("sessionId")
                     .and_then(Value::as_str)
                     .unwrap_or("mock-session")
@@ -185,9 +187,9 @@ pub fn run(scenario: &str) {
                 write(json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "result": { "sessionId": requested }
+                    "result": { "sessionId": session_id }
                 }));
-                announce_commands();
+                announce_commands(&session_id);
             }
             "session/prompt" => {
                 turn += 1;
@@ -202,7 +204,7 @@ pub fn run(scenario: &str) {
                             "jsonrpc": "2.0",
                             "method": "session/update",
                             "params": {
-                                "sessionId": "mock-session",
+                                "sessionId": session_id,
                                 "update": {
                                     "sessionUpdate": "tool_call",
                                     "toolCallId": "call-1",
@@ -212,7 +214,7 @@ pub fn run(scenario: &str) {
                                 }
                             }
                         }));
-                        chunk("Checking the file first.");
+                        chunk(&session_id, "Checking the file first.");
                         finish(&id, "end_turn");
                     }
                     "permission" => {
@@ -223,7 +225,7 @@ pub fn run(scenario: &str) {
                             "method": "session/request_permission",
                             "id": 9001,
                             "params": {
-                                "sessionId": "mock-session",
+                                "sessionId": session_id,
                                 "toolCall": {
                                     "toolCallId": "call-1",
                                     "title": "Run tests",
@@ -253,7 +255,7 @@ pub fn run(scenario: &str) {
                         });
                     }
                     _ => {
-                        chunk(&format!("turn {turn} answer: {prompt}"));
+                        chunk(&session_id, &format!("turn {turn} answer: {prompt}"));
                         finish(&id, "end_turn");
                     }
                 }
