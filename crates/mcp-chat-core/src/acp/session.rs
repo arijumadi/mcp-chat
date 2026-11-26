@@ -489,10 +489,13 @@ where
         .v1()
         .name("jarvis")
         .connect_with(transport, async move |cx| {
-            let initialized = cx
-                .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                .block_task()
-                .await;
+            // Advertise only what this client can actually answer. A
+            // capability is a promise: an agent that is told `readTextFile`
+            // will call it, and answering method-not-found is worse than
+            // never offering it.
+            let mut initialize = InitializeRequest::new(ProtocolVersion::V1);
+            initialize.client_capabilities.fs.read_text_file = true;
+            let initialized = cx.send_request(initialize).block_task().await;
             let initialized = match initialized {
                 Ok(response) => response,
                 Err(error) => {
@@ -660,6 +663,7 @@ where
                                 &permissions,
                                 &commands,
                                 &config,
+                                &cwd,
                             )
                             .await;
                         }
@@ -725,6 +729,7 @@ where
                                         &permissions,
                                         &commands,
                                         &config,
+                                        &cwd,
                                     )
                                     .await;
                                 }
@@ -768,7 +773,9 @@ async fn handle_dispatch(
     permissions: &PermissionHandler,
     commands: &CommandStore,
     config: &ConfigStore,
+    workspace: &std::path::Path,
 ) {
+    let cwd = workspace.to_path_buf();
     let events_for_update = events.clone();
     let commands_for_update = commands.clone();
     let config_for_update = config.clone();
@@ -783,6 +790,21 @@ async fn handle_dispatch(
             );
             Ok(())
         })
+        .await
+        .if_request(
+            |request: agent_client_protocol::v1::schema::ReadTextFileRequest,
+             responder: agent_client_protocol::Responder<
+                agent_client_protocol::v1::schema::ReadTextFileResponse,
+            >| {
+                let root = cwd.clone();
+                async move {
+                    match read_text_file(&request, &root) {
+                        Ok(response) => responder.respond(response),
+                        Err(error) => responder.respond_with_error(error),
+                    }
+                }
+            },
+        )
         .await
         .if_request(
             |request: RequestPermissionRequest,
@@ -943,6 +965,53 @@ fn permission_locations(request: &RequestPermissionRequest) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Answer `fs/read_text_file`.
+///
+/// The agent runs with the workspace as its cwd, but it may still ask for any
+/// absolute path. Jarvis confines reads to that workspace: an agent must not be
+/// able to read `~/.ssh` through the client just because it asked nicely.
+fn read_text_file(
+    request: &agent_client_protocol::v1::schema::ReadTextFileRequest,
+    workspace: &std::path::Path,
+) -> Result<agent_client_protocol::v1::schema::ReadTextFileResponse, agent_client_protocol::Error> {
+    use agent_client_protocol::v1::schema::ReadTextFileResponse;
+
+    const MAX_LINES: u32 = 4_000;
+
+    let path = &request.path;
+    let allowed = path.starts_with(workspace)
+        || path
+            .canonicalize()
+            .map(|resolved| crate::agent::tools::path_is_within(workspace, &resolved))
+            .unwrap_or(false);
+    if !allowed {
+        // An empty file would look like a real, empty file to the agent. Say
+        // what happened instead: it asked for something outside the workspace.
+        tracing::debug!(path = %path.display(), "refused an out-of-workspace read");
+        return Err(agent_client_protocol::Error::invalid_params()
+            .data(format!("{path:?} is outside the workspace")));
+    }
+
+    let content = std::fs::read_to_string(path).map_err(|error| {
+        tracing::debug!(path = %path.display(), %error, "ACP file read failed");
+        agent_client_protocol::Error::invalid_params()
+            .data(format!("cannot read {path:?}: {error}"))
+    })?;
+    // Honour the requested window so a large file does not flood the agent.
+    let start = request.line.unwrap_or(1).max(1) as usize;
+    let limit = request.limit.unwrap_or(MAX_LINES).min(MAX_LINES) as usize;
+    if start == 1 && limit >= content.lines().count() {
+        return Ok(ReadTextFileResponse::new(content));
+    }
+    let window: String = content
+        .lines()
+        .skip(start - 1)
+        .take(limit)
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(ReadTextFileResponse::new(window))
+}
+
 fn permission_info(request: &RequestPermissionRequest) -> PermissionRequestInfo {
     PermissionRequestInfo {
         title: request
@@ -1068,6 +1137,49 @@ mod tests {
             diffs: Vec::new(),
             locations: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_read_inside_the_workspace_is_returned() {
+        use agent_client_protocol::v1::schema::ReadTextFileRequest;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let file = root.join("notes.txt");
+        std::fs::write(&file, "alpha\nbeta\ngamma\n").unwrap();
+
+        let request = ReadTextFileRequest::new("s1", &file);
+        let response = read_text_file(&request, &root).expect("inside the workspace");
+        assert_eq!(response.content, "alpha\nbeta\ngamma\n");
+    }
+
+    #[test]
+    fn a_read_outside_the_workspace_is_refused_not_returned_empty() {
+        use agent_client_protocol::v1::schema::ReadTextFileRequest;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let outside = dir.path().parent().unwrap().join("secret.txt");
+        std::fs::write(&outside, "do not read me").unwrap();
+
+        let request = ReadTextFileRequest::new("s1", &outside);
+        let error = read_text_file(&request, &root).expect_err("outside must be refused");
+        // An empty file would look legitimate to the agent; an error tells the
+        // truth.
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn a_line_window_is_honoured() {
+        use agent_client_protocol::v1::schema::ReadTextFileRequest;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let file = root.join("long.txt");
+        std::fs::write(&file, "1\n2\n3\n4\n5\n").unwrap();
+
+        let mut request = ReadTextFileRequest::new("s1", &file);
+        request.line = Some(2);
+        request.limit = Some(2);
+        let response = read_text_file(&request, &root).unwrap();
+        assert_eq!(response.content, "2\n3");
     }
 
     #[test]

@@ -29,6 +29,7 @@ pub use skills::{
     SkillInfo, disabled_skill_names, global_skills_dir, set_skill_enabled, skill_catalog,
     skill_catalog_infos, skill_roots,
 };
+pub(crate) use workspace::path_is_within;
 pub(crate) use workspace::{display_relative, path_is_outside, resolve_write_path};
 pub use workspace::{resolve_workspace_path, workspace_root, workspace_root_for_conversation};
 

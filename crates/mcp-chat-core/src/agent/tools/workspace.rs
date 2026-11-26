@@ -88,7 +88,7 @@ pub(super) fn simplify_path(path: &Path) -> PathBuf {
 }
 
 #[cfg(windows)]
-pub(super) fn path_is_within(root: &Path, path: &Path) -> bool {
+pub(crate) fn path_is_within(root: &Path, path: &Path) -> bool {
     let root = simplify_path(root);
     let path = simplify_path(path);
     let mut root_parts = root.components();
@@ -111,7 +111,7 @@ pub(super) fn path_is_within(root: &Path, path: &Path) -> bool {
 }
 
 #[cfg(not(windows))]
-pub(super) fn path_is_within(root: &Path, path: &Path) -> bool {
+pub(crate) fn path_is_within(root: &Path, path: &Path) -> bool {
     path.starts_with(root)
 }
 
