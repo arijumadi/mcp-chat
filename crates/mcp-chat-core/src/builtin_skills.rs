@@ -236,23 +236,6 @@ const BUILTIN_SKILLS: &[BundledSkill] = &[
             ),
         ],
     },
-    BundledSkill {
-        name: "antigravity-cli",
-        files: &[
-            (
-                "INSTALL.md",
-                include_bytes!("../../../skills/antigravity-cli/INSTALL.md"),
-            ),
-            (
-                "SKILL.md",
-                include_bytes!("../../../skills/antigravity-cli/SKILL.md"),
-            ),
-            (
-                "references/cli-docs.md",
-                include_bytes!("../../../skills/antigravity-cli/references/cli-docs.md"),
-            ),
-        ],
-    },
 ];
 
 const MANIFEST_FILE: &str = ".jarvis-builtins.json";
@@ -270,12 +253,14 @@ pub struct InstallReport {
     pub installed: usize,
     pub updated: usize,
     pub preserved: usize,
+    /// Skills this app used to ship and has now withdrawn.
+    pub removed: usize,
     pub failed: usize,
 }
 
 impl InstallReport {
     pub fn changed(&self) -> bool {
-        self.installed > 0 || self.updated > 0
+        self.installed > 0 || self.updated > 0 || self.removed > 0
     }
 }
 
@@ -338,6 +323,38 @@ pub fn install_builtin_skills(root: &Path) -> InstallReport {
         }
     }
 
+    // Anything left in the old manifest is a skill this build no longer ships.
+    // Remove the files it owns, so an upgraded install does not keep a skill
+    // that was deliberately withdrawn. A file the user edited is left alone,
+    // which turns that skill into an ordinary user-owned one.
+    for (name, files) in std::mem::take(&mut manifest.skills) {
+        if !safe_relative(&name) {
+            continue;
+        }
+        let mut fully_ours = true;
+        for (relative, hash) in &files {
+            if !safe_relative(relative) {
+                fully_ours = false;
+                continue;
+            }
+            let target = root.join(&name).join(relative);
+            match fs::read(&target) {
+                Ok(existing) if content_hash(&existing) == *hash => {
+                    if fs::remove_file(&target).is_err() {
+                        fully_ours = false;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                // Readable but changed: the user's copy.
+                _ => fully_ours = false,
+            }
+        }
+        if fully_ours {
+            remove_empty_dirs(&root.join(&name));
+            report.removed += 1;
+        }
+    }
+
     if let Ok(bytes) = serde_json::to_vec_pretty(&next_manifest)
         && fs::write(root.join(MANIFEST_FILE), bytes).is_err()
     {
@@ -372,6 +389,21 @@ fn install_file(target: &Path, bytes: &[u8], previous_hash: Option<&str>) -> Fil
     } else {
         FileOutcome::Preserved
     }
+}
+
+/// Remove a directory tree only where it is empty, so an untracked file the
+/// user added keeps the folder alive.
+fn remove_empty_dirs(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            remove_empty_dirs(&path);
+        }
+    }
+    let _ = fs::remove_dir(dir);
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -485,6 +517,78 @@ mod tests {
         assert_eq!(report.updated, 0);
         assert_eq!(report.failed, 0);
         assert_eq!(fs::read_to_string(&editable).unwrap(), "my local edit\n");
+    }
+
+    /// A withdrawn skill must not survive an upgrade forever.
+    #[test]
+    fn installer_removes_a_skill_this_build_no_longer_ships() {
+        let root = tempfile::tempdir().unwrap().path().join("skills");
+        assert_eq!(install_builtin_skills(&root).failed, 0);
+
+        // Pretend the previous release shipped `antigravity-cli`.
+        let withdrawn = root.join("antigravity-cli");
+        fs::create_dir_all(withdrawn.join("references")).unwrap();
+        let skill_file = withdrawn.join("SKILL.md");
+        let doc_file = withdrawn.join("references/cli-docs.md");
+        fs::write(&skill_file, "old skill\n").unwrap();
+        fs::write(&doc_file, "old docs\n").unwrap();
+
+        let mut manifest: Manifest =
+            serde_json::from_slice(&fs::read(root.join(MANIFEST_FILE)).unwrap()).unwrap();
+        let mut files = BTreeMap::new();
+        files.insert(
+            "SKILL.md".to_owned(),
+            content_hash(&fs::read(&skill_file).unwrap()),
+        );
+        files.insert(
+            "references/cli-docs.md".to_owned(),
+            content_hash(&fs::read(&doc_file).unwrap()),
+        );
+        manifest.skills.insert("antigravity-cli".to_owned(), files);
+        fs::write(
+            root.join(MANIFEST_FILE),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let report = install_builtin_skills(&root);
+        assert_eq!(report.removed, 1, "the withdrawn skill should be pruned");
+        assert!(!skill_file.exists(), "owned files must be deleted");
+        assert!(!doc_file.exists());
+        assert!(!withdrawn.exists(), "an emptied folder should go too");
+        assert!(report.changed());
+    }
+
+    /// A file the user edited is theirs; pruning must not delete it.
+    #[test]
+    fn installer_keeps_a_withdrawn_skill_the_user_edited() {
+        let root = tempfile::tempdir().unwrap().path().join("skills");
+        assert_eq!(install_builtin_skills(&root).failed, 0);
+
+        let withdrawn = root.join("antigravity-cli");
+        fs::create_dir_all(&withdrawn).unwrap();
+        let skill_file = withdrawn.join("SKILL.md");
+        fs::write(&skill_file, "my notes on this skill\n").unwrap();
+
+        let mut manifest: Manifest =
+            serde_json::from_slice(&fs::read(root.join(MANIFEST_FILE)).unwrap()).unwrap();
+        let mut files = BTreeMap::new();
+        // Recorded hash is the old bundled one, not the user's text.
+        files.insert("SKILL.md".to_owned(), content_hash(b"old skill\n"));
+        manifest.skills.insert("antigravity-cli".to_owned(), files);
+        fs::write(
+            root.join(MANIFEST_FILE),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let report = install_builtin_skills(&root);
+        assert_eq!(report.removed, 0, "an edited skill must not be removed");
+        assert!(skill_file.is_file());
+        assert_eq!(
+            fs::read_to_string(&skill_file).unwrap(),
+            "my notes on this skill\n"
+        );
     }
 
     #[test]

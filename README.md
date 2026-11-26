@@ -42,7 +42,7 @@ Reasoning effort from Default to Max, context compaction, steering, background s
 
 **Run a research or operations desk.** Connect search, databases, internal APIs and automation tools. Use attachments, long-running subagents and compacted context to work through a task instead of one prompt at a time.
 
-**Work with real office files.** Bundled skills create, read and edit Word `.docx`, PDF and Excel `.xlsx` files, with form filling, tracked changes, PDF merging/stamping, spreadsheet formulas and CSV interop. One `spreadsheet` skill handles both safe workbook auditing and authoring. Antigravity CLI users can also delegate one-shot coding tasks to `agy`.
+**Work with real office files.** Bundled skills create, read and edit Word `.docx`, PDF and Excel `.xlsx` files, with form filling, tracked changes, PDF merging/stamping, spreadsheet formulas and CSV interop. One `spreadsheet` skill handles both safe workbook auditing and authoring.
 
 **Browse and comment on the workspace.** Open the files panel to browse the conversation workspace with a lazy, resizable tree; inspect source with line numbers and syntax highlighting, preview images, or switch markdown between source and rendered views; select one or more lines; and attach a comment directly to the next message. The composer keeps the file context as chips you can edit or remove, so the model receives the path, line range, preview and comment without pasting a whole file.
 
@@ -59,7 +59,7 @@ Reasoning effort from Default to Max, context compaction, steering, background s
 | **MCP auth** | OAuth 2.0 + PKCE, static bearer, `X-API-Key` |
 | **Local tools** | shell, Python, read, grep, glob, edit, apply_patch, write, skills, question, subagent |
 | **ACP agents** | OpenCode, Codex, Gemini CLI, Antigravity CLI over ACP v1; whole chat or background subagent, ask or auto-approve reads |
-| **Bundled skills** | docx, pdf, spreadsheet, excalidraw, antigravity-cli, manage-skill |
+| **Bundled skills** | docx, pdf, spreadsheet, excalidraw, manage-skill |
 | **Safety** | per-server policy, per-call approvals, diff preview, shell guard, workspace confinement |
 | **Platforms** | Windows, Linux and macOS from source; Windows NSIS and Linux packages published |
 | **Privacy** | no telemetry, no account, no cloud transcript sync |
