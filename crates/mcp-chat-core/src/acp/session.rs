@@ -1001,18 +1001,15 @@ fn read_text_file(
     let start = request.line.unwrap_or(1).max(1) as usize;
     let limit = request.limit.unwrap_or(MAX_LINES).min(MAX_LINES) as usize;
     if start == 1 && limit >= content.lines().count() {
-        return ReadTextFileResponse::new(content);
+        return Ok(ReadTextFileResponse::new(content));
     }
     let window: String = content
         .lines()
         .skip(start - 1)
         .take(limit)
         .collect::<Vec<_>>()
-        .join(
-            "
-",
-        );
-    ReadTextFileResponse::new(window)
+        .join("\n");
+    Ok(ReadTextFileResponse::new(window))
 }
 
 fn permission_info(request: &RequestPermissionRequest) -> PermissionRequestInfo {
