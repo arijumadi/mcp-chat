@@ -46,9 +46,9 @@ async fn open_session_with(
     tokio::sync::mpsc::UnboundedReceiver<AcpEvent>,
 ) {
     // A `+close` suffix makes the mock advertise `session/close` support.
-    let (scenario, argv) = match scenario.strip_suffix("+close") {
-        Some(scenario) => (scenario, vec![scenario.to_owned(), "close".to_owned()]),
-        None => (scenario, vec![scenario.to_owned()]),
+    let argv = match scenario.strip_suffix("+close") {
+        Some(base) => vec![base.to_owned(), "close".to_owned()],
+        None => vec![scenario.to_owned()],
     };
     let command = mock_agent();
     let active = manager
