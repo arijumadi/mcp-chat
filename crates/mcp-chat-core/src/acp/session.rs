@@ -226,6 +226,7 @@ pub async fn open(
         acp_session_id: ready.session_id.clone(),
         command: spec.command.to_owned(),
         supports_close: ready.supports_close,
+        agent_info: ready.agent_info,
         alive,
         resumed: ready.resumed,
         prompts: prompt_tx,
