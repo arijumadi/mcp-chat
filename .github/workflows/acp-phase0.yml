@@ -78,10 +78,13 @@ jobs:
           @"
           @echo off
           start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 30"
+          ping -n 31 127.0.0.1 >nul
           "@ | Set-Content -Encoding ascii $wrapper
           $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/C `"$wrapper`"" -PassThru
           Start-Sleep -Milliseconds 750
-          Stop-Process -Id $proc.Id -Force
+          if (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue) {
+            Stop-Process -Id $proc.Id -Force
+          }
           Start-Sleep -Milliseconds 750
           $children = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*Start-Sleep -Seconds 30*" }
           if ($children) {
