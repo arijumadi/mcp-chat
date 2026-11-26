@@ -99,7 +99,7 @@ async fn tool_call_update_becomes_a_tool_event() {
             Ok(Some(AcpEvent::TurnEnded { .. })) => break,
             Ok(Some(AcpEvent::TurnFailed { message })) => panic!("turn failed: {message}"),
             Ok(Some(_)) => {}
-            Ok(None) => panic!("event channel closed early"),
+            Ok(None) => panic!("event channel closed early; transcript so far: {transcript:?}"),
             Err(_) => panic!("timed out waiting for the tool turn"),
         }
     }
@@ -172,7 +172,7 @@ async fn collect_turn(events: &mut tokio::sync::mpsc::UnboundedReceiver<AcpEvent
             Ok(Some(AcpEvent::TurnEnded { .. })) => break,
             Ok(Some(AcpEvent::TurnFailed { message })) => panic!("turn failed: {message}"),
             Ok(Some(_)) => {}
-            Ok(None) => panic!("event channel closed before the turn ended"),
+            Ok(None) => panic!("event channel closed before the turn ended; text so far: {text:?}"),
             Err(_) => panic!("timed out waiting for the turn; got so far: {text}"),
         }
     }

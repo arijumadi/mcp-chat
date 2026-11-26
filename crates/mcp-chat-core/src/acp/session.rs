@@ -116,15 +116,22 @@ pub async fn open(spec: SessionSpec<'_>) -> Result<AcpSession, AcpError> {
             message: "the agent exposed no stdin".into(),
         })?;
     let stderr = process.child.stderr.take();
+    let stderr_tail =
+        std::sync::Arc::new(std::sync::Mutex::new(super::process::StderrTail::default()));
 
     if let Some(stderr) = stderr {
         let label = spec.local_id.clone();
+        let tail = stderr_tail.clone();
         tokio::spawn(async move {
-            // Draining stderr matters: a full pipe would stall the agent.
+            // Draining stderr matters: a full pipe would stall the agent, and
+            // the tail is what explains a premature exit.
             use tokio::io::AsyncBufReadExt;
             let mut lines = tokio::io::BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 tracing::debug!(agent = %label, "ACP agent stderr: {line}");
+                if let Ok(mut tail) = tail.lock() {
+                    tail.push(line);
+                }
             }
         });
     }
@@ -136,6 +143,7 @@ pub async fn open(spec: SessionSpec<'_>) -> Result<AcpSession, AcpError> {
     let permissions = spec.permissions.clone();
     let cwd = spec.cwd.to_path_buf();
 
+    let pump_tail = stderr_tail.clone();
     let pump = tokio::spawn(async move {
         let result = drive(
             transport,
@@ -146,11 +154,23 @@ pub async fn open(spec: SessionSpec<'_>) -> Result<AcpSession, AcpError> {
             ready_tx,
         )
         .await;
-        if let Err(error) = result {
-            let _ = events.send(AcpEvent::TurnFailed {
-                message: error.user_message(),
-            });
-        }
+        // When the pump ends while the UI still expects a turn, say why instead
+        // of leaving the channel to close silently.
+        let tail = pump_tail
+            .lock()
+            .map(|tail| tail.to_string())
+            .unwrap_or_default();
+        let message = match result {
+            Err(error) => error.user_message(),
+            Ok(()) => {
+                if tail.trim().is_empty() {
+                    "The ACP session ended unexpectedly.".to_owned()
+                } else {
+                    format!("The ACP session ended unexpectedly:\n{tail}")
+                }
+            }
+        };
+        let _ = events.send(AcpEvent::TurnFailed { message });
         process.terminate().await;
     });
 
