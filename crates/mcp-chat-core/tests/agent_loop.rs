@@ -1588,21 +1588,33 @@ async fn subagent_runs_in_a_child_conversation() {
 
 #[tokio::test]
 async fn subagent_wake_waits_for_a_busy_parent() {
-    let h = Harness::new("mock-subagent-busy", Some("auto"), 0).await;
+    // `ask` keeps the parent turn blocked on an approval prompt, so "parent is
+    // busy" is a real state instead of a timing race. The child itself is a
+    // text-only turn and needs no approval.
+    let h = Harness::new("mock-subagent-busy", Some("ask"), 0).await;
+    let mut receiver = h.engine.subscribe();
     h.engine
         .send_message(&h.conversation_id, "work while child runs")
         .await
         .unwrap();
-    for _ in 0..200 {
-        if h.engine.in_flight(&h.conversation_id) {
-            break;
+
+    let approval = loop {
+        let event = tokio::time::timeout(Duration::from_secs(20), receiver.recv())
+            .await
+            .expect("parent approval timed out")
+            .expect("event channel");
+        if let CoreEvent::Approval {
+            conversation_id,
+            call_id,
+            ..
+        } = &event
+        {
+            if conversation_id == &h.conversation_id {
+                break call_id.clone();
+            }
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(
-        h.engine.in_flight(&h.conversation_id),
-        "parent did not start"
-    );
+    };
+    assert!(h.engine.in_flight(&h.conversation_id), "parent is not busy");
 
     let (child_id, _) = h
         .engine
@@ -1615,6 +1627,36 @@ async fn subagent_wake_waits_for_a_busy_parent() {
         )
         .await
         .unwrap();
+    wait_for_child_assistants(&h, &child_id, 1).await;
+
+    // Let the supervisor persist the report while the parent is still blocked.
+    for _ in 0..200 {
+        let parent = h.history().await;
+        let delivered = parent.iter().any(|message| {
+            message.message.role == "user"
+                && message.parts.iter().any(|part| {
+                    part.payload()["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("<subagent state="))
+                })
+        });
+        if delivered {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        h.engine.in_flight(&h.conversation_id),
+        "the queued wake must not start while the parent turn is blocked"
+    );
+
+    h.engine.respond_approval(
+        &approval,
+        ApprovalAnswer {
+            decision: ApprovalDecision::Once,
+            feedback: None,
+        },
+    );
 
     for _ in 0..400 {
         if h.assistant_text()
