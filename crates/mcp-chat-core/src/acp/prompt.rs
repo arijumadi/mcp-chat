@@ -172,7 +172,7 @@ pub fn attachment_input(
     let payload = part.payload();
     let kind = payload.get("kind")?.as_str()?;
     let path = payload.get("path")?.as_str()?.to_owned();
-    let uri = Some(format!("file://{}", path.replace('\\', "/")));
+    let uri = format!("file://{}", path.replace('\\', "/"));
     let name = payload
         .get("name")
         .and_then(|value| value.as_str())
@@ -188,7 +188,7 @@ pub fn attachment_input(
         "image" => Some(AttachmentInput::Image {
             mime,
             data: read_base64(&path)?,
-            uri,
+            uri: Some(uri),
         }),
         "text" => Some(AttachmentInput::Text {
             name,
@@ -198,13 +198,13 @@ pub fn attachment_input(
                 .and_then(|value| value.as_str())
                 .unwrap_or_default()
                 .to_owned(),
-            uri: uri.unwrap_or_default(),
+            uri,
         }),
         _ => Some(AttachmentInput::Link {
             name,
             mime: Some(mime),
             size,
-            uri: uri.unwrap_or_default(),
+            uri,
         }),
     }
 }
