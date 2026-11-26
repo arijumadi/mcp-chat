@@ -65,11 +65,17 @@ jobs:
           mkdir -p "$RUNNER_TEMP/agy"
           curl -fsSL "$url" -o "$RUNNER_TEMP/agy/agy.tar.gz"
           tar xzf "$RUNNER_TEMP/agy/agy.tar.gz" -C "$RUNNER_TEMP/agy"
-          chmod +x "$RUNNER_TEMP/agy/antigravity"
-          "$RUNNER_TEMP/agy/antigravity" --version
+          # The tarball contains `antigravity`; the installer exposes it as
+          # `agy`. Name it the way the vendor does, so the probe uses the same
+          # command a user would.
+          mv "$RUNNER_TEMP/agy/antigravity" "$RUNNER_TEMP/agy/agy"
+          chmod +x "$RUNNER_TEMP/agy/agy"
+          "$RUNNER_TEMP/agy/agy" --version
 
       - name: Probe the agent
         env:
-          AGY_BIN: ${{ runner.temp }}/agy/antigravity
+          AGY_BIN: ${{ runner.temp }}/agy/agy
         run: |
+          # No signed-in account on a runner, so the prompt test skips itself and
+          # the capability/auth assertions still run.
           cargo test -p mcp-chat-core --test acp_real_agent -- --ignored --nocapture

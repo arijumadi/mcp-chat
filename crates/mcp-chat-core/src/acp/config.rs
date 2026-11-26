@@ -27,9 +27,14 @@ pub struct AgentPreset {
 ///   package still exists but is not the one ACP lists.
 /// - `gemini --acp` — ACP mode is documented in the package's own
 ///   `docs/cli/acp-mode.md`.
-/// - `antigravity acp` — `agy --help` in release 1.5.18 lists `acp` as a
-///   subcommand: "Start the Agent Client Protocol (ACP) stdio server". This is
-///   Google's own binary, not the third-party `antigravity-acp` wrapper.
+/// - `agy acp` — `agy --help` in release 1.5.18 lists `acp` as a subcommand:
+///   "Start the Agent Client Protocol (ACP) stdio server". This is Google's own
+///   binary, not the third-party `antigravity-acp` wrapper.
+///
+///   The command is `agy`, not `antigravity`: the tarball contains an executable
+///   named `antigravity`, but the official installer puts it on PATH as `agy`,
+///   and that is the name the docs and the vendor's own examples use. Verified
+///   by running the installer and then `agy acp` against a signed-in account.
 ///
 /// A preset is a template only; it is never inserted automatically.
 pub const PRESETS: &[AgentPreset] = &[
@@ -57,9 +62,9 @@ pub const PRESETS: &[AgentPreset] = &[
     AgentPreset {
         name: "Antigravity",
         slug: "antigravity",
-        command: "antigravity",
+        command: "agy",
         args: &["acp"],
-        notes: "Requires Google's Antigravity CLI (`agy`) on PATH. Sign in once by running `antigravity`.",
+        notes: "Requires Google's Antigravity CLI on PATH as `agy`. Sign in once by running `agy` without arguments.",
     },
 ];
 
@@ -102,7 +107,8 @@ mod tests {
         };
         assert_eq!(find("opencode").args, &["acp"]);
         assert_eq!(find("gemini").args, &["--acp"]);
-        assert_eq!(find("antigravity").command, "antigravity");
+        // The installer exposes the binary as `agy`, not `antigravity`.
+        assert_eq!(find("antigravity").command, "agy");
         assert_eq!(find("antigravity").args, &["acp"]);
         // The official adapter, not the older Zed-hosted package.
         assert_eq!(
