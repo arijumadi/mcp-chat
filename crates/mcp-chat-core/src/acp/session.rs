@@ -304,6 +304,7 @@ async fn handle_dispatch(
                 responder.respond(permission_response(&info, decision))
             },
         )
+        .await
         .otherwise_ignore();
     if let Err(error) = result {
         tracing::debug!("ACP dispatch was not handled: {error}");
