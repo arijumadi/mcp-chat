@@ -251,7 +251,8 @@ where
                                     break;
                                 }
                                 Ok(SessionMessage::Message(dispatch)) => {
-                                    handle_dispatch(dispatch, &events, &permissions).await;
+                                    handle_dispatch(dispatch.into_raw(), &events, &permissions)
+                                        .await;
                                 }
                                 // `SessionMessage` is non_exhaustive: ignore
                                 // variants this SDK version does not define.
@@ -287,17 +288,22 @@ async fn handle_dispatch(
             Ok(())
         })
         .await
-        .if_request(|request: RequestPermissionRequest, responder| async move {
-            let info = permission_info(&request);
-            let decision = permissions(info.clone()).await;
-            let _ = events.send(AcpEvent::PermissionRequested {
-                request_id: info.title.clone(),
-                title: info.title.clone(),
-                kind: info.kind.clone(),
-                options: info.options.iter().map(|(id, _)| id.clone()).collect(),
-            });
-            responder.respond(permission_response(&info, decision))
-        })
+        .if_request(
+            |request: RequestPermissionRequest,
+             responder: agent_client_protocol::Responder<
+                agent_client_protocol::v1::schema::RequestPermissionResponse,
+            >| async move {
+                let info = permission_info(&request);
+                let decision = permissions(info.clone()).await;
+                let _ = events.send(AcpEvent::PermissionRequested {
+                    request_id: info.title.clone(),
+                    title: info.title.clone(),
+                    kind: info.kind.clone(),
+                    options: info.options.iter().map(|(id, _)| id.clone()).collect(),
+                });
+                responder.respond(permission_response(&info, decision))
+            },
+        )
         .otherwise_ignore();
     if let Err(error) = result {
         tracing::debug!("ACP dispatch was not handled: {error}");
