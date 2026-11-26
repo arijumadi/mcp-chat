@@ -38,6 +38,11 @@ pub struct PermissionRequestInfo {
     pub kind: Option<String>,
     /// `(option_id, kind)` as offered by the agent.
     pub options: Vec<(String, Option<String>)>,
+    /// File changes the agent included with the request, already rendered as
+    /// unified diffs. An empty vector means the request showed no diff.
+    pub diffs: Vec<String>,
+    /// Absolute paths the tool call touches, when the agent reported any.
+    pub locations: Vec<String>,
 }
 
 pub type PermissionHandler =
@@ -543,6 +548,43 @@ fn content_text(content: &agent_client_protocol::v1::schema::ContentBlock) -> Op
         agent_client_protocol::v1::schema::ContentBlock::Text(text) => Some(text.text.clone()),
         _ => None,
     }
+}
+
+/// Render the diff content the agent attached to a permission request.
+///
+/// ACP sends whole files, not patches, so the app builds the unified diff with
+/// the same renderer its own file tools use.
+fn permission_diffs(request: &RequestPermissionRequest) -> Vec<String> {
+    let mut rendered = Vec::new();
+    let Some(content) = request.tool_call.fields.content.as_ref() else {
+        return rendered;
+    };
+    for item in content {
+        if let agent_client_protocol::v1::schema::ToolCallContent::Diff(diff) = item {
+            let path = diff.path.display().to_string();
+            let before = diff.old_text.as_deref().unwrap_or_default();
+            let text = crate::agent::diff::file_diff(&path, before, &diff.new_text);
+            if !text.is_empty() {
+                rendered.push(crate::agent::diff::cap(text));
+            }
+        }
+    }
+    rendered
+}
+
+fn permission_locations(request: &RequestPermissionRequest) -> Vec<String> {
+    request
+        .tool_call
+        .fields
+        .locations
+        .as_ref()
+        .map(|locations| {
+            locations
+                .iter()
+                .map(|location| location.path.display().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn permission_info(request: &RequestPermissionRequest) -> PermissionRequestInfo {

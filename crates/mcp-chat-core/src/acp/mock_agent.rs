@@ -178,7 +178,18 @@ pub fn run(scenario: &str) {
                                 "toolCall": {
                                     "toolCallId": "call-1",
                                     "title": "Run tests",
-                                    "kind": "execute"
+                                    "kind": "execute",
+                                    "locations": [
+                                        { "path": "/tmp/example/src/main.rs", "line": 4 }
+                                    ],
+                                    "content": [
+                                        {
+                                            "type": "diff",
+                                            "path": "/tmp/example/src/main.rs",
+                                            "oldText": "fn main() {\n    old();\n}\n",
+                                            "newText": "fn main() {\n    new();\n}\n"
+                                        }
+                                    ]
                                 },
                                 "options": [
                                     { "optionId": "allow-once", "name": "Allow", "kind": "allow_once" },

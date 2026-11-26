@@ -415,24 +415,37 @@ fn permission_handler(
             // Register before announcing: the UI may answer the moment it sees
             // the event, and an answer for an unknown call id would be lost.
             let receiver = engine.approvals.register(&call_id);
+            // ACP gives whole files; join them so the existing modal shows
+            // everything the agent intends to change.
+            let diff = (!info.diffs.is_empty()).then(|| info.diffs.join("\n"));
+            let mut args = json!({
+                "kind": info.kind,
+                "options": info
+                    .options
+                    .iter()
+                    .map(|(id, _)| id.clone())
+                    .collect::<Vec<_>>(),
+            });
+            if !info.locations.is_empty() {
+                args["locations"] = json!(info.locations);
+            }
             let _ = engine.events.send(CoreEvent::Approval {
                 conversation_id: child_id.clone(),
                 call_id: call_id.clone(),
                 server: "ACP".into(),
                 tool: info.title.clone(),
-                args: json!({
-                    "kind": info.kind,
-                    "options": info
-                        .options
-                        .iter()
-                        .map(|(id, _)| id.clone())
-                        .collect::<Vec<_>>(),
-                }),
+                args,
+                // The agent remembers "always" itself, and ACP has no way for
+                // us to scope a rule it owns.
                 allow_always: false,
                 action: info.kind.clone().unwrap_or_else(|| "tool".into()),
-                resource: info.title.clone(),
+                resource: info
+                    .locations
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| info.title.clone()),
                 save_pattern: None,
-                diff: None,
+                diff,
             });
             let answer = tokio::select! {
                 _ = cancel.cancelled() => {
@@ -445,6 +458,9 @@ fn permission_handler(
                 Some(ApprovalDecision::Once | ApprovalDecision::Always) => {
                     PermissionDecision::Approve
                 }
+                // A rejection's feedback is dropped on purpose: ACP's outcome is
+                // just `reject_once`, with no field to carry text back. The
+                // modal hides its comment box for ACP for the same reason.
                 Some(ApprovalDecision::Reject) => PermissionDecision::Reject,
                 None => PermissionDecision::Cancel,
             }
