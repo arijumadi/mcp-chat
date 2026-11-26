@@ -13,7 +13,7 @@ use agent_client_protocol::v1::schema::{
     CancelNotification, CloseSessionRequest, InitializeRequest, RequestPermissionRequest,
     SessionNotification, SessionUpdate,
 };
-use agent_client_protocol::v1::{ConnectionTo, SessionMessage, SessionSetup};
+use agent_client_protocol::v1::{ConnectionTo, SessionMessage};
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo};
 use futures::future::BoxFuture;
 use tokio::sync::{mpsc, oneshot};
