@@ -270,7 +270,9 @@ pub fn run(scenario: &str) {
                         chunk(&session_id, "Checking the file first.");
                         finish(&id, "end_turn");
                     }
-                    "permission" => {
+                    "permission" | "permission-delete" => {
+                        // A delete is the one action Auto must still ask about.
+                        let is_delete = scenario == "permission-delete";
                         // `allow_always` is offered on purpose: the client must
                         // never pick it.
                         write(json!({
@@ -281,18 +283,10 @@ pub fn run(scenario: &str) {
                                 "sessionId": session_id,
                                 "toolCall": {
                                     "toolCallId": "call-1",
-                                    "title": "Run tests",
-                                    "kind": "execute",
+                                    "title": if is_delete { "Delete build/" } else { "Run tests" },
+                                    "kind": if is_delete { "delete" } else { "execute" },
                                     "locations": [
                                         { "path": "/tmp/example/src/main.rs", "line": 4 }
-                                    ],
-                                    "content": [
-                                        {
-                                            "type": "diff",
-                                            "path": "/tmp/example/src/main.rs",
-                                            "oldText": "fn main() {\n    old();\n}\n",
-                                            "newText": "fn main() {\n    new();\n}\n"
-                                        }
                                     ]
                                 },
                                 "options": [

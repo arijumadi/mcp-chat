@@ -62,6 +62,12 @@ pub enum PermissionPolicy {
     Ask,
     /// Auto-allow read/search/think; ask for everything else.
     AutoReads,
+    /// Auto-allow everything except destructive actions.
+    ///
+    /// This matches the per-chat Auto mode the built-in tools already have: it
+    /// is not a blanket yes. Deleting stays a reviewed action because it cannot
+    /// be undone, and the agent's own history cannot put a file back.
+    Auto,
 }
 
 impl PermissionPolicy {
@@ -69,6 +75,7 @@ impl PermissionPolicy {
         match self {
             Self::Ask => "ask",
             Self::AutoReads => "auto_reads",
+            Self::Auto => "auto",
         }
     }
 
@@ -76,6 +83,7 @@ impl PermissionPolicy {
         match value {
             "ask" => Ok(Self::Ask),
             "auto_reads" => Ok(Self::AutoReads),
+            "auto" => Ok(Self::Auto),
             other => Err(CoreError::invalid(format!(
                 "unknown ACP permission policy: {other}"
             ))),
@@ -124,6 +132,11 @@ pub fn auto_decide(policy: PermissionPolicy, kind: PermissionKind) -> bool {
     match policy {
         PermissionPolicy::Ask => false,
         PermissionPolicy::AutoReads => kind.is_read_only(),
+        // Everything but an irreversible delete. An unknown kind is allowed
+        // here on purpose: the user asked for automatic approval, and the
+        // alternative would be a policy that silently stops working whenever
+        // an agent invents a new tool kind.
+        PermissionPolicy::Auto => !matches!(kind, PermissionKind::Delete),
     }
 }
 
