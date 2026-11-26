@@ -453,3 +453,94 @@ async fn auto_approve_does_not_cover_a_delete() {
         "a delete must still ask the user, even in Auto mode"
     );
 }
+
+/// A refusal or a limit must not be reported to the parent as success.
+#[tokio::test]
+async fn a_refused_turn_is_reported_as_failed() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "stop:refusal").await;
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("mock"))
+        .await
+        .unwrap();
+    harness
+        .engine
+        .send_message(&harness.parent_id, "do something risky")
+        .await
+        .expect("send");
+
+    let (state, report) = wait_for_state(&harness, &harness.parent_id).await;
+    assert_eq!(
+        state, "error",
+        "a refusal is a failed turn, not a finished one"
+    );
+    assert!(
+        report.contains("refused"),
+        "the reason should say why: {report}"
+    );
+}
+
+#[tokio::test]
+async fn a_token_limit_is_reported_as_failed() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "stop:max_tokens").await;
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("mock"))
+        .await
+        .unwrap();
+    harness
+        .engine
+        .send_message(&harness.parent_id, "write a long essay")
+        .await
+        .expect("send");
+
+    let (state, report) = wait_for_state(&harness, &harness.parent_id).await;
+    assert_eq!(state, "error");
+    assert!(report.contains("token limit"), "{report}");
+}
+
+/// A cancelled turn is `interrupted`, matching the built-in runner, not an
+/// error: the user stopped it on purpose.
+#[tokio::test]
+async fn a_cancelled_turn_is_interrupted_not_failed() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "stop:cancelled").await;
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("mock"))
+        .await
+        .unwrap();
+    harness
+        .engine
+        .send_message(&harness.parent_id, "start something")
+        .await
+        .expect("send");
+
+    let (state, _report) = wait_for_state(&harness, &harness.parent_id).await;
+    assert_eq!(state, "interrupted");
+}
+
+/// Wait for the newest assistant turn to settle, returning its status and text.
+async fn wait_for_state(harness: &Harness, conversation_id: &str) -> (String, String) {
+    for _ in 0..120 {
+        let history = messages::list_for_conversation(&harness.db.pool, conversation_id)
+            .await
+            .unwrap();
+        if let Some(last) = history
+            .iter()
+            .rev()
+            .find(|item| item.message.role == "assistant" && item.message.status != "streaming")
+        {
+            let text = last
+                .message
+                .error
+                .clone()
+                .unwrap_or_else(|| mcp_chat_core::agent::context::text_parts(&last.parts));
+            return (last.message.status.clone(), text);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("the turn never settled");
+}

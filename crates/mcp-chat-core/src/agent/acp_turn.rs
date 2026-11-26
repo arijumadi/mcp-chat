@@ -140,6 +140,8 @@ struct TurnRun<'a> {
     reasoning_part: Option<String>,
     tools: HashMap<String, String>,
     failure: Option<String>,
+    /// The user stopped this turn, so the transcript is incomplete on purpose.
+    cancelled: bool,
 }
 
 async fn stream_turn(
@@ -160,6 +162,7 @@ async fn stream_turn(
         reasoning_part: None,
         tools: HashMap::new(),
         failure: None,
+        cancelled: false,
     };
 
     if handle.prompt_blocks(blocks).is_err() {
@@ -205,7 +208,36 @@ async fn stream_turn(
             | AcpEvent::PermissionRequested { .. }
             | AcpEvent::Commands(_)
             | AcpEvent::ConfigOptions(_) => {}
-            AcpEvent::TurnEnded { .. } => break,
+            AcpEvent::TurnEnded { stop_reason } => {
+                match stop_reason.as_str() {
+                    "end_turn" => {}
+                    "cancelled" => run.cancelled = true,
+                    "refusal" => {
+                        run.failure = Some(
+                            "The agent refused this request. Its own model declined, so nothing ran."
+                                .into(),
+                        )
+                    }
+                    "max_tokens" => {
+                        run.failure = Some(
+                            "The agent stopped because it reached its token limit. The answer above is incomplete."
+                                .into(),
+                        )
+                    }
+                    "max_turn_requests" => {
+                        run.failure = Some(
+                            "The agent stopped because it reached its limit of tool requests for one turn. Continue in a new message to let it finish."
+                                .into(),
+                        )
+                    }
+                    // An unknown reason is not a failure: the turn did end and
+                    // the transcript above is what the agent produced.
+                    other => {
+                        tracing::debug!("ACP turn ended with an unmapped stop reason: {other}")
+                    }
+                }
+                break;
+            }
             AcpEvent::TurnFailed { message } => {
                 run.failure = Some(message);
                 break;
@@ -388,9 +420,15 @@ impl TurnRun<'_> {
     /// Settle the message and its status.
     async fn finish(&mut self) {
         if let Some(message_id) = self.message_id.clone() {
-            let (status, error) = match &self.failure {
-                Some(message) => ("error", Some(message.clone())),
-                None => ("completed", None),
+            let (status, error) = if self.cancelled {
+                // The same status the built-in runner uses, so the transcript
+                // renders a stop notice rather than an error.
+                ("interrupted", None)
+            } else {
+                match &self.failure {
+                    Some(message) => ("error", Some(message.clone())),
+                    None => ("completed", None),
+                }
             };
             let _ =
                 messages::set_status(&self.engine.db.pool, &message_id, status, error.as_deref())
@@ -402,10 +440,15 @@ impl TurnRun<'_> {
                 error,
             });
         }
+        let notice = if self.cancelled {
+            Some("Stopped.".to_owned())
+        } else {
+            self.failure.clone()
+        };
         let _ = self.engine.events.send(CoreEvent::Status {
             conversation_id: self.child_id.to_owned(),
             status: TurnStatus::Idle,
-            message: None,
+            message: notice,
         });
     }
 }
@@ -519,6 +562,14 @@ pub fn report_from_history(history: &[MessageWithParts]) -> (String, String) {
                 .unwrap_or_else(|| "The ACP agent failed.".to_owned()),
         );
     }
+    if last.message.status == "interrupted" {
+        // The user stopped it, so the answer is incomplete by definition. A
+        // parent that is told "completed" here would build on half an answer.
+        return (
+            "failed".to_owned(),
+            "The ACP turn was stopped before it finished, so its answer is incomplete.".to_owned(),
+        );
+    }
     // An ACP turn starts a new text part after each tool call, so the last
     // non-empty one is the report: the narration before a tool call is not the
     // answer the parent asked for.
@@ -612,6 +663,16 @@ mod tests {
         // An unreported kind must not be guessed as harmless.
         assert!(!policy_allows(PermissionPolicy::AutoReads, None));
         assert!(!policy_allows(PermissionPolicy::AutoReads, Some("mystery")));
+    }
+
+    #[test]
+    fn an_interrupted_message_is_not_a_completed_report() {
+        let (state, report) = report_from_history(&history(
+            message("assistant", "interrupted", None),
+            vec![text_part("half an answer")],
+        ));
+        assert_eq!(state, "failed");
+        assert!(report.contains("stopped"), "{report}");
     }
 
     #[test]

@@ -311,6 +311,13 @@ pub fn run(scenario: &str) {
                             answer: format!("turn {turn} answer: {prompt}"),
                         });
                     }
+                    other if other.starts_with("stop:") => {
+                        // `stop:<reason>` answers with that stop reason, so a
+                        // test can drive refusal, cancellation and limits.
+                        let reason = other.trim_start_matches("stop:");
+                        chunk(&session_id, &format!("turn {turn} answer: {prompt}"));
+                        finish(&id, reason);
+                    }
                     _ => {
                         chunk(&session_id, &format!("turn {turn} answer: {prompt}"));
                         finish(&id, "end_turn");
