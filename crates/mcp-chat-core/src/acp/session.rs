@@ -220,13 +220,15 @@ pub async fn open(
     let pump = tokio::spawn(async move {
         let result = drive(
             transport,
-            prompt_rx,
-            events.clone(),
-            permissions,
-            cwd,
-            resume,
-            pump_commands,
-            ready_tx,
+            Pump {
+                prompts: prompt_rx,
+                events: events.clone(),
+                permissions,
+                cwd,
+                resume,
+                commands: pump_commands,
+                ready: ready_tx,
+            },
         )
         .await;
         // A turn failure has already been reported. Only a transport-level
@@ -292,19 +294,30 @@ struct SessionReady {
     accepts_embedded_context: bool,
 }
 
-async fn drive<T>(
-    transport: T,
-    mut prompts: mpsc::UnboundedReceiver<Command>,
+/// Everything the connection task owns for its lifetime.
+struct Pump {
+    prompts: mpsc::UnboundedReceiver<Command>,
     events: mpsc::UnboundedSender<AcpEvent>,
     permissions: PermissionHandler,
     cwd: std::path::PathBuf,
     resume: Option<String>,
     commands: CommandStore,
     ready: oneshot::Sender<Result<SessionReady, AcpError>>,
-) -> Result<(), AcpError>
+}
+
+async fn drive<T>(transport: T, pump: Pump) -> Result<(), AcpError>
 where
     T: ConnectTo<Client> + Send + 'static,
 {
+    let Pump {
+        mut prompts,
+        events,
+        permissions,
+        cwd,
+        resume,
+        commands,
+        ready,
+    } = pump;
     let outcome = Client
         .v1()
         .name("jarvis")
@@ -408,23 +421,25 @@ where
                         // Every handle was dropped.
                         None => break 'turn,
                     },
-                    update = session.read_update() => Next::Update(update),
+                    update = session.read_update() => Next::Update(Box::new(update)),
                 };
 
                 match next {
-                    Next::Update(Ok(SessionMessage::Message(dispatch))) => {
-                        handle_dispatch(dispatch.into_raw(), &events, &permissions, &commands)
-                            .await;
-                    }
-                    // A prompt response with no turn in flight is stale; there
-                    // is nothing to settle.
-                    Next::Update(Ok(_)) => {}
-                    Next::Update(Err(error)) => {
-                        let _ = events.send(AcpEvent::TurnFailed {
-                            message: map_error(error, &facts).user_message(),
-                        });
-                        break 'turn;
-                    }
+                    Next::Update(result) => match *result {
+                        Ok(SessionMessage::Message(dispatch)) => {
+                            handle_dispatch(dispatch.into_raw(), &events, &permissions, &commands)
+                                .await;
+                        }
+                        // A prompt response with no turn in flight is stale;
+                        // there is nothing to settle.
+                        Ok(_) => {}
+                        Err(error) => {
+                            let _ = events.send(AcpEvent::TurnFailed {
+                                message: map_error(error, &facts).user_message(),
+                            });
+                            break 'turn;
+                        }
+                    },
                     Next::Command(Command::Close) => {
                         // `session/close` is opt-in: only call it when the agent
                         // advertised the capability, or it answers with
@@ -507,7 +522,9 @@ where
 /// What the idle pump can wake up for.
 enum Next {
     Command(Command),
-    Update(Result<SessionMessage, agent_client_protocol::Error>),
+    // Boxed: a `Result<SessionMessage, _>` is far larger than a `Command`, and
+    // the pump wakes up for one or the other thousands of times a turn.
+    Update(Box<Result<SessionMessage, agent_client_protocol::Error>>),
 }
 
 async fn handle_dispatch(
