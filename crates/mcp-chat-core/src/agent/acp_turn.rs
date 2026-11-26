@@ -19,14 +19,13 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::AcpEvent;
-use super::approvals::ApprovalDecision;
-use super::session::{PermissionDecision, PermissionHandler, PermissionRequestInfo};
-use crate::ChatEngine;
+use crate::acp::AcpEvent;
+use crate::acp::session::{PermissionDecision, PermissionHandler, PermissionRequestInfo};
+use crate::agent::ChatEngine;
+use crate::agent::approvals::ApprovalDecision;
 use crate::db::repo::{acp_agents, messages};
 use crate::events::{CoreEvent, TurnStatus};
-use crate::models::MessageWithParts;
-use crate::models::PartPayload;
+use crate::models::{MessageWithParts, PartPayload};
 use crate::{CoreError, Result};
 
 /// The text a parent sees when an ACP turn ends badly.
@@ -108,7 +107,7 @@ async fn stream_turn(
     engine: Arc<ChatEngine>,
     child_id: &str,
     prompt: &str,
-    handle: &Arc<super::AcpSession>,
+    handle: &Arc<crate::acp::AcpSession>,
     events: mpsc::UnboundedReceiver<AcpEvent>,
     cancel: CancellationToken,
 ) -> Result<mpsc::UnboundedReceiver<AcpEvent>> {

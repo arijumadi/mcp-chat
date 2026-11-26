@@ -86,7 +86,7 @@ pub trait SubagentHost: Send + Sync {
         description: &'a str,
         prompt: &'a str,
         session_id: Option<&'a str>,
-        /// ACP agent slug; `None` runs the internal subagent.
+        // ACP agent slug; `None` runs the internal subagent.
         agent: Option<&'a str>,
         part_id: &'a str,
     ) -> BoxFuture<'a, crate::Result<(String, String)>>;
