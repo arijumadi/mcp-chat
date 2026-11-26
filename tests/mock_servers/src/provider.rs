@@ -121,18 +121,20 @@ fn is_subagent_child(messages: &Value) -> bool {
         .unwrap_or(false)
 }
 
-/// True when a `<subagent>` report is already in the parent transcript. Checked
-/// structurally rather than over the whole serialized request, which also
-/// contains the parent's own tool result text.
+/// True when the synthetic `<subagent>` report is already a user turn in the
+/// parent transcript. The build step prefixes a time note, so the text does not
+/// start with the tag; matching only user messages avoids the parent's own tool
+/// result text, which mentions the child but is not a report.
 fn has_subagent_report(messages: &Value) -> bool {
     messages
         .as_array()
         .map(|items| {
             items.iter().any(|message| {
-                message
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .is_some_and(|text| text.trim_start().starts_with("<subagent state="))
+                message.get("role").and_then(Value::as_str) == Some("user")
+                    && message
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| text.contains("<subagent state="))
             })
         })
         .unwrap_or(false)
