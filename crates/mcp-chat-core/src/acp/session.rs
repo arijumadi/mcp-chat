@@ -371,7 +371,7 @@ fn normalise_option(
         id: option.id.to_string(),
         name: option.name.clone(),
         description: option.description.clone(),
-        category: option.category.as_ref().map(|category| wire_name(category)),
+        category: option.category.as_ref().map(wire_name),
         current_value,
         choices,
         kind,
@@ -522,10 +522,11 @@ where
             // or the app was restarted against a different agent state) must
             // fall back to a fresh session rather than fail the turn.
             let mut resumed = false;
-            let mut session_config = Vec::new();
             let new_session =
                 || async { cx.build_session(&cwd).block_task().start_session().await };
-            let mut session = match (resume, supports_resume) {
+            // Both arms must yield the same pair, so the option list always
+            // belongs to the session that actually opened.
+            let (mut session, session_config) = match (resume, supports_resume) {
                 (Some(session_id), true) => {
                     match cx
                         .resume_session(session_id, &cwd)
@@ -535,11 +536,11 @@ where
                     {
                         Ok(setup) => {
                             resumed = true;
-                            session_config = merge_modes(
+                            let config = merge_modes(
                                 config_from_resume(&setup.response),
                                 &setup.response.modes,
                             );
-                            setup.session
+                            (setup.session, config)
                         }
                         Err(error) => {
                             tracing::debug!(
@@ -547,11 +548,11 @@ where
                             );
                             match new_session().await {
                                 Ok(setup) => {
-                                    session_config = merge_modes(
+                                    let config = merge_modes(
                                         config_from_new(&setup.response),
                                         &setup.response.modes,
                                     );
-                                    setup.session
+                                    (setup.session, config)
                                 }
                                 Err(error) => {
                                     let _ = ready.send(Err(map_error(error, &facts)));
@@ -563,9 +564,9 @@ where
                 }
                 _ => match new_session().await {
                     Ok(setup) => {
-                        session_config =
+                        let config =
                             merge_modes(config_from_new(&setup.response), &setup.response.modes);
-                        setup.session
+                        (setup.session, config)
                     }
                     Err(error) => {
                         let _ = ready.send(Err(map_error(error, &facts)));
