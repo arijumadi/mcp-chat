@@ -53,7 +53,7 @@ impl CapacityError {
 /// What the engine keeps after a session starts.
 pub struct ActiveSession {
     pub handle: Arc<AcpSession>,
-    pub events: mpsc::Receiver<AcpEvent>,
+    pub events: mpsc::UnboundedReceiver<AcpEvent>,
 }
 
 #[derive(Default)]

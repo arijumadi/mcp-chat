@@ -121,8 +121,9 @@ pub async fn open(spec: SessionSpec<'_>) -> Result<AcpSession, AcpError> {
         let label = spec.local_id.clone();
         tokio::spawn(async move {
             // Draining stderr matters: a full pipe would stall the agent.
+            use tokio::io::AsyncBufReadExt;
             let mut lines = tokio::io::BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = tokio::io::AsyncBufReadExt::next_line(&mut lines).await {
+            while let Ok(Some(line)) = lines.next_line().await {
                 tracing::debug!(agent = %label, "ACP agent stderr: {line}");
             }
         });
@@ -205,17 +206,7 @@ where
             }
 
             // ACP requires an absolute cwd; callers canonicalize it.
-            let builder = match cx.build_session(&cwd) {
-                Ok(builder) => builder,
-                Err(error) => {
-                    if let Some(ready) = ready.take() {
-                        let _ = ready.send(Err(map_sdk_error(error)));
-                    }
-                    return Ok(());
-                }
-            };
-
-            let session = builder.block_task().run_until(
+            let session = cx.build_session(&cwd).block_task().run_until(
                 async move |SessionSetup { mut session, .. }| {
                     let acp_id = session.session_id().to_string();
                     if let Some(ready) = ready.take() {
@@ -290,42 +281,27 @@ async fn handle_dispatch(
     events: &mpsc::UnboundedSender<AcpEvent>,
     permissions: &PermissionHandler,
 ) {
-    match dispatch {
-        agent_client_protocol::Dispatch::Notification(notification) => {
-            if let Ok(Ok(notification)) =
-                agent_client_protocol::Dispatch::Notification(notification)
-                    .into_notification::<SessionNotification>()
-            {
-                emit_update(notification.update, events);
-            }
-        }
-        agent_client_protocol::Dispatch::Request(request, responder) => {
-            match agent_client_protocol::Dispatch::Request(request, responder)
-                .into_request::<RequestPermissionRequest>()
-            {
-                Ok(Ok((request, responder))) => {
-                    let info = permission_info(&request);
-                    let decision = permissions(info.clone()).await;
-                    let _ = events.send(AcpEvent::PermissionRequested {
-                        request_id: info.title.clone(),
-                        title: info.title.clone(),
-                        kind: info.kind.clone(),
-                        options: info.options.iter().map(|(id, _)| id.clone()).collect(),
-                    });
-                    let _ = responder.respond(permission_response(&info, decision));
-                }
-                Ok(Err(dispatch)) => {
-                    if let agent_client_protocol::Dispatch::Request(_, responder) = dispatch {
-                        let _ = responder
-                            .respond_with_error(agent_client_protocol::Error::method_not_found());
-                    }
-                }
-                Err(error) => {
-                    tracing::debug!("ACP request did not parse: {}", error);
-                }
-            }
-        }
-        agent_client_protocol::Dispatch::Response(_, _) => {}
+    let events_for_update = events.clone();
+    let permissions = permissions.clone();
+    let result = agent_client_protocol::util::MatchDispatch::new(dispatch)
+        .if_notification(|notification: SessionNotification| async move {
+            emit_update(notification.update, &events_for_update);
+            Ok(())
+        })
+        .if_request(|request: RequestPermissionRequest, responder| async move {
+            let info = permission_info(&request);
+            let decision = permissions(info.clone()).await;
+            let _ = events.send(AcpEvent::PermissionRequested {
+                request_id: info.title.clone(),
+                title: info.title.clone(),
+                kind: info.kind.clone(),
+                options: info.options.iter().map(|(id, _)| id.clone()).collect(),
+            });
+            responder.respond(permission_response(&info, decision))
+        })
+        .otherwise_ignore();
+    if let Err(error) = result {
+        tracing::debug!("ACP dispatch was not handled: {error}");
     }
 }
 
@@ -384,13 +360,15 @@ fn permission_info(request: &RequestPermissionRequest) -> PermissionRequestInfo 
     PermissionRequestInfo {
         title: request
             .tool_call
-            .as_ref()
-            .and_then(|call| call.title.clone())
+            .fields
+            .title
+            .clone()
             .unwrap_or_else(|| "ACP tool call".to_owned()),
         kind: request
             .tool_call
-            .as_ref()
-            .and_then(|call| call.kind.clone())
+            .fields
+            .kind
+            .clone()
             .map(|kind| format!("{kind:?}").to_lowercase()),
         options: request
             .options
