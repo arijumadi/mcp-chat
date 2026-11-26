@@ -4,11 +4,6 @@
 //! SQLite repositories. This module holds the policy decisions and the preset
 //! templates that never get inserted automatically.
 
-pub use crate::db::repo::acp_agents::{
-    PermissionKind, PermissionOption, PermissionOutcome, PermissionPolicy, auto_decide,
-    select_option,
-};
-
 /// A starting point shown in the UI as a template. Presets are never inserted
 /// into the database automatically: a command that is not installed on this
 /// machine must not end up in the prompt catalog.
