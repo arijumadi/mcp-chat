@@ -378,24 +378,70 @@ fn normalise_option(
     }
 }
 
+/// Read the options an agent returned with a new or resumed session.
+///
+/// Both responses carry the same stable `SessionConfigOption` list; agents that
+/// do not support options simply omit it.
 fn config_from_new(
-    response: agent_client_protocol::v1::schema::NewSessionResponse,
+    response: &agent_client_protocol::v1::schema::NewSessionResponse,
 ) -> Vec<ConfigOption> {
     response
         .config_options
-        .iter()
-        .map(normalise_option)
-        .collect()
+        .as_ref()
+        .map(|options| options.iter().map(normalise_option).collect())
+        .unwrap_or_default()
 }
 
 fn config_from_resume(
-    response: agent_client_protocol::v1::schema::ResumeSessionResponse,
+    response: &agent_client_protocol::v1::schema::ResumeSessionResponse,
 ) -> Vec<ConfigOption> {
     response
         .config_options
-        .iter()
-        .map(normalise_option)
-        .collect()
+        .as_ref()
+        .map(|options| options.iter().map(normalise_option).collect())
+        .unwrap_or_default()
+}
+
+/// Also fold in the legacy `modes` field, which older agents send instead of a
+/// `mode` config option.
+fn modes_as_option(
+    modes: &Option<agent_client_protocol::v1::schema::SessionModeState>,
+) -> Option<ConfigOption> {
+    let modes = modes.as_ref()?;
+    if modes.available_modes.is_empty() {
+        return None;
+    }
+    Some(ConfigOption {
+        id: "mode".to_owned(),
+        name: "Mode".to_owned(),
+        description: None,
+        category: Some("mode".to_owned()),
+        current_value: modes.current_mode_id.to_string(),
+        choices: modes
+            .available_modes
+            .iter()
+            .map(|mode| ConfigChoice {
+                value: mode.id.to_string(),
+                name: mode.name.clone(),
+                description: mode.description.clone(),
+            })
+            .collect(),
+        kind: "select".to_owned(),
+    })
+}
+
+/// Merge the stable option list with the legacy modes field, preferring the
+/// explicit `mode` option when an agent sends both.
+fn merge_modes(
+    mut options: Vec<ConfigOption>,
+    modes: &Option<agent_client_protocol::v1::schema::SessionModeState>,
+) -> Vec<ConfigOption> {
+    if let Some(legacy) = modes_as_option(modes) {
+        if !options.iter().any(|option| option.id == "mode") {
+            options.push(legacy);
+        }
+    }
+    options
 }
 
 /// What the caller needs once the connection is live.
@@ -489,7 +535,10 @@ where
                     {
                         Ok(setup) => {
                             resumed = true;
-                            session_config = config_from_resume(setup.response);
+                            session_config = merge_modes(
+                                config_from_resume(&setup.response),
+                                &setup.response.modes,
+                            );
                             setup.session
                         }
                         Err(error) => {
@@ -498,7 +547,10 @@ where
                             );
                             match new_session().await {
                                 Ok(setup) => {
-                                    session_config = config_from_new(setup.response);
+                                    session_config = merge_modes(
+                                        config_from_new(&setup.response),
+                                        &setup.response.modes,
+                                    );
                                     setup.session
                                 }
                                 Err(error) => {
@@ -511,7 +563,8 @@ where
                 }
                 _ => match new_session().await {
                     Ok(setup) => {
-                        session_config = config_from_new(setup.response);
+                        session_config =
+                            merge_modes(config_from_new(&setup.response), &setup.response.modes);
                         setup.session
                     }
                     Err(error) => {

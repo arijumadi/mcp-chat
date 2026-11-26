@@ -43,7 +43,10 @@ export function AgentCommandMenu({
   // the list is taller than the menu.
   useEffect(() => {
     const selected = listRef.current?.querySelector('[aria-selected="true"]');
-    selected?.scrollIntoView({ block: "nearest" });
+    // jsdom (tests) has no layout, so the method is absent there.
+    if (selected instanceof HTMLElement && typeof selected.scrollIntoView === "function") {
+      selected.scrollIntoView({ block: "nearest" });
+    }
   }, [active]);
 
   if (matches.length === 0) return null;
