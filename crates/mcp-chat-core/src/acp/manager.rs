@@ -11,7 +11,7 @@ use tokio::sync::{Mutex, mpsc};
 
 use super::error::AcpError;
 use super::events::AcpEvent;
-use super::session::{AcpSession, PermissionHandler, SessionSpec, open};
+use super::session::{AcpSession, SessionSpec, open};
 
 /// Upper bound on concurrently running agents. Matches the executor's
 /// parallelism so the model cannot exhaust the process table by delegating.
@@ -71,11 +71,7 @@ impl AcpManager {
     }
 
     /// Start a session for `local_id`, which is the child conversation id.
-    pub async fn open(
-        &self,
-        spec: SessionSpec<'_>,
-        permissions: PermissionHandler,
-    ) -> Result<ActiveSession, AcpError> {
+    pub async fn open(&self, spec: SessionSpec<'_>) -> Result<ActiveSession, AcpError> {
         let local_id = spec.local_id.clone();
         {
             let sessions = self.sessions.lock().await;

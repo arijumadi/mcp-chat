@@ -34,17 +34,14 @@ async fn open_session(
     let argv = vec![scenario.to_owned()];
     let command = mock_agent();
     let active = manager
-        .open(
-            SessionSpec {
-                local_id: local_id.to_owned(),
-                command: &command,
-                args: &argv,
-                env: &[],
-                cwd,
-                permissions: no_permissions(),
-            },
-            no_permissions(),
-        )
+        .open(SessionSpec {
+            local_id: local_id.to_owned(),
+            command: &command,
+            args: &argv,
+            env: &[],
+            cwd,
+            permissions: no_permissions(),
+        })
         .await
         .unwrap_or_else(|error| panic!("open failed: {}", error.user_message()));
     (active.handle, events_rx)
@@ -116,17 +113,14 @@ async fn missing_binary_is_reported_as_not_found() {
     let manager = AcpManager::new();
     let args: Vec<String> = Vec::new();
     let error = manager
-        .open(
-            SessionSpec {
-                local_id: "child-missing".into(),
-                command: "jarvis-missing-acp-agent",
-                args: &args,
-                env: &[],
-                cwd: &cwd,
-                permissions: no_permissions(),
-            },
-            no_permissions(),
-        )
+        .open(SessionSpec {
+            local_id: "child-missing".into(),
+            command: "jarvis-missing-acp-agent",
+            args: &args,
+            env: &[],
+            cwd: &cwd,
+            permissions: no_permissions(),
+        })
         .await
         .err()
         .expect("missing binary must fail");
