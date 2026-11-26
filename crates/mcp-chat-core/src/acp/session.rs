@@ -253,6 +253,9 @@ where
                                 Ok(SessionMessage::Message(dispatch)) => {
                                     handle_dispatch(dispatch, &events, &permissions).await;
                                 }
+                                // `SessionMessage` is non_exhaustive: ignore
+                                // variants this SDK version does not define.
+                                Ok(_) => {}
                                 Err(error) => {
                                     let _ = events.send(AcpEvent::TurnFailed {
                                         message: map_sdk_error(error).user_message(),
@@ -272,7 +275,7 @@ where
 }
 
 async fn handle_dispatch(
-    dispatch: agent_client_protocol::v1::Dispatch,
+    dispatch: agent_client_protocol::Dispatch,
     events: &mpsc::UnboundedSender<AcpEvent>,
     permissions: &PermissionHandler,
 ) {
