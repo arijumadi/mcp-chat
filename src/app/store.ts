@@ -55,6 +55,8 @@ export interface Toast {
 
 export interface AppStore {
   booted: boolean;
+  /// Why boot data could not be loaded, when the shell is shown anyway.
+  bootError: string | null;
   conversations: Conversation[];
   conversationLimit: number;
   conversationHasMore: boolean;
@@ -167,6 +169,7 @@ function discardStaged(attachments: Attachment[]): void {
 
 export const useApp = create<AppStore>()((set, get) => ({
   booted: false,
+  bootError: null,
   conversations: [],
   conversationLimit: 200,
   conversationHasMore: false,
@@ -205,10 +208,13 @@ export const useApp = create<AppStore>()((set, get) => ({
   async init() {
     if (get().booted || initializing) return;
     initializing = true;
-    if (!unsubscribe) {
-      unsubscribe = await subscribe((event) => handleCoreEvent(event, set, get));
-    }
     try {
+      // Subscribing is inside the guard on purpose: an event listener that
+      // never registers must not leave the app on the boot skeleton with no
+      // message, which is indistinguishable from a blank window.
+      if (!unsubscribe) {
+        unsubscribe = await subscribe((event) => handleCoreEvent(event, set, get));
+      }
       const [appInfo, providers, servers, settings, conversations] = await Promise.all([
         call<AppInfo>("app_info"),
         call<ProviderView[]>("list_providers"),
@@ -232,7 +238,9 @@ export const useApp = create<AppStore>()((set, get) => ({
         void get().checkForUpdate(false);
       }
     } catch (error) {
-      set({ booted: true });
+      // Show the shell even when boot data is missing: an empty app with a
+      // readable error beats a skeleton forever, which reads as a hang.
+      set({ booted: true, bootError: String(error) });
       get().toast(String(error), "error");
     } finally {
       initializing = false;

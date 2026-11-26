@@ -24,6 +24,17 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // A second launch must focus the running window, not open a rival
+        // process on the same database. Two instances would race for the
+        // SQLite file and the ACP session registry, which is a plausible cause
+        // of a window that renders nothing.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(
@@ -34,65 +45,29 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&data_dir)?;
-            let output_dir = data_dir.join("tool-output");
-            std::fs::create_dir_all(&output_dir)?;
-            let attachments_dir = data_dir.join("attachments");
-            std::fs::create_dir_all(&attachments_dir)?;
+            let data_dir = match app.path().app_data_dir() {
+                Ok(dir) => dir,
+                Err(error) => {
+                    return fail_startup(app, None, &format!("no data directory: {error}"));
+                }
+            };
+            if let Err(error) = std::fs::create_dir_all(&data_dir) {
+                return fail_startup(
+                    app,
+                    Some(&data_dir),
+                    &format!("cannot create {}: {error}", data_dir.display()),
+                );
+            }
+            // Logging first: everything after this point leaves a record.
             init_logging(&data_dir);
 
-            if let Some(report) = mcp_chat_core::builtin_skills::install_global_skills() {
-                if report.changed() {
-                    tracing::info!(
-                        installed = report.installed,
-                        updated = report.updated,
-                        "installed bundled skills"
-                    );
+            match initialize(app, &data_dir) {
+                Ok(()) => {
+                    ensure_window_visible(app);
+                    Ok(())
                 }
-                if report.failed > 0 {
-                    tracing::warn!(
-                        failed = report.failed,
-                        "some bundled skills could not be installed"
-                    );
-                }
+                Err(error) => fail_startup(app, Some(&data_dir), &error),
             }
-
-            let db_path = data_dir.join("mcp-chat.db");
-            let db = tauri::async_runtime::block_on(Db::open(&db_path))?;
-            tauri::async_runtime::block_on(messages::sweep_interrupted(&db.pool))?;
-            tauri::async_runtime::block_on(mcp_chat_core::attachments::sweep_pending(
-                &attachments_dir,
-            ));
-
-            let secrets: Arc<dyn SecretStore> = Arc::new(KeyringStore);
-            let manager = Arc::new(McpManager::new(db.clone(), secrets.clone()));
-            let engine = ChatEngine::new(
-                db.clone(),
-                secrets.clone(),
-                manager.clone(),
-                output_dir.clone(),
-                attachments_dir,
-            );
-
-            let state = AppState {
-                engine: engine.clone(),
-                db,
-                secrets,
-                mcp: manager.clone(),
-                data_dir: data_dir.clone(),
-                output_dir,
-            };
-            app.manage(state);
-
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                forward_events(handle, engine).await;
-            });
-            tauri::async_runtime::spawn(async move {
-                manager.refresh_all().await;
-            });
-            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::acp::list_acp_agents,
@@ -180,6 +155,145 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running mcp-chat");
+}
+
+/// Build the state. Every failure is returned as text, so the caller can show
+/// it instead of exiting with an unhelpful error and a window that never opens.
+fn initialize(app: &tauri::App, data_dir: &std::path::Path) -> Result<(), String> {
+    let output_dir = data_dir.join("tool-output");
+    std::fs::create_dir_all(&output_dir)
+        .map_err(|error| format!("cannot create {}: {error}", output_dir.display()))?;
+    let attachments_dir = data_dir.join("attachments");
+    std::fs::create_dir_all(&attachments_dir)
+        .map_err(|error| format!("cannot create {}: {error}", attachments_dir.display()))?;
+
+    if let Some(report) = mcp_chat_core::builtin_skills::install_global_skills() {
+        if report.changed() {
+            tracing::info!(
+                installed = report.installed,
+                updated = report.updated,
+                "installed bundled skills"
+            );
+        }
+        if report.failed > 0 {
+            tracing::warn!(
+                failed = report.failed,
+                "some bundled skills could not be installed"
+            );
+        }
+    }
+
+    let db_path = data_dir.join("mcp-chat.db");
+    let db = tauri::async_runtime::block_on(Db::open(&db_path)).map_err(|error| {
+        // The migration error is the useful part; name the file too, because a
+        // user cannot fix what they cannot find.
+        format!(
+            "cannot open the database at {}: {}",
+            db_path.display(),
+            error.user_message()
+        )
+    })?;
+    tauri::async_runtime::block_on(messages::sweep_interrupted(&db.pool)).map_err(|error| {
+        format!(
+            "cannot clean up interrupted messages: {}",
+            error.user_message()
+        )
+    })?;
+    tauri::async_runtime::block_on(mcp_chat_core::attachments::sweep_pending(&attachments_dir));
+
+    let secrets: Arc<dyn SecretStore> = Arc::new(KeyringStore);
+    let manager = Arc::new(McpManager::new(db.clone(), secrets.clone()));
+    let engine = ChatEngine::new(
+        db.clone(),
+        secrets.clone(),
+        manager.clone(),
+        output_dir.clone(),
+        attachments_dir,
+    );
+
+    let state = AppState {
+        engine: engine.clone(),
+        db,
+        secrets,
+        mcp: manager.clone(),
+        data_dir: data_dir.to_path_buf(),
+        output_dir,
+    };
+    app.manage(state);
+
+    let handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        forward_events(handle, engine).await;
+    });
+    tauri::async_runtime::spawn(async move {
+        manager.refresh_all().await;
+    });
+    Ok(())
+}
+
+/// Report a startup failure where the user can actually see it.
+///
+/// Without this, a failing `setup` exits the process and the user sees either
+/// nothing or a blank window, with no way to tell a corrupt database from a
+/// missing permission.
+fn fail_startup(app: &tauri::App, data_dir: Option<&std::path::Path>, message: &str) {
+    tracing::error!("startup failed: {message}");
+    let log_hint = data_dir
+        .map(|dir| format!("\n\nA log is kept in {}", dir.join("logs").display()))
+        .unwrap_or_default();
+    let text = format!("Jarvis could not start.\n\n{message}{log_hint}");
+    // stderr is what a terminal launch shows; the dialog covers a normal
+    // double-click start.
+    eprintln!("{text}");
+    tauri_plugin_dialog::DialogExt::dialog(app)
+        .message(text)
+        .title("Jarvis could not start")
+        .blocking_show();
+}
+
+/// Bring the main window back into view.
+///
+/// The window state plugin restores the last position, which is wrong when the
+/// monitor it was on is gone (a docked laptop, a removed external display).
+/// An off-screen window looks exactly like a broken app.
+fn ensure_window_visible(app: &tauri::App) {
+    let Some(window) = app.get_webview_window("main") else {
+        tracing::warn!("no main window was created");
+        return;
+    };
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        // No monitor information: show it rather than leave it hidden.
+        let _ = window.show();
+        return;
+    };
+    let Ok(position) = window.outer_position() else {
+        let _ = window.show();
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        let _ = window.show();
+        return;
+    };
+    let screen = monitor.size();
+    let origin = monitor.position();
+    // Treat a window as visible when a reasonable part of it overlaps the
+    // monitor: a couple of pixels is not enough to grab or even notice.
+    let margin = 80_i32;
+    let left = position.x.max(origin.x);
+    let top = position.y.max(origin.y);
+    let right = (position.x + size.width as i32).min(origin.x + screen.width as i32);
+    let bottom = (position.y + size.height as i32).min(origin.y + screen.height as i32);
+    let visible = right - left > margin && bottom - top > margin;
+    if !visible {
+        tracing::warn!(
+            x = position.x,
+            y = position.y,
+            "window was restored off screen; centering it"
+        );
+        let _ = window.center();
+    }
+    let _ = window.show();
+    let _ = window.set_focus();
 }
 
 fn init_logging(data_dir: &std::path::Path) {
