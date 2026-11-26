@@ -21,7 +21,9 @@ fn agent_binary() -> Option<PathBuf> {
     }
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
-        for name in ["antigravity", "antigravity.exe", "agy", "agy.exe"] {
+        // The official installer exposes the binary as `agy`; the tarball's
+        // inner name `antigravity` is checked too, for a manual unpack.
+        for name in ["agy", "agy.exe", "antigravity", "antigravity.exe"] {
             let candidate = dir.join(name);
             if candidate.is_file() {
                 return Some(candidate);
@@ -89,4 +91,80 @@ async fn a_real_antigravity_agent_reports_its_capabilities() {
             );
         }
     }
+}
+
+/// A full turn against a signed-in vendor agent.
+///
+/// Ignored because it needs an account. This is the check that proves the
+/// client can actually complete a prompt end to end, not merely handshake.
+#[tokio::test]
+#[ignore = "needs the Antigravity CLI, signed in"]
+async fn a_real_antigravity_agent_answers_a_prompt_and_remembers_it() {
+    let Some(binary) = agent_binary() else {
+        eprintln!("skipping: no antigravity binary found");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    let args = vec!["acp".to_owned()];
+    let (events_tx, mut events) = tokio::sync::mpsc::unbounded_channel::<AcpEvent>();
+
+    let session = match open(
+        SessionSpec {
+            local_id: "agy-turn".into(),
+            command: binary.to_str().unwrap(),
+            args: &args,
+            env: &[],
+            cwd: &cwd,
+            resume: None,
+            permissions: no_permissions(),
+        },
+        events_tx,
+    )
+    .await
+    {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("skipping: {}", error.user_message());
+            return;
+        }
+    };
+
+    session
+        .prompt("Reply with exactly: ACP-OK")
+        .expect("prompt sent");
+    let first = collect_turn(&mut events).await;
+    assert!(!first.trim().is_empty(), "the agent must answer");
+    eprintln!("first answer: {first}");
+    assert!(first.contains("ACP-OK"), "unexpected answer: {first}");
+
+    // Same session, new prompt: the agent keeps its own history, which is why
+    // Jarvis sends only the newest user message.
+    session
+        .prompt("Repeat the exact token I asked for in one word.")
+        .expect("second prompt sent");
+    let second = collect_turn(&mut events).await;
+    eprintln!("second answer: {second}");
+    assert!(
+        second.contains("ACP-OK"),
+        "the agent should remember the first turn: {second}"
+    );
+
+    let _ = session.close();
+}
+
+/// Gather assistant text until the turn ends.
+async fn collect_turn(events: &mut tokio::sync::mpsc::UnboundedReceiver<AcpEvent>) -> String {
+    let mut text = String::new();
+    loop {
+        match tokio::time::timeout(std::time::Duration::from_secs(300), events.recv()).await {
+            Ok(Some(AcpEvent::Text(chunk))) => text.push_str(&chunk),
+            Ok(Some(AcpEvent::TurnEnded { .. })) => break,
+            Ok(Some(AcpEvent::TurnFailed { message })) => panic!("turn failed: {message}"),
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("event channel closed before the turn ended; got: {text}"),
+            Err(_) => panic!("timed out; got so far: {text}"),
+        }
+    }
+    text
 }
