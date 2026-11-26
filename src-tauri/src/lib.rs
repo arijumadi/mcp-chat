@@ -48,15 +48,17 @@ pub fn run() {
             let data_dir = match app.path().app_data_dir() {
                 Ok(dir) => dir,
                 Err(error) => {
-                    return fail_startup(app, None, &format!("no data directory: {error}"));
+                    fail_startup(app, None, &format!("no data directory: {error}"));
+                    return Ok(());
                 }
             };
             if let Err(error) = std::fs::create_dir_all(&data_dir) {
-                return fail_startup(
+                fail_startup(
                     app,
                     Some(&data_dir),
                     &format!("cannot create {}: {error}", data_dir.display()),
                 );
+                return Ok(());
             }
             // Logging first: everything after this point leaves a record.
             init_logging(&data_dir);
@@ -66,7 +68,10 @@ pub fn run() {
                     ensure_window_visible(app);
                     Ok(())
                 }
-                Err(error) => fail_startup(app, Some(&data_dir), &error),
+                Err(error) => {
+                    fail_startup(app, Some(&data_dir), &error);
+                    Ok(())
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
