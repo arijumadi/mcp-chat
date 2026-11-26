@@ -7,6 +7,13 @@ name: ACP real agent probe
 # when changing the client, a preset, or the auth handling.
 
 on:
+  # Also runs on the pull request that changes this workflow, so the download
+  # and probe are verified before it becomes manual-only.
+  pull_request:
+    paths:
+      - ".github/workflows/acp-real.yml"
+      - "crates/mcp-chat-core/tests/acp_real_agent.rs"
+      - "crates/mcp-chat-core/src/acp/**"
   workflow_dispatch:
     inputs:
       agent:
@@ -26,7 +33,9 @@ env:
 jobs:
   antigravity:
     name: Antigravity handshake
-    if: inputs.agent == 'antigravity'
+    # `inputs.agent` is empty outside workflow_dispatch, so treat that as the
+    # default rather than skipping the job on a pull request.
+    if: inputs.agent == '' || inputs.agent == 'antigravity'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -44,10 +53,14 @@ jobs:
       # Google publishes a Linux x64 tarball per release. The archive contains
       # a single executable named `antigravity`.
       - name: Install Antigravity CLI
+        env:
+          # Pinned on purpose: the probe asserts behaviour, so a silent vendor
+          # upgrade should be a deliberate change, not a surprise red build.
+          AGY_VERSION: "1.5.18"
         run: |
           set -euo pipefail
-          url=$(curl -fsSL https://api.github.com/repos/google-antigravity/antigravity-cli/releases/latest \
-            | python3 -c "import json,sys; d=json.load(sys.stdin); print(next(a['browser_download_url'] for a in d['assets'] if a['name']=='agy_cli_linux_x64.tar.gz'))")
+          # The release URL is deterministic, so no API call (and no rate limit).
+          url="https://github.com/google-antigravity/antigravity-cli/releases/download/${AGY_VERSION}/agy_cli_linux_x64.tar.gz"
           echo "Downloading $url"
           mkdir -p "$RUNNER_TEMP/agy"
           curl -fsSL "$url" -o "$RUNNER_TEMP/agy/agy.tar.gz"
