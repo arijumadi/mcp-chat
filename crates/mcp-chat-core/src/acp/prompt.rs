@@ -101,12 +101,10 @@ fn block_for(attachment: &AttachmentInput, caps: PromptCapabilities) -> ContentB
         } => {
             if caps.embedded_context {
                 ContentBlock::Resource(EmbeddedResource::new(
-                    EmbeddedResourceResource::TextResourceContents(TextResourceContents {
-                        mime_type: Some(mime.clone()),
-                        text: text.clone(),
-                        uri: uri.clone(),
-                        meta: None,
-                    }),
+                    EmbeddedResourceResource::TextResourceContents(
+                        TextResourceContents::new(text.clone(), uri.clone())
+                            .mime_type(mime.clone()),
+                    ),
                 ))
             } else {
                 // Resource links are mandatory, so the agent can still fetch it.
@@ -141,12 +139,9 @@ fn context_block(context: &MessageContext, caps: PromptCapabilities) -> ContentB
     let uri = format!("file://{}", context.path.replace('\\', "/"));
     if caps.embedded_context {
         ContentBlock::Resource(EmbeddedResource::new(
-            EmbeddedResourceResource::TextResourceContents(TextResourceContents {
-                mime_type: Some("text/plain".into()),
-                text: body,
-                uri,
-                meta: None,
-            }),
+            EmbeddedResourceResource::TextResourceContents(
+                TextResourceContents::new(body, uri).mime_type("text/plain"),
+            ),
         ))
     } else {
         // Without embedded context, the comment still has to reach the agent.
