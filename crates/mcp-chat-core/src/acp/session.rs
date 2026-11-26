@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::error::AcpError;
-use super::events::AcpEvent;
+use super::events::{AcpEvent, AgentCommand};
 use super::process::AgentProcess;
 
 /// How to answer one permission request.
@@ -44,6 +44,9 @@ pub struct PermissionRequestInfo {
     /// Absolute paths the tool call touches, when the agent reported any.
     pub locations: Vec<String>,
 }
+
+/// The agent's slash commands, shared between the pump and the handle.
+type CommandStore = Arc<std::sync::Mutex<Vec<AgentCommand>>>;
 
 pub type PermissionHandler =
     Arc<dyn Fn(PermissionRequestInfo) -> BoxFuture<'static, PermissionDecision> + Send + Sync>;
@@ -69,6 +72,10 @@ pub struct AcpSession {
     /// know this before it assembles a turn.
     pub accepts_images: bool,
     pub accepts_embedded_context: bool,
+    /// Slash commands the agent advertised, replaced whenever it announces a
+    /// new set. Kept on the handle so the composer can ask at any time without
+    /// needing a turn in flight.
+    commands: CommandStore,
     /// Cleared by the pump when the process or connection ends, so the manager
     /// can drop a dead session instead of leaking one of its slots.
     alive: Arc<std::sync::atomic::AtomicBool>,
@@ -106,6 +113,14 @@ impl AcpSession {
             .map_err(|error| AcpError::Protocol {
                 message: error.to_string(),
             })
+    }
+
+    /// The agent's current slash commands.
+    pub fn commands(&self) -> Vec<AgentCommand> {
+        self.commands
+            .lock()
+            .map(|commands| commands.clone())
+            .unwrap_or_default()
     }
 
     /// Whether this handle continues a session the agent already knew.
@@ -199,6 +214,8 @@ pub async fn open(
 
     let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let pump_alive = alive.clone();
+    let commands: CommandStore = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pump_commands = commands.clone();
     let pump_tail = stderr_tail.clone();
     let pump = tokio::spawn(async move {
         let result = drive(
@@ -208,6 +225,7 @@ pub async fn open(
             permissions,
             cwd,
             resume,
+            pump_commands,
             ready_tx,
         )
         .await;
@@ -250,6 +268,7 @@ pub async fn open(
         command: spec.command.to_owned(),
         supports_close: ready.supports_close,
         agent_info: ready.agent_info,
+        commands,
         accepts_images: ready.accepts_images,
         accepts_embedded_context: ready.accepts_embedded_context,
         alive,
@@ -280,6 +299,7 @@ async fn drive<T>(
     permissions: PermissionHandler,
     cwd: std::path::PathBuf,
     resume: Option<String>,
+    commands: CommandStore,
     ready: oneshot::Sender<Result<SessionReady, AcpError>>,
 ) -> Result<(), AcpError>
 where
@@ -376,9 +396,36 @@ where
 
             // Every turn failure is reported exactly once, right where it
             // becomes known; the pump wrapper only reports transport failures.
-            'turn: while let Some(command) = prompts.recv().await {
-                match command {
-                    Command::Close => {
+            //
+            // Reading updates while idle matters: agents announce their slash
+            // commands right after `session/new`, before any prompt, and an
+            // announcement parked in the channel until the first turn would
+            // make the composer look empty.
+            'turn: loop {
+                let next = tokio::select! {
+                    command = prompts.recv() => match command {
+                        Some(command) => Next::Command(command),
+                        // Every handle was dropped.
+                        None => break 'turn,
+                    },
+                    update = session.read_update() => Next::Update(update),
+                };
+
+                match next {
+                    Next::Update(Ok(SessionMessage::Message(dispatch))) => {
+                        handle_dispatch(dispatch.into_raw(), &events, &permissions, &commands)
+                            .await;
+                    }
+                    // A prompt response with no turn in flight is stale; there
+                    // is nothing to settle.
+                    Next::Update(Ok(_)) => {}
+                    Next::Update(Err(error)) => {
+                        let _ = events.send(AcpEvent::TurnFailed {
+                            message: map_error(error, &facts).user_message(),
+                        });
+                        break 'turn;
+                    }
+                    Next::Command(Command::Close) => {
                         // `session/close` is opt-in: only call it when the agent
                         // advertised the capability, or it answers with
                         // method-not-found.
@@ -391,9 +438,9 @@ where
                                 .block_task()
                                 .await;
                         }
-                        break;
+                        break 'turn;
                     }
-                    Command::Prompt(blocks) => {
+                    Next::Command(Command::Prompt(blocks)) => {
                         if session.send_prompt_blocks(blocks).is_err() {
                             let _ = events.send(AcpEvent::TurnFailed {
                                 message: AcpError::Inactive.user_message(),
@@ -424,8 +471,13 @@ where
                                     break;
                                 }
                                 Ok(SessionMessage::Message(dispatch)) => {
-                                    handle_dispatch(dispatch.into_raw(), &events, &permissions)
-                                        .await;
+                                    handle_dispatch(
+                                        dispatch.into_raw(),
+                                        &events,
+                                        &permissions,
+                                        &commands,
+                                    )
+                                    .await;
                                 }
                                 // `SessionMessage` is non_exhaustive: ignore
                                 // variants this SDK version does not define.
@@ -452,16 +504,28 @@ where
     outcome.map_err(|error| map_error(error, &AgentFacts::default()))
 }
 
+/// What the idle pump can wake up for.
+enum Next {
+    Command(Command),
+    Update(Result<SessionMessage, agent_client_protocol::Error>),
+}
+
 async fn handle_dispatch(
     dispatch: agent_client_protocol::Dispatch,
     events: &mpsc::UnboundedSender<AcpEvent>,
     permissions: &PermissionHandler,
+    commands: &CommandStore,
 ) {
     let events_for_update = events.clone();
+    let commands_for_update = commands.clone();
     let permissions = permissions.clone();
     let result = agent_client_protocol::util::MatchDispatch::new(dispatch)
         .if_notification(|notification: SessionNotification| async move {
-            emit_update(notification.update, &events_for_update);
+            emit_update(
+                notification.update,
+                &events_for_update,
+                &commands_for_update,
+            );
             Ok(())
         })
         .await
@@ -488,7 +552,11 @@ async fn handle_dispatch(
     }
 }
 
-fn emit_update(update: SessionUpdate, events: &mpsc::UnboundedSender<AcpEvent>) {
+fn emit_update(
+    update: SessionUpdate,
+    events: &mpsc::UnboundedSender<AcpEvent>,
+    commands: &CommandStore,
+) {
     match update {
         SessionUpdate::AgentMessageChunk(chunk) => {
             if let Some(text) = content_text(&chunk.content) {
@@ -527,6 +595,30 @@ fn emit_update(update: SessionUpdate, events: &mpsc::UnboundedSender<AcpEvent>) 
                 "{} plan entries",
                 plan.entries.len()
             )));
+        }
+        SessionUpdate::AvailableCommandsUpdate(update) => {
+            // The protocol replaces the whole set, so store and emit the same
+            // list instead of merging.
+            let next: Vec<AgentCommand> = update
+                .available_commands
+                .into_iter()
+                .map(|command| AgentCommand {
+                    name: command.name,
+                    description: command.description,
+                    input_hint: command.input.and_then(|input| match input {
+                        agent_client_protocol::v1::schema::AvailableCommandInput::Unstructured(
+                            unstructured,
+                        ) => Some(unstructured.hint).filter(|hint| !hint.trim().is_empty()),
+                        // The enum is non_exhaustive; an unknown input shape is
+                        // better shown as "takes arguments" than dropped.
+                        _ => Some("arguments".to_owned()),
+                    }),
+                })
+                .collect();
+            if let Ok(mut stored) = commands.lock() {
+                *stored = next.clone();
+            }
+            let _ = events.send(AcpEvent::Commands(next));
         }
         _ => {}
     }

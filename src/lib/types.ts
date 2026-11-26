@@ -543,3 +543,9 @@ export interface AcpProbe {
   agentName?: string | null;
   agentVersion?: string | null;
 }
+
+export interface AgentCommand {
+  name: string;
+  description: string;
+  inputHint?: string | null;
+}

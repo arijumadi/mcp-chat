@@ -111,7 +111,12 @@ export const COMMANDS: readonly Command[] = [
     keywords: "summarize shrink context",
     shortcut: "Mod+Shift+K",
     worksWhileTyping: true,
-    disabled: needsIdleChat,
+    disabled: (state) =>
+      needsIdleChat(state) ??
+      // The agent owns its history, so Jarvis cannot summarise it.
+      (state.conversations.find((item) => item.id === state.activeId)?.acpAgent
+        ? "This chat runs on an ACP agent, which compacts its own history."
+        : null),
     run: (state) => state.openCompact(),
   },
   {

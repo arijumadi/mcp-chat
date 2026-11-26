@@ -59,7 +59,10 @@ pub async fn run_turn(
 ) -> Result<()> {
     let args = acp_agents::agent_args(spec.agent)?;
     let env = acp_agents::agent_env(spec.agent)?;
-    let handler = permission_handler(engine.clone(), spec.child_id, &cancel);
+    let policy =
+        crate::db::repo::acp_agents::PermissionPolicy::parse(&spec.agent.permission_policy)
+            .unwrap_or(crate::db::repo::acp_agents::PermissionPolicy::Ask);
+    let handler = permission_handler(engine.clone(), spec.child_id, &cancel, policy);
 
     let active = match engine.acp.take(spec.child_id).await {
         Some(active) => active,
@@ -188,7 +191,9 @@ async fn stream_turn(
                 run.upsert_tool(&call_id, &title, kind, &status, detail)
                     .await;
             }
-            AcpEvent::Plan(_) | AcpEvent::PermissionRequested { .. } => {}
+            // Plans and the agent's command list are metadata: the pump already
+            // stored the commands, and neither belongs in the transcript.
+            AcpEvent::Plan(_) | AcpEvent::PermissionRequested { .. } | AcpEvent::Commands(_) => {}
             AcpEvent::TurnEnded { .. } => break,
             AcpEvent::TurnFailed { message } => {
                 run.failure = Some(message);
@@ -394,6 +399,18 @@ impl TurnRun<'_> {
     }
 }
 
+/// Whether the agent's configured policy settles this request without asking.
+///
+/// Only read-only work can be auto-approved. Everything else, including an
+/// action whose kind the agent did not report, goes to the user.
+fn policy_allows(
+    policy: crate::db::repo::acp_agents::PermissionPolicy,
+    kind: Option<&str>,
+) -> bool {
+    let kind = crate::db::repo::acp_agents::PermissionKind::parse(kind);
+    crate::db::repo::acp_agents::auto_decide(policy, kind)
+}
+
 /// Forward an ACP permission request to the normal approval prompt.
 ///
 /// The answer maps onto a real ACP option: approve selects `allow_once`, reject
@@ -403,6 +420,7 @@ fn permission_handler(
     engine: Arc<ChatEngine>,
     child_id: &str,
     cancel: &CancellationToken,
+    policy: crate::db::repo::acp_agents::PermissionPolicy,
 ) -> PermissionHandler {
     let cancel = cancel.clone();
     let child_id = child_id.to_owned();
@@ -411,6 +429,9 @@ fn permission_handler(
         let child_id = child_id.clone();
         let cancel = cancel.clone();
         Box::pin(async move {
+            if policy_allows(policy, info.kind.as_deref()) {
+                return PermissionDecision::Approve;
+            }
             let call_id = format!("acp-{}", uuid::Uuid::new_v4());
             // Register before announcing: the UI may answer the moment it sees
             // the event, and an answer for an unknown call id would be lost.
@@ -564,6 +585,30 @@ mod tests {
             report_from_history(&history(message("assistant", "completed", None), vec![]));
         assert_eq!(state, "failed");
         assert!(report.contains("without a final answer"));
+    }
+
+    #[test]
+    fn auto_reads_policy_settles_read_only_requests() {
+        use crate::db::repo::acp_agents::PermissionPolicy;
+        // Reads and searches never reach the user under this policy.
+        assert!(policy_allows(PermissionPolicy::AutoReads, Some("read")));
+        assert!(policy_allows(PermissionPolicy::AutoReads, Some("search")));
+        assert!(policy_allows(PermissionPolicy::AutoReads, Some("think")));
+        // Anything that can change state still asks.
+        assert!(!policy_allows(PermissionPolicy::AutoReads, Some("edit")));
+        assert!(!policy_allows(PermissionPolicy::AutoReads, Some("execute")));
+        assert!(!policy_allows(PermissionPolicy::AutoReads, Some("delete")));
+        // An unreported kind must not be guessed as harmless.
+        assert!(!policy_allows(PermissionPolicy::AutoReads, None));
+        assert!(!policy_allows(PermissionPolicy::AutoReads, Some("mystery")));
+    }
+
+    #[test]
+    fn ask_policy_never_settles_anything() {
+        use crate::db::repo::acp_agents::PermissionPolicy;
+        for kind in [Some("read"), Some("search"), Some("think"), None] {
+            assert!(!policy_allows(PermissionPolicy::Ask, kind), "{kind:?}");
+        }
     }
 
     #[test]

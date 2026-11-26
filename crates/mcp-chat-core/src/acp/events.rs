@@ -5,6 +5,20 @@
 //! The engine then maps them onto `part`/`delta` rows in the child
 //! conversation.
 
+/// A slash command the agent says it understands.
+///
+/// The agent executes these itself; the client only forwards the text. Keeping
+/// the list lets the composer suggest them instead of making the user memorise
+/// what each external agent supports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentCommand {
+    /// Without a leading slash, as the protocol sends it.
+    pub name: String,
+    pub description: String,
+    /// Hint shown for a command that takes arguments, when the agent gave one.
+    pub input_hint: Option<String>,
+}
+
 /// One update streamed by an ACP agent.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AcpEvent {
@@ -24,6 +38,8 @@ pub enum AcpEvent {
     },
     /// The agent replaced its plan.
     Plan(String),
+    /// The set of slash commands the agent supports, replaced wholesale.
+    Commands(Vec<AgentCommand>),
     /// A permission request that needs an answer.
     PermissionRequested {
         request_id: String,

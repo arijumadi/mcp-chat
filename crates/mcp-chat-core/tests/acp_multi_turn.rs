@@ -308,3 +308,65 @@ async fn collect_turn(events: &mut tokio::sync::mpsc::UnboundedReceiver<AcpEvent
     }
     text
 }
+
+/// The agent announces slash commands right after `session/new`, before any
+/// prompt. Reading updates only during a turn would hide them until the user
+/// had already sent a message.
+#[tokio::test]
+async fn agent_commands_are_read_while_the_session_is_idle() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    let manager = AcpManager::new();
+    let (handle, _events) = open_session(&manager, "child-commands", &cwd, "echo").await;
+
+    let mut seen = Vec::new();
+    for _ in 0..100 {
+        seen = handle.commands();
+        if !seen.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let names: Vec<&str> = seen.iter().map(|command| command.name.as_str()).collect();
+    assert_eq!(names, vec!["review", "search"], "got {names:?}");
+    let search = seen.iter().find(|c| c.name == "search").unwrap();
+    assert_eq!(search.input_hint.as_deref(), Some("<query>"));
+    assert!(search.description.contains("Search"));
+
+    manager.close("child-commands").await.unwrap();
+}
+
+/// `session/resume` must continue the id the caller asked for, not silently
+/// start a new conversation.
+#[tokio::test]
+async fn a_stored_session_id_is_resumed() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    let manager = AcpManager::new();
+    let args = vec!["echo".to_owned()];
+    let command = mock_agent();
+
+    let active = manager
+        .open(SessionSpec {
+            local_id: "child-resume".into(),
+            command: &command,
+            args: &args,
+            env: &[],
+            cwd: &cwd,
+            resume: Some("previous-session".into()),
+            permissions: no_permissions(),
+        })
+        .await
+        .expect("resume should open");
+
+    assert!(active.handle.resumed(), "the agent accepted the resume");
+    assert_eq!(active.handle.acp_session_id, "previous-session");
+
+    // A resumed session still answers prompts.
+    active.handle.prompt("still there?").unwrap();
+    let mut events = active.events;
+    let answer = collect_turn(&mut events).await;
+    assert!(answer.contains("still there?"), "{answer}");
+
+    manager.close("child-resume").await.unwrap();
+}

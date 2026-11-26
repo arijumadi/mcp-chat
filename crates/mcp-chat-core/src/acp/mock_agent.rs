@@ -42,6 +42,31 @@ fn chunk(text: &str) {
     }));
 }
 
+/// Announce the slash commands this mock understands.
+///
+/// Real agents send this right after a session is created, which is before any
+/// prompt, so the client has to read updates while idle to see it.
+fn announce_commands() {
+    write(json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": "mock-session",
+            "update": {
+                "sessionUpdate": "available_commands_update",
+                "availableCommands": [
+                    { "name": "review", "description": "Review the changes" },
+                    {
+                        "name": "search",
+                        "description": "Search the codebase",
+                        "input": { "hint": "<query>" }
+                    }
+                ]
+            }
+        }
+    }));
+}
+
 fn finish(id: &Value, stop_reason: &str) {
     write(json!({
         "jsonrpc": "2.0",
@@ -70,13 +95,20 @@ struct PendingTurn {
 /// `sessionCapabilities.close`, so the client is allowed to call it.
 pub fn run(scenario: &str) {
     let supports_close = std::env::args().nth(2).as_deref() == Some("close");
+    // Resume is always advertised so a test can exercise the restore path;
+    // close stays opt-in so the capability gate keeps getting tested.
     let capabilities = if supports_close {
         json!({
             "loadSession": false,
-            "sessionCapabilities": { "close": {} }
+            "promptCapabilities": { "image": true, "embeddedContext": true },
+            "sessionCapabilities": { "close": {}, "resume": {} }
         })
     } else {
-        json!({ "loadSession": false })
+        json!({
+            "loadSession": false,
+            "promptCapabilities": { "image": true, "embeddedContext": true },
+            "sessionCapabilities": { "resume": {} }
+        })
     };
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
@@ -135,11 +167,28 @@ pub fn run(scenario: &str) {
                     "agentInfo": { "name": "mock-acp", "version": "0.0.0" }
                 }
             })),
-            "session/new" => write(json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": { "sessionId": "mock-session" }
-            })),
+            "session/new" => {
+                write(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": { "sessionId": "mock-session" }
+                }));
+                announce_commands();
+            }
+            "session/resume" => {
+                // Echo the id the client asked for, as a real agent does.
+                let requested = params
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("mock-session")
+                    .to_owned();
+                write(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": { "sessionId": requested }
+                }));
+                announce_commands();
+            }
             "session/prompt" => {
                 turn += 1;
                 let prompt = text_of(&params);
