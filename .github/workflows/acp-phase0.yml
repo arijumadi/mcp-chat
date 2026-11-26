@@ -1,0 +1,102 @@
+name: ACP Phase 0 Spike
+
+# Throwaway spike workflow. Run it from the spike branch only.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target-acp-phase0
+
+jobs:
+  spike:
+    name: ACP spike (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "spikes/acp-phase0 -> target-acp-phase0"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Tool versions
+        shell: bash
+        run: |
+          rustc --version
+          cargo --version
+          node --version
+
+      - name: Resolve dependency tree
+        shell: bash
+        run: |
+          echo "--- duplicates ---"
+          cargo tree --manifest-path spikes/acp-phase0/Cargo.toml --duplicates
+          echo "--- feature tree (first 120 lines) ---"
+          cargo tree --manifest-path spikes/acp-phase0/Cargo.toml -e features | head -120
+
+      - name: Preset package availability
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          npm view @zed-industries/codex-acp version || true
+          npm view opencode-ai version || true
+          npm view @google/gemini-cli version || true
+
+      - name: Multi-turn ACP test
+        shell: bash
+        run: cargo test --manifest-path spikes/acp-phase0/Cargo.toml -- --nocapture
+
+      - name: Release build
+        shell: bash
+        run: cargo build --release --manifest-path spikes/acp-phase0/Cargo.toml
+
+      - name: Binary size (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          ls -lh "$CARGO_TARGET_DIR/release/acp-phase0"
+          stat -c '%n %s bytes' "$CARGO_TARGET_DIR/release/acp-phase0"
+
+      - name: Binary size (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:CARGO_TARGET_DIR "release/acp-phase0.exe"
+          Get-Item $bin | Select-Object FullName, Length
+
+  schema-budget:
+    name: Schema budget baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Built-in tool schema budget
+        run: cargo test -p mcp-chat-core builtin_tool_schema_stays_compact -- --nocapture

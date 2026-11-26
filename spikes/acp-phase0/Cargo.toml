@@ -1,0 +1,12 @@
+[package]
+name = "acp-phase0"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+agent-client-protocol = { version = "=5.6.0", features = ["process"] }
+anyhow = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

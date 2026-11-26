@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/mcp-chat-core", "src-tauri", "tests/mock_servers"]
+exclude = ["spikes"]
 
 [workspace.package]
 version = "0.8.2"
