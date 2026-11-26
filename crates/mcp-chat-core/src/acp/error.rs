@@ -14,7 +14,9 @@ pub enum AcpError {
     /// `initialize` failed or negotiated an unusable version.
     InitFailed { message: String },
     /// The agent needs an interactive login before it will create sessions.
-    AuthRequired { agent: String },
+    /// `methods` are the names the agent itself advertised, so the message can
+    /// name the real login rather than guess.
+    AuthRequired { agent: String, methods: Vec<String> },
     /// The process exited mid-turn. `stderr_tail` is bounded.
     Crashed { stderr_tail: String },
     /// The session exists in the database but its process is gone.
@@ -37,8 +39,12 @@ impl AcpError {
             Self::InitFailed { message } => {
                 format!("The ACP agent did not initialize: {message}")
             }
-            Self::AuthRequired { agent } => format!(
+            Self::AuthRequired { agent, methods } if methods.is_empty() => format!(
                 "ACP agent {agent:?} needs a login first. Sign in with that agent's own CLI, then retry."
+            ),
+            Self::AuthRequired { agent, methods } => format!(
+                "ACP agent {agent:?} needs a login first. It offers: {}. Sign in there, then retry.",
+                methods.join(", ")
             ),
             Self::Crashed { stderr_tail } if stderr_tail.trim().is_empty() => {
                 "The ACP agent exited unexpectedly.".to_owned()
@@ -89,6 +95,7 @@ mod tests {
             },
             AcpError::AuthRequired {
                 agent: "codex".into(),
+                methods: Vec::new(),
             },
             AcpError::Crashed {
                 stderr_tail: "panic: no token".into(),
@@ -132,5 +139,32 @@ mod tests {
     fn converts_to_a_core_error() {
         let core: CoreError = AcpError::Inactive.into();
         assert!(core.user_message().contains("ACP session has ended"));
+    }
+}
+
+#[cfg(test)]
+mod auth_message_tests {
+    use super::*;
+
+    #[test]
+    fn an_auth_error_names_the_agent_and_its_login_methods() {
+        let error = AcpError::AuthRequired {
+            agent: "Antigravity ACP Server".into(),
+            methods: vec!["Log in with Google".into(), "Gemini API key".into()],
+        };
+        let message = error.user_message();
+        assert!(message.contains("Antigravity ACP Server"), "{message}");
+        assert!(message.contains("Log in with Google"), "{message}");
+        assert!(message.contains("Gemini API key"), "{message}");
+    }
+
+    #[test]
+    fn an_auth_error_without_methods_still_says_what_to_do() {
+        let error = AcpError::AuthRequired {
+            agent: "Something".into(),
+            methods: Vec::new(),
+        };
+        let message = error.user_message();
+        assert!(message.contains("own CLI"), "{message}");
     }
 }

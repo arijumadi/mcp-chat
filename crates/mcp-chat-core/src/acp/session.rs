@@ -291,10 +291,13 @@ where
             let initialized = match initialized {
                 Ok(response) => response,
                 Err(error) => {
-                    let _ = ready.send(Err(map_sdk_error(error)));
+                    let _ = ready.send(Err(map_error(error, &AgentFacts::default())));
                     return Ok(());
                 }
             };
+            // Everything after this point can name the agent and its login
+            // methods in an error, which is what the settings Probe shows.
+            let facts = AgentFacts::from_init(&initialized);
             let session_caps = &initialized.agent_capabilities.session_capabilities;
             let supports_close = session_caps.close.is_some();
             let supports_resume = session_caps.resume.is_some();
@@ -340,7 +343,7 @@ where
                             match new_session().await {
                                 Ok(session) => session,
                                 Err(error) => {
-                                    let _ = ready.send(Err(map_sdk_error(error)));
+                                    let _ = ready.send(Err(map_error(error, &facts)));
                                     return Ok(());
                                 }
                             }
@@ -350,7 +353,7 @@ where
                 _ => match new_session().await {
                     Ok(session) => session,
                     Err(error) => {
-                        let _ = ready.send(Err(map_sdk_error(error)));
+                        let _ = ready.send(Err(map_error(error, &facts)));
                         return Ok(());
                     }
                 },
@@ -404,7 +407,7 @@ where
                                 }
                                 Ok(SessionMessage::PromptResponse(Err(error))) => {
                                     let fatal = connection_is_gone(&error);
-                                    let message = map_sdk_error(error).user_message();
+                                    let message = map_error(error, &facts).user_message();
                                     let _ = events.send(AcpEvent::TurnFailed { message });
                                     // A failed prompt is usually recoverable,
                                     // but a closed transport is not: waiting
@@ -426,7 +429,7 @@ where
                                     // The update stream is gone, so the
                                     // connection is dead and no turn can follow.
                                     let _ = events.send(AcpEvent::TurnFailed {
-                                        message: map_sdk_error(error).user_message(),
+                                        message: map_error(error, &facts).user_message(),
                                     });
                                     break 'turn;
                                 }
@@ -439,7 +442,9 @@ where
         })
         .await;
 
-    outcome.map_err(map_sdk_error)
+    // A failure here is transport-level: the per-turn errors were already
+    // reported on the event stream, so the facts learned at init are gone.
+    outcome.map_err(|error| map_error(error, &AgentFacts::default()))
 }
 
 async fn handle_dispatch(
@@ -599,12 +604,43 @@ fn connection_is_gone(error: &agent_client_protocol::Error) -> bool {
         || agent_client_protocol::is_connection_terminated(error)
 }
 
-fn map_sdk_error(error: agent_client_protocol::Error) -> AcpError {
+/// What the mapping needs beyond the raw error, learned during `initialize`.
+#[derive(Debug, Clone, Default)]
+struct AgentFacts {
+    label: String,
+    auth_methods: Vec<String>,
+}
+
+impl AgentFacts {
+    fn from_init(response: &agent_client_protocol::v1::schema::InitializeResponse) -> Self {
+        Self {
+            label: response
+                .agent_info
+                .as_ref()
+                .map(|info| info.name.clone())
+                .unwrap_or_else(|| "The ACP agent".to_owned()),
+            auth_methods: response
+                .auth_methods
+                .iter()
+                .map(|method| method.name().to_owned())
+                .collect(),
+        }
+    }
+}
+
+fn map_error(error: agent_client_protocol::Error, facts: &AgentFacts) -> AcpError {
     let message = error.to_string();
+    // The protocol has a dedicated code for this, which is far more reliable
+    // than matching wording. The text check stays as a fallback for agents that
+    // report a login problem with a generic code.
     let lower = message.to_lowercase();
-    if lower.contains("auth") || lower.contains("login") || lower.contains("unauthorized") {
+    if error.code == agent_client_protocol::ErrorCode::AUTH_REQUIRED
+        || lower.contains("authentication required")
+        || lower.contains("login")
+    {
         return AcpError::AuthRequired {
-            agent: "ACP agent".to_owned(),
+            agent: facts.label.clone(),
+            methods: facts.auth_methods.clone(),
         };
     }
     if connection_is_gone(&error) {

@@ -1,0 +1,62 @@
+name: ACP real agent probe
+
+# Runs the ignored test that speaks to a real vendor ACP agent.
+#
+# Kept separate from `core.yml` because it downloads a ~100 MB vendor binary and
+# needs a signed-in account for anything beyond the handshake. Run it by hand
+# when changing the client, a preset, or the auth handling.
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: "Which vendor CLI to probe"
+        required: true
+        default: antigravity
+        type: choice
+        options:
+          - antigravity
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  antigravity:
+    name: Antigravity handshake
+    if: inputs.agent == 'antigravity'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: acp-real
+
+      # Google publishes a Linux x64 tarball per release. The archive contains
+      # a single executable named `antigravity`.
+      - name: Install Antigravity CLI
+        run: |
+          set -euo pipefail
+          url=$(curl -fsSL https://api.github.com/repos/google-antigravity/antigravity-cli/releases/latest \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print(next(a['browser_download_url'] for a in d['assets'] if a['name']=='agy_cli_linux_x64.tar.gz'))")
+          echo "Downloading $url"
+          mkdir -p "$RUNNER_TEMP/agy"
+          curl -fsSL "$url" -o "$RUNNER_TEMP/agy/agy.tar.gz"
+          tar xzf "$RUNNER_TEMP/agy/agy.tar.gz" -C "$RUNNER_TEMP/agy"
+          chmod +x "$RUNNER_TEMP/agy/antigravity"
+          "$RUNNER_TEMP/agy/antigravity" --version
+
+      - name: Probe the agent
+        env:
+          AGY_BIN: ${{ runner.temp }}/agy/antigravity
+        run: |
+          cargo test -p mcp-chat-core --test acp_real_agent -- --ignored --nocapture
