@@ -414,7 +414,7 @@ fn permission_response(
 }
 
 fn stop_reason(response: &agent_client_protocol::v1::schema::PromptResponse) -> String {
-    serde_json::to_value(response.stop_reason.clone())
+    serde_json::to_value(response.stop_reason)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "end_turn".to_owned())
