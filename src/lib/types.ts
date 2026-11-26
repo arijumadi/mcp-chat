@@ -514,3 +514,32 @@ export interface TestServerInput {
   envJson?: string;
   cwd?: string;
 }
+
+export interface AcpAgentView {
+  id: string;
+  name: string;
+  slug: string;
+  command: string;
+  args: string[];
+  envKeys: string[];
+  permissionPolicy: string;
+  enabled: boolean;
+  lastError?: string | null;
+  lastCheckedAt?: number | null;
+}
+
+export interface AcpPresetView {
+  name: string;
+  slug: string;
+  command: string;
+  args: string[];
+  notes: string;
+}
+
+export interface AcpProbe {
+  ok: boolean;
+  message: string;
+  sessionId?: string | null;
+  agentName?: string | null;
+  agentVersion?: string | null;
+}

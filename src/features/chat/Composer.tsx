@@ -18,6 +18,7 @@ import { inputClass } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { formatTokens } from "@/lib/format";
 import type { ContextItem, Conversation } from "@/lib/types";
+import { AgentPicker } from "./AgentPicker";
 import { ModelPicker } from "./ModelPicker";
 import { ReasoningPicker } from "./ReasoningPicker";
 import { WorkspacePicker } from "./WorkspacePicker";
@@ -448,8 +449,13 @@ export function Composer({ conversation }: { conversation: Conversation }) {
                 <Paperclip size={14} />
               )}
             </button>
-            <ModelPicker conversation={conversation} disabled={active} />
-            <ReasoningPicker conversation={conversation} disabled={active} />
+            <AgentPicker conversation={conversation} disabled={active} />
+            {conversation.acpAgent ? null : (
+              <>
+                <ModelPicker conversation={conversation} disabled={active} />
+                <ReasoningPicker conversation={conversation} disabled={active} />
+              </>
+            )}
             <WorkspacePicker conversation={conversation} disabled={active} />
             <AutoApproveButton />
             <div className="ml-auto flex items-center gap-2">

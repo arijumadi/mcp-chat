@@ -31,6 +31,7 @@ import { cn } from "@/lib/cn";
 import { ProviderForm } from "./ProviderForm";
 import { AppearanceSettings, ShortcutList } from "./AppearanceSettings";
 import { NotificationSettings } from "./NotificationSettings";
+import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { DEFAULT_SYSTEM_PROMPT } from "@/lib/defaults";
 
 export function SettingsView() {
@@ -376,6 +377,14 @@ export function SettingsView() {
                 ))
               )}
             </div>
+          </Section>
+
+          <Section
+            id="acp"
+            title="ACP agents"
+            description="External agents that speak the Agent Client Protocol. Paste a preset, then use Test to prove the command works on this machine. A chat can run on one of these instead of the built-in model."
+          >
+            <AcpAgentsSettings />
           </Section>
 
           <Section
@@ -980,6 +989,7 @@ function ConversationSelect({
 function SettingsNav() {
   const items = [
     ["providers", "Providers"],
+    ["acp", "ACP agents"],
     ["appearance", "Appearance"],
     ["notifications", "Notifications"],
     ["shortcuts", "Shortcuts"],

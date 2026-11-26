@@ -6,7 +6,10 @@ on:
     paths:
       - "crates/mcp-chat-core/**"
       - "src-tauri/**"
+      - "src/**"
       - "shared/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
       - "tests/mock_servers/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -17,7 +20,10 @@ on:
     paths:
       - "crates/mcp-chat-core/**"
       - "src-tauri/**"
+      - "src/**"
       - "shared/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
       - "tests/mock_servers/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -107,3 +113,39 @@ jobs:
 
       - name: Check the app crate
         run: cargo check -p mcp-chat --all-targets
+
+  frontend:
+    # Same reason as the app job: the release workflow is the only other place
+    # that compiles the frontend, and it runs on tags.
+    name: Frontend (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.34.7
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
