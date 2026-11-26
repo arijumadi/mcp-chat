@@ -16,6 +16,7 @@ pub mod events;
 pub mod manager;
 pub mod mock_agent;
 pub mod process;
+pub mod prompt;
 pub mod session;
 
 pub use config::AgentPreset;

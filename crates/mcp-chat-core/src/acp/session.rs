@@ -45,7 +45,7 @@ pub type PermissionHandler =
 
 /// Commands accepted by a running session.
 enum Command {
-    Prompt(String),
+    Prompt(Vec<agent_client_protocol::v1::schema::ContentBlock>),
     Close,
 }
 
@@ -59,6 +59,11 @@ pub struct AcpSession {
     pub supports_close: bool,
     /// Name and version the agent reported during `initialize`, if any.
     pub agent_info: Option<(String, String)>,
+    /// What the agent accepts beyond plain text. Sending an image block to an
+    /// agent without `image` is a protocol error, so the prompt builder must
+    /// know this before it assembles a turn.
+    pub accepts_images: bool,
+    pub accepts_embedded_context: bool,
     /// Cleared by the pump when the process or connection ends, so the manager
     /// can drop a dead session instead of leaking one of its slots.
     alive: Arc<std::sync::atomic::AtomicBool>,
@@ -69,10 +74,23 @@ pub struct AcpSession {
 }
 
 impl AcpSession {
-    /// Queue a prompt. Events for the turn are emitted on the session sink.
+    /// Queue a text-only prompt.
     pub fn prompt(&self, text: impl Into<String>) -> Result<(), AcpError> {
+        self.prompt_blocks(vec![agent_client_protocol::v1::schema::ContentBlock::Text(
+            agent_client_protocol::v1::schema::TextContent::new(text.into()),
+        )])
+    }
+
+    /// Queue a prompt made of content blocks.
+    ///
+    /// The caller is responsible for using only blocks the agent advertised
+    /// during `initialize`; this method does not second-guess it.
+    pub fn prompt_blocks(
+        &self,
+        blocks: Vec<agent_client_protocol::v1::schema::ContentBlock>,
+    ) -> Result<(), AcpError> {
         self.prompts
-            .send(Command::Prompt(text.into()))
+            .send(Command::Prompt(blocks))
             .map_err(|_| AcpError::Inactive)
     }
 
@@ -227,6 +245,8 @@ pub async fn open(
         command: spec.command.to_owned(),
         supports_close: ready.supports_close,
         agent_info: ready.agent_info,
+        accepts_images: ready.accepts_images,
+        accepts_embedded_context: ready.accepts_embedded_context,
         alive,
         resumed: ready.resumed,
         prompts: prompt_tx,
@@ -244,6 +264,8 @@ struct SessionReady {
     /// session was created (including after a failed resume).
     resumed: bool,
     agent_info: Option<(String, String)>,
+    accepts_images: bool,
+    accepts_embedded_context: bool,
 }
 
 async fn drive<T>(
@@ -280,6 +302,9 @@ where
                 .agent_info
                 .as_ref()
                 .map(|info| (info.name.clone(), info.version.clone()));
+            let prompt_caps = &initialized.agent_capabilities.prompt_capabilities;
+            let accepts_images = prompt_caps.image;
+            let accepts_embedded_context = prompt_caps.embedded_context;
 
             // ACP requires an absolute cwd; callers canonicalize it.
             // `start_session` returns a `'static` session, so the pump can loop
@@ -337,6 +362,8 @@ where
                 supports_close,
                 resumed,
                 agent_info,
+                accepts_images,
+                accepts_embedded_context,
             }));
 
             // Every turn failure is reported exactly once, right where it
@@ -358,8 +385,8 @@ where
                         }
                         break;
                     }
-                    Command::Prompt(text) => {
-                        if session.send_prompt(text).is_err() {
+                    Command::Prompt(blocks) => {
+                        if session.send_prompt_blocks(blocks).is_err() {
                             let _ = events.send(AcpEvent::TurnFailed {
                                 message: AcpError::Inactive.user_message(),
                             });

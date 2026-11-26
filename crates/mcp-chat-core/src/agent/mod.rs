@@ -467,13 +467,17 @@ impl ChatEngine {
         // Only the newest user message is forwarded. The agent owns the rest of
         // the conversation, so sending Jarvis history would duplicate it.
         let history = messages::list_for_conversation(&self.db.pool, conversation_id).await?;
-        let prompt = history
+        let Some(last_user) = history
             .iter()
             .rev()
             .find(|item| item.message.role == "user")
-            .map(|item| crate::agent::context::text_parts(&item.parts))
-            .unwrap_or_default();
-        if prompt.trim().is_empty() {
+        else {
+            return Ok(());
+        };
+        let prompt = crate::agent::context::text_parts(&last_user.parts);
+        let contexts = Self::message_contexts(&last_user.parts);
+        let attachments = self.message_attachments(&last_user.parts);
+        if prompt.trim().is_empty() && attachments.is_empty() && contexts.is_empty() {
             return Ok(());
         }
 
@@ -485,6 +489,8 @@ impl ChatEngine {
             acp_turn::TurnSpec {
                 child_id: conversation_id,
                 prompt: &prompt,
+                attachments,
+                contexts,
                 agent: &agent,
                 cwd: &workspace,
             },
@@ -522,6 +528,53 @@ impl ChatEngine {
             status: crate::events::TurnStatus::Idle,
             message: Some(message.to_owned()),
         });
+    }
+
+    /// File contexts attached to a user message, as ACP needs them.
+    fn message_contexts(parts: &[crate::models::Part]) -> Vec<MessageContext> {
+        parts
+            .iter()
+            .filter(|part| part.kind == "context")
+            .filter_map(|part| {
+                let payload = part.payload();
+                Some(MessageContext {
+                    path: payload.get("path")?.as_str()?.to_owned(),
+                    start_line: payload.get("startLine").and_then(serde_json::Value::as_i64),
+                    end_line: payload.get("endLine").and_then(serde_json::Value::as_i64),
+                    comment: payload.get("comment")?.as_str()?.to_owned(),
+                    preview: payload
+                        .get("preview")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                })
+            })
+            .collect()
+    }
+
+    /// Attachments on a user message, reduced to sendable ACP inputs.
+    ///
+    /// An image is read as base64 here; a file that cannot be read is skipped
+    /// rather than sent empty.
+    fn message_attachments(
+        &self,
+        parts: &[crate::models::Part],
+    ) -> Vec<crate::acp::prompt::AttachmentInput> {
+        parts
+            .iter()
+            .filter(|part| part.kind == "attachment")
+            .filter_map(|part| {
+                crate::acp::prompt::attachment_input(part, &|path| match std::fs::read(path) {
+                    Ok(bytes) => {
+                        use base64::Engine;
+                        Some(base64::engine::general_purpose::STANDARD.encode(bytes))
+                    }
+                    Err(error) => {
+                        tracing::debug!(path, %error, "could not read an attachment for ACP");
+                        None
+                    }
+                })
+            })
+            .collect()
     }
 
     async fn mark_subagent_part(&self, parent_id: &str, part_id: &str, child_id: &str) {
@@ -1030,24 +1083,7 @@ impl ChatEngine {
             return Err(CoreError::invalid("only user messages can be reverted"));
         }
         let text = crate::agent::context::text_parts(&target.parts);
-        let contexts = target
-            .parts
-            .iter()
-            .filter(|part| part.kind == "context")
-            .filter_map(|part| {
-                let payload = part.payload();
-                Some(MessageContext {
-                    path: payload.get("path")?.as_str()?.to_owned(),
-                    start_line: payload.get("startLine").and_then(serde_json::Value::as_i64),
-                    end_line: payload.get("endLine").and_then(serde_json::Value::as_i64),
-                    comment: payload.get("comment")?.as_str()?.to_owned(),
-                    preview: payload
-                        .get("preview")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned),
-                })
-            })
-            .collect::<Vec<_>>();
+        let contexts = Self::message_contexts(&target.parts);
         let attachment_paths: Vec<String> = target
             .parts
             .iter()
