@@ -131,11 +131,11 @@ pub fn run(scenario: &str) {
                                 ]
                             }
                         }));
-                        chunk(format!("turn {turn} answer: {prompt}"));
+                        chunk(&format!("turn {turn} answer: {prompt}"));
                         finish(&id, "end_turn");
                     }
                     _ => {
-                        chunk(format!("turn {turn} answer: {prompt}"));
+                        chunk(&format!("turn {turn} answer: {prompt}"));
                         finish(&id, "end_turn");
                     }
                 }
