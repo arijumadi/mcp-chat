@@ -93,10 +93,7 @@ impl AcpManager {
             .await?,
         );
 
-        self.sessions
-            .lock()
-            .await
-            .insert(local_id, handle.clone());
+        self.sessions.lock().await.insert(local_id, handle.clone());
 
         Ok(ActiveSession {
             handle,

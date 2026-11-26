@@ -125,7 +125,8 @@ impl AgentProcess {
         #[cfg(windows)]
         {
             kill_tree(self.child.id());
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(3), self.child.wait()).await;
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_secs(3), self.child.wait()).await;
             let _ = self.child.start_kill();
         }
         #[cfg(not(any(unix, windows)))]
@@ -217,14 +218,9 @@ mod tests {
 
     #[tokio::test]
     async fn missing_binary_reports_not_found() {
-        let error = AgentProcess::spawn(
-            "jarvis-definitely-missing-agent-binary",
-            &[],
-            &[],
-            None,
-        )
-        .err()
-        .expect("spawn should fail");
+        let error = AgentProcess::spawn("jarvis-definitely-missing-agent-binary", &[], &[], None)
+            .err()
+            .expect("spawn should fail");
         assert!(matches!(error, AcpError::NotFound { .. }), "got {error:?}");
     }
 

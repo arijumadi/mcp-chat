@@ -99,14 +99,22 @@ pub struct SessionSpec<'a> {
 /// Spawn the agent, initialize, create a session, and leave the pump running.
 pub async fn open(spec: SessionSpec<'_>) -> Result<AcpSession, AcpError> {
     let mut process = AgentProcess::spawn(spec.command, spec.args, spec.env, Some(spec.cwd))?;
-    let stdout = process.child.stdout.take().ok_or_else(|| AcpError::SpawnFailed {
-        command: spec.command.to_owned(),
-        message: "the agent exposed no stdout".into(),
-    })?;
-    let stdin = process.child.stdin.take().ok_or_else(|| AcpError::SpawnFailed {
-        command: spec.command.to_owned(),
-        message: "the agent exposed no stdin".into(),
-    })?;
+    let stdout = process
+        .child
+        .stdout
+        .take()
+        .ok_or_else(|| AcpError::SpawnFailed {
+            command: spec.command.to_owned(),
+            message: "the agent exposed no stdout".into(),
+        })?;
+    let stdin = process
+        .child
+        .stdin
+        .take()
+        .ok_or_else(|| AcpError::SpawnFailed {
+            command: spec.command.to_owned(),
+            message: "the agent exposed no stdin".into(),
+        })?;
     let stderr = process.child.stderr.take();
 
     if let Some(stderr) = stderr {
@@ -128,7 +136,15 @@ pub async fn open(spec: SessionSpec<'_>) -> Result<AcpSession, AcpError> {
     let cwd = spec.cwd.to_path_buf();
 
     let pump = tokio::spawn(async move {
-        let result = drive(transport, prompt_rx, events.clone(), permissions, cwd, ready_tx).await;
+        let result = drive(
+            transport,
+            prompt_rx,
+            events.clone(),
+            permissions,
+            cwd,
+            ready_tx,
+        )
+        .await;
         if let Err(error) = result {
             let _ = events.send(AcpEvent::TurnFailed {
                 message: error.user_message(),
@@ -199,72 +215,67 @@ where
                 }
             };
 
-            let session = builder.block_task().run_until(async move |SessionSetup {
-                                                                     mut session,
-                                                                     ..
-                                                                 }| {
-                let acp_id = session.session_id().to_string();
-                if let Some(ready) = ready.take() {
-                    let _ = ready.send(Ok((session.connection().clone(), acp_id)));
-                }
+            let session = builder.block_task().run_until(
+                async move |SessionSetup { mut session, .. }| {
+                    let acp_id = session.session_id().to_string();
+                    if let Some(ready) = ready.take() {
+                        let _ = ready.send(Ok((session.connection().clone(), acp_id)));
+                    }
 
-                while let Some(command) = prompts.recv().await {
-                    match command {
-                        Command::Close => {
-                            let _ = session
-                                .connection()
-                                .send_request(CloseSessionRequest::new(
-                                    session.session_id().clone(),
-                                ))
-                                .block_task()
-                                .await;
-                            break;
-                        }
-                        Command::Prompt(text) => {
-                            if session.send_prompt(text).is_err() {
-                                let _ = events.send(AcpEvent::TurnFailed {
-                                    message: AcpError::Inactive.user_message(),
-                                });
+                    while let Some(command) = prompts.recv().await {
+                        match command {
+                            Command::Close => {
+                                let _ = session
+                                    .connection()
+                                    .send_request(CloseSessionRequest::new(
+                                        session.session_id().clone(),
+                                    ))
+                                    .block_task()
+                                    .await;
                                 break;
                             }
-                            loop {
-                                match session.read_update().await {
-                                    Ok(SessionMessage::PromptResponse(result)) => {
-                                        match result {
-                                            Ok(response) => {
-                                                let _ = events.send(AcpEvent::TurnEnded {
-                                                    stop_reason: stop_reason(&response),
-                                                });
+                            Command::Prompt(text) => {
+                                if session.send_prompt(text).is_err() {
+                                    let _ = events.send(AcpEvent::TurnFailed {
+                                        message: AcpError::Inactive.user_message(),
+                                    });
+                                    break;
+                                }
+                                loop {
+                                    match session.read_update().await {
+                                        Ok(SessionMessage::PromptResponse(result)) => {
+                                            match result {
+                                                Ok(response) => {
+                                                    let _ = events.send(AcpEvent::TurnEnded {
+                                                        stop_reason: stop_reason(&response),
+                                                    });
+                                                }
+                                                Err(error) => {
+                                                    let _ = events.send(AcpEvent::TurnFailed {
+                                                        message: map_sdk_error(error)
+                                                            .user_message(),
+                                                    });
+                                                }
                                             }
-                                            Err(error) => {
-                                                let _ = events.send(AcpEvent::TurnFailed {
-                                                    message: map_sdk_error(error).user_message(),
-                                                });
-                                            }
+                                            break;
                                         }
-                                        break;
-                                    }
-                                    Ok(SessionMessage::Message(dispatch)) => {
-                                        handle_dispatch(
-                                            dispatch,
-                                            &events,
-                                            &permissions,
-                                        )
-                                        .await;
-                                    }
-                                    Err(error) => {
-                                        let _ = events.send(AcpEvent::TurnFailed {
-                                            message: map_sdk_error(error).user_message(),
-                                        });
-                                        break;
+                                        Ok(SessionMessage::Message(dispatch)) => {
+                                            handle_dispatch(dispatch, &events, &permissions).await;
+                                        }
+                                        Err(error) => {
+                                            let _ = events.send(AcpEvent::TurnFailed {
+                                                message: map_sdk_error(error).user_message(),
+                                            });
+                                            break;
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                Ok(())
-            });
+                    Ok(())
+                },
+            );
 
             let _ = session.await;
             Ok(())
@@ -299,19 +310,14 @@ async fn handle_dispatch(
                         request_id: info.title.clone(),
                         title: info.title.clone(),
                         kind: info.kind.clone(),
-                        options: info
-                            .options
-                            .iter()
-                            .map(|(id, _)| id.clone())
-                            .collect(),
+                        options: info.options.iter().map(|(id, _)| id.clone()).collect(),
                     });
                     let _ = responder.respond(permission_response(&info, decision));
                 }
                 Ok(Err(dispatch)) => {
                     if let agent_client_protocol::Dispatch::Request(_, responder) = dispatch {
-                        let _ = responder.respond_with_error(
-                            agent_client_protocol::Error::method_not_found(),
-                        );
+                        let _ = responder
+                            .respond_with_error(agent_client_protocol::Error::method_not_found());
                     }
                 }
                 Err(error) => {

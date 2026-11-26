@@ -6,11 +6,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use mcp_chat_core::acp::AcpEvent;
 use mcp_chat_core::acp::manager::AcpManager;
 use mcp_chat_core::acp::session::{
     PermissionDecision, PermissionHandler, PermissionRequestInfo, SessionSpec,
 };
-use mcp_chat_core::acp::AcpEvent;
 
 /// Path to the mock agent built alongside the tests.
 fn mock_agent() -> PathBuf {
@@ -62,7 +62,10 @@ async fn multi_turn_session_reuses_one_process() {
 
     // The event channel is created inside `open`, so build the spec there.
     let (events_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
-    let spec = SessionSpec { events: events_tx, ..spec };
+    let spec = SessionSpec {
+        events: events_tx,
+        ..spec
+    };
     let active = manager.open(spec, no_permissions()).await.unwrap();
     assert!(!active.handle.acp_session_id.is_empty());
     assert_eq!(manager.count().await, 1);
@@ -73,7 +76,10 @@ async fn multi_turn_session_reuses_one_process() {
 
     active.handle.prompt("second question").unwrap();
     let second = collect_turn(&mut events).await;
-    assert!(second.contains("turn 2 answer: second question"), "{second}");
+    assert!(
+        second.contains("turn 2 answer: second question"),
+        "{second}"
+    );
 
     manager.close("child-1").await.unwrap();
     assert_eq!(manager.count().await, 0);
@@ -94,7 +100,13 @@ async fn tool_call_update_becomes_a_tool_event() {
     );
     let (events_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
     let active = manager
-        .open(SessionSpec { events: events_tx, ..base }, no_permissions())
+        .open(
+            SessionSpec {
+                events: events_tx,
+                ..base
+            },
+            no_permissions(),
+        )
         .await
         .unwrap();
 
@@ -117,7 +129,10 @@ async fn tool_call_update_becomes_a_tool_event() {
         }
     }
     assert!(saw_tool, "no tool call event");
-    assert!(transcript.contains("Checking the file first."), "{transcript}");
+    assert!(
+        transcript.contains("Checking the file first."),
+        "{transcript}"
+    );
     manager.close("child-tool").await.unwrap();
 }
 
@@ -164,7 +179,13 @@ async fn a_crashing_agent_reports_a_failed_turn() {
     );
     let (events_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
     let active = manager
-        .open(SessionSpec { events: events_tx, ..base }, no_permissions())
+        .open(
+            SessionSpec {
+                events: events_tx,
+                ..base
+            },
+            no_permissions(),
+        )
         .await
         .unwrap();
 
