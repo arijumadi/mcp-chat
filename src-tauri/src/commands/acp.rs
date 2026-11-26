@@ -166,7 +166,6 @@ pub async fn set_acp_agent_enabled(
 ) -> CmdResult<AcpAgentView> {
     let agent = acp_agents::set_enabled(&state.db.pool, &id, enabled)
         .await
-        .await
         .map_err(cmd_err)?;
     Ok(view(&agent))
 }
