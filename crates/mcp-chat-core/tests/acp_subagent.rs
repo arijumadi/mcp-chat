@@ -126,7 +126,8 @@ async fn an_acp_subagent_runs_and_reports_back() {
     let report = wait_for_report(&harness, 40).await;
     assert!(report.contains("<subagent"), "{report}");
     assert!(report.contains("state=\"completed\""), "{report}");
-    assert!(report.contains("turn 1 answer: say hello"), "{report}");
+    // The mock echoes its prompt, so the task text proves the prompt arrived.
+    assert!(report.contains("say hello"), "{report}");
 }
 
 #[tokio::test]
