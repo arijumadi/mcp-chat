@@ -28,6 +28,7 @@ const SkillsView = lazy(() =>
 
 export default function App() {
   const booted = useApp((state) => state.booted);
+  const bootError = useApp((state) => state.bootError);
   const view = useApp((state) => state.view);
   const sidebarOpen = useApp((state) => state.sidebarOpen);
   const init = useApp((state) => state.init);
@@ -45,6 +46,16 @@ export default function App() {
 
   return (
     <div className="flex h-dvh overflow-hidden" style={{ background: "var(--bg)" }}>
+      {bootError ? (
+        <div
+          role="alert"
+          className="fixed inset-x-0 top-0 z-50 px-4 py-2 text-[12px]"
+          style={{ background: "var(--warn-soft)", color: "var(--warn)" }}
+        >
+          <span className="font-medium">Jarvis started with a problem.</span>{" "}
+          <span className="font-mono">{bootError}</span>
+        </div>
+      ) : null}
       {sidebarOpen ? <Sidebar /> : null}
       <main className="flex min-w-0 flex-1 flex-col">
         {view === "chat" ? (
