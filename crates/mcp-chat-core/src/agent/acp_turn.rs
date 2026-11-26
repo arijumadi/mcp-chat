@@ -62,7 +62,7 @@ pub async fn run_turn(
         Some(active) => active,
         None => engine
             .acp
-            .open(super::session::SessionSpec {
+            .open(crate::acp::session::SessionSpec {
                 local_id: spec.child_id.to_owned(),
                 command: &spec.agent.command,
                 args: &args,
