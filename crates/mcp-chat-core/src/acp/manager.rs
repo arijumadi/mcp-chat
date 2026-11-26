@@ -13,8 +13,11 @@ use super::error::AcpError;
 use super::events::AcpEvent;
 use super::session::{AcpSession, SessionSpec, open};
 
-/// Upper bound on concurrently running agents. Matches the executor's
-/// parallelism so the model cannot exhaust the process table by delegating.
+/// Upper bound on concurrently running agents.
+///
+/// This is a process-safety limit, not a scheduling one: each session keeps an
+/// OS process and a pump task alive, and a runaway model must not be able to
+/// fill the process table by delegating.
 pub const MAX_ACTIVE_SESSIONS: usize = 4;
 
 /// Why a new session cannot start, before any process is spawned.
