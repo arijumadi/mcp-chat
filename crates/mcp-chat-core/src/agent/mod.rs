@@ -1,3 +1,4 @@
+pub mod acp_turn;
 pub mod approvals;
 pub mod capabilities;
 pub mod context;
@@ -21,7 +22,9 @@ use tokio::sync::{Semaphore, broadcast, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::db::Db;
-use crate::db::repo::{conversation_servers, conversations, messages, providers, settings};
+use crate::db::repo::{
+    acp_agents, conversation_servers, conversations, messages, providers, settings,
+};
 use crate::events::CoreEvent;
 use crate::mcp::McpManager;
 use crate::models::{Conversation, Message, MessageContext, PartPayload, Provider};
@@ -64,6 +67,8 @@ pub struct ChatEngine {
     pub approvals: Arc<ApprovalRegistry>,
     pub inputs: Arc<InputRegistry>,
     pub executor: Arc<ToolExecutor>,
+    /// Live external ACP sessions, keyed by child conversation id.
+    pub acp: Arc<crate::acp::AcpManager>,
     pub output_dir: PathBuf,
     pub attachments_dir: PathBuf,
     turns: Mutex<HashMap<String, CancellationToken>>,
@@ -102,6 +107,7 @@ impl ChatEngine {
             approvals,
             inputs,
             executor: executor.clone(),
+            acp: Arc::new(crate::acp::AcpManager::new()),
             output_dir,
             attachments_dir,
             turns: Mutex::new(HashMap::new()),
@@ -118,15 +124,24 @@ impl ChatEngine {
     /// Launch a focused child conversation. The child gets fresh context, the
     /// same workspace/model/tool selection, and its own message history. It is
     /// hidden from the main conversation list and reports back asynchronously.
+    #[allow(clippy::too_many_arguments)]
     pub async fn launch_subagent(
         self: &Arc<Self>,
         parent_id: &str,
         description: &str,
         prompt: &str,
         session_id: Option<&str>,
+        agent: Option<&str>,
         part_id: &str,
     ) -> Result<(String, String)> {
         let parent = conversations::get(&self.db.pool, parent_id).await?;
+        // An ACP child follows the same lifecycle as an internal one; only the
+        // engine that runs its turns differs.
+        if let Some(slug) = agent {
+            return self
+                .launch_acp_subagent(&parent, description, prompt, session_id, slug, part_id)
+                .await;
+        }
 
         if let Some(session_id) = session_id {
             let child = conversations::get(&self.db.pool, session_id).await?;
@@ -215,6 +230,154 @@ impl ChatEngine {
         Ok((child.id, content))
     }
 
+    /// Launch a child backed by an external ACP agent.
+    ///
+    /// Mirrors [`Self::launch_subagent`] so the parent sees one kind of report,
+    /// but records the ACP marker and never inherits provider/model settings:
+    /// the agent owns its own model, tools, and credentials.
+    async fn launch_acp_subagent(
+        self: &Arc<Self>,
+        parent: &Conversation,
+        description: &str,
+        prompt: &str,
+        session_id: Option<&str>,
+        slug: &str,
+        part_id: &str,
+    ) -> Result<(String, String)> {
+        let agent = acp_agents::get_by_slug(&self.db.pool, slug).await?.ok_or_else(|| {
+            CoreError::Message(format!(
+                "No ACP agent is registered with the slug {slug:?}. Check Settings > ACP agents."
+            ))
+        })?;
+        if !agent.enabled {
+            return Err(CoreError::Message(format!(
+                "The ACP agent {slug:?} is disabled."
+            )));
+        }
+
+        if let Some(session_id) = session_id {
+            let child = conversations::get(&self.db.pool, session_id).await?;
+            if child.parent_id.as_deref() != Some(&parent.id) {
+                return Err(CoreError::Message(
+                    "That conversation is not a child of this chat.".into(),
+                ));
+            }
+            if child.acp_agent.as_deref() != Some(slug) {
+                return Err(CoreError::Message(format!(
+                    "That subagent is not backed by the ACP agent {slug:?}."
+                )));
+            }
+            self.mark_subagent_part(&parent.id, part_id, &child.id)
+                .await;
+            self.append_subagent_prompt(&child.id, prompt, false)
+                .await?;
+            let running = self.in_flight(&child.id);
+            if !running {
+                let done = self.start_turn_with_done(&child.id)?;
+                self.spawn_subagent_supervisor(
+                    parent.id.clone(),
+                    child.id.clone(),
+                    child.title.clone(),
+                    done,
+                );
+            }
+            let content = if running {
+                format!(
+                    "Follow-up sent to the running ACP subagent (sessionID: {}). It will report again when this round finishes.",
+                    child.id
+                )
+            } else {
+                format!(
+                    "Follow-up sent. The ACP subagent is running in the background (sessionID: {}).",
+                    child.id
+                )
+            };
+            return Ok((child.id, content));
+        }
+
+        if parent.parent_id.is_some() {
+            return Err(CoreError::Message(
+                "Subagent depth limit reached. A subagent cannot start another subagent.".into(),
+            ));
+        }
+
+        let description = description.trim();
+        let description = if description.is_empty() {
+            "Subagent"
+        } else {
+            description
+        };
+        let title: String = description.chars().take(120).collect();
+        let child = conversations::create(&self.db.pool, &title, None, None).await?;
+        conversations::set_parent(&self.db.pool, &child.id, &parent.id).await?;
+        // ACP gets the parent's workspace, and the agent inherits nothing else:
+        // its own config decides the model, tools, and credentials.
+        conversations::set_workspace(&self.db.pool, &child.id, parent.workspace_root.as_deref())
+            .await?;
+        conversations::set_acp(&self.db.pool, &child.id, &agent.slug, None).await?;
+        self.mark_subagent_part(&parent.id, part_id, &child.id)
+            .await;
+        self.append_subagent_prompt(&child.id, prompt, true).await?;
+        let done = self.start_turn_with_done(&child.id)?;
+        self.spawn_subagent_supervisor(
+            parent.id.clone(),
+            child.id.clone(),
+            child.title.clone(),
+            done,
+        );
+        let content = format!(
+            "The ACP subagent is running in the background (sessionID: {}). You will receive a <subagent> report when it goes idle. Do not poll or duplicate its work; work on non-overlapping tasks or briefly tell the user and end your response.",
+            child.id
+        );
+        Ok((child.id, content))
+    }
+
+    /// Run one ACP turn for `conversation_id`.
+    async fn run_acp_turn(
+        self: &Arc<Self>,
+        conversation_id: &str,
+        slug: &str,
+        cancel: CancellationToken,
+    ) -> Result<()> {
+        let agent = acp_agents::get_by_slug(&self.db.pool, slug)
+            .await?
+            .ok_or_else(|| {
+                CoreError::Message(format!(
+                    "No ACP agent is registered with the slug {slug:?}."
+                ))
+            })?;
+        let conversation = conversations::get(&self.db.pool, conversation_id).await?;
+        // The last user message is the prompt for this turn; the child history
+        // stays the record, exactly like the internal runner.
+        let history = messages::list_for_conversation(&self.db.pool, conversation_id).await?;
+        let prompt = history
+            .iter()
+            .rev()
+            .find(|item| item.message.role == "user")
+            .map(|item| crate::agent::context::text_parts(&item.parts))
+            .unwrap_or_default();
+        if prompt.trim().is_empty() {
+            return Ok(());
+        }
+        // The working directory must stay inside the parent's workspace.
+        let workspace =
+            crate::agent::tools::workspace_root_for_conversation(&self.db.pool, conversation_id)
+                .await?;
+        acp_turn::run_turn(
+            self.clone(),
+            acp_turn::TurnSpec {
+                child_id: conversation_id,
+                prompt: &prompt,
+                agent: &agent,
+                cwd: &workspace,
+            },
+            cancel,
+        )
+        .await?;
+        let _ = conversation.acp_session_id;
+        Ok(())
+    }
+
     async fn mark_subagent_part(&self, parent_id: &str, part_id: &str, child_id: &str) {
         let Ok(part) = messages::get_part(&self.db.pool, part_id).await else {
             return;
@@ -298,6 +461,11 @@ impl ChatEngine {
         description: String,
         mut done: oneshot::Receiver<()>,
     ) {
+        let conversation_is_acp = conversations::get(&self.db.pool, &child_id)
+            .await
+            .ok()
+            .and_then(|conversation| conversation.acp_agent)
+            .is_some();
         loop {
             let _ = (&mut done).await;
             let history = messages::list_for_conversation(&self.db.pool, &child_id)
@@ -318,8 +486,15 @@ impl ChatEngine {
                     }
                 }
             }
-            let (state, report) = subagent_report(&history);
-            self.finish_subagent(&parent_id, &child_id, &description, state, &report)
+            // An ACP child reports only the text after its last tool call; an
+            // internal one reports its final message as a whole.
+            let (state, report) = if conversation_is_acp {
+                acp_turn::report_from_history(&history)
+            } else {
+                let (state, report) = subagent_report(&history);
+                (state.to_owned(), report)
+            };
+            self.finish_subagent(&parent_id, &child_id, &description, &state, &report)
                 .await;
             self.set_auto_approve(&child_id, false);
             break;
@@ -463,6 +638,7 @@ impl ChatEngine {
         attachment_ids: &[String],
         contexts: &[MessageContext],
     ) -> Result<Message> {
+        self.reject_acp_turn(conversation_id).await?;
         let text = text.trim();
         if text.is_empty() && attachment_ids.is_empty() && contexts.is_empty() {
             return Err(CoreError::invalid(
@@ -636,6 +812,7 @@ impl ChatEngine {
     }
 
     pub async fn regenerate(self: &Arc<Self>, conversation_id: &str) -> Result<()> {
+        self.reject_acp_turn(conversation_id).await?;
         if self.in_flight(conversation_id) {
             return Err(CoreError::Message(
                 "This conversation is already generating a response.".into(),
@@ -659,6 +836,7 @@ impl ChatEngine {
     /// Resume a turn that stopped at the max-step limit. Adds a hidden
     /// synthetic user message and starts a fresh step budget.
     pub async fn continue_turn(self: &Arc<Self>, conversation_id: &str) -> Result<()> {
+        self.reject_acp_turn(conversation_id).await?;
         if self.in_flight(conversation_id) {
             return Err(CoreError::Message(
                 "This conversation is already generating a response.".into(),
@@ -790,6 +968,23 @@ impl ChatEngine {
         })
     }
 
+    /// Reject a turn on a conversation that an ACP agent owns.
+    ///
+    /// The agent runs the prompt itself, so Jarvis must not run its LLM loop or
+    /// regenerate history for that child. Callers check this *before* writing
+    /// rows, or a rejected request would leave a stray user message.
+    async fn reject_acp_turn(&self, conversation_id: &str) -> Result<()> {
+        if let Ok(conversation) = conversations::get(&self.db.pool, conversation_id).await {
+            if conversation.acp_agent.is_some() {
+                return Err(CoreError::Message(
+                    "This conversation is run by an ACP agent; send a follow-up through its parent chat."
+                        .into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Take a conversation's single turn slot, or fail with `busy` if a turn
     /// (or a manual compaction) already holds it. Dropping the returned slot
     /// releases it, including on early return and panic.
@@ -877,7 +1072,17 @@ impl ChatEngine {
                 // Drop the slot before checking for a queued wake, otherwise
                 // the new turn would see this one as still in flight.
                 let _slot = slot;
-                if let Err(error) = runner::run(engine.clone(), &id, token).await {
+                // A child backed by an external ACP agent must never run the
+                // LLM loop: the agent owns its own model and tools.
+                let acp_agent = conversations::get(&engine.db.pool, &id)
+                    .await
+                    .ok()
+                    .and_then(|conversation| conversation.acp_agent);
+                let result = match acp_agent {
+                    Some(slug) => engine.run_acp_turn(&id, &slug, token).await,
+                    None => runner::run(engine.clone(), &id, token).await,
+                };
+                if let Err(error) = result {
                     tracing::debug!(conversation = %id, error = %error.user_message(), "turn ended with error");
                 }
             }
@@ -975,6 +1180,7 @@ impl SubagentHost for SubagentHostRef {
         description: &'a str,
         prompt: &'a str,
         session_id: Option<&'a str>,
+        agent: Option<&'a str>,
         part_id: &'a str,
     ) -> BoxFuture<'a, Result<(String, String)>> {
         Box::pin(async move {
@@ -982,7 +1188,7 @@ impl SubagentHost for SubagentHostRef {
                 CoreError::Message("The subagent runner is not available.".into())
             })?;
             engine
-                .launch_subagent(parent_id, description, prompt, session_id, part_id)
+                .launch_subagent(parent_id, description, prompt, session_id, agent, part_id)
                 .await
         })
     }

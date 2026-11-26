@@ -53,15 +53,23 @@ impl CapacityError {
     }
 }
 
-/// What the engine keeps after a session starts.
+/// A session plus its event stream.
 pub struct ActiveSession {
     pub handle: Arc<AcpSession>,
     pub events: mpsc::UnboundedReceiver<AcpEvent>,
 }
 
+/// One registered session. The receiver is parked here between turns: a child
+/// conversation may run many turns against a single process, and taking it out
+/// for the duration of a turn keeps ownership obvious.
+struct Entry {
+    handle: Arc<AcpSession>,
+    events: Option<mpsc::UnboundedReceiver<AcpEvent>>,
+}
+
 #[derive(Default)]
 pub struct AcpManager {
-    sessions: Mutex<HashMap<String, Arc<AcpSession>>>,
+    sessions: Mutex<HashMap<String, Entry>>,
 }
 
 impl AcpManager {
@@ -72,7 +80,7 @@ impl AcpManager {
     /// Number of sessions whose pump is still running.
     pub async fn count(&self) -> usize {
         let mut sessions = self.sessions.lock().await;
-        sessions.retain(|_, session| session.is_alive());
+        sessions.retain(|_, entry| entry.handle.is_alive());
         sessions.len()
     }
 
@@ -81,7 +89,7 @@ impl AcpManager {
         let local_id = spec.local_id.clone();
         {
             let mut sessions = self.sessions.lock().await;
-            sessions.retain(|_, session| session.is_alive());
+            sessions.retain(|_, entry| entry.handle.is_alive());
             check_capacity(sessions.len(), sessions.contains_key(&local_id))
                 .map_err(CapacityError::into_acp_error)?;
         }
@@ -89,7 +97,13 @@ impl AcpManager {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let handle = Arc::new(open(spec, events_tx).await?);
 
-        self.sessions.lock().await.insert(local_id, handle.clone());
+        self.sessions.lock().await.insert(
+            local_id,
+            Entry {
+                handle: handle.clone(),
+                events: None,
+            },
+        );
 
         Ok(ActiveSession {
             handle,
@@ -97,11 +111,36 @@ impl AcpManager {
         })
     }
 
+    /// Take a live session and its event stream for one turn.
+    ///
+    /// Returns `None` when no live session exists, so the caller starts a new
+    /// one. A session that died is removed on the way.
+    pub async fn take(&self, local_id: &str) -> Option<ActiveSession> {
+        let mut sessions = self.sessions.lock().await;
+        let entry = sessions.get_mut(local_id)?;
+        if !entry.handle.is_alive() {
+            sessions.remove(local_id);
+            return None;
+        }
+        let events = entry.events.take()?;
+        Some(ActiveSession {
+            handle: entry.handle.clone(),
+            events,
+        })
+    }
+
+    /// Give the event stream back after a turn.
+    pub async fn put_events(&self, local_id: &str, events: mpsc::UnboundedReceiver<AcpEvent>) {
+        if let Some(entry) = self.sessions.lock().await.get_mut(local_id) {
+            entry.events = Some(events);
+        }
+    }
+
     /// The live session for `local_id`, dropping it if its process is gone.
     pub async fn get(&self, local_id: &str) -> Option<Arc<AcpSession>> {
         let mut sessions = self.sessions.lock().await;
         match sessions.get(local_id) {
-            Some(session) if session.is_alive() => Some(session.clone()),
+            Some(entry) if entry.handle.is_alive() => Some(entry.handle.clone()),
             Some(_) => {
                 sessions.remove(local_id);
                 None
@@ -117,17 +156,17 @@ impl AcpManager {
 
     /// Close one session, whether or not it is still registered.
     pub async fn close(&self, local_id: &str) -> Result<(), AcpError> {
-        let session = self.sessions.lock().await.remove(local_id);
-        match session {
-            Some(session) => session.close(),
+        let entry = self.sessions.lock().await.remove(local_id);
+        match entry {
+            Some(entry) => entry.handle.close(),
             None => Ok(()),
         }
     }
 
     pub async fn close_all(&self) {
         let sessions = std::mem::take(&mut *self.sessions.lock().await);
-        for (_, session) in sessions {
-            let _ = session.close();
+        for (_, entry) in sessions {
+            let _ = entry.handle.close();
         }
     }
 }
@@ -180,5 +219,11 @@ mod tests {
         let manager = AcpManager::new();
         let error = manager.cancel("missing").await.expect_err("inactive");
         assert!(error.user_message().contains("ACP session has ended"));
+    }
+
+    #[tokio::test]
+    async fn taking_an_unknown_session_returns_nothing() {
+        let manager = AcpManager::new();
+        assert!(manager.take("missing").await.is_none());
     }
 }

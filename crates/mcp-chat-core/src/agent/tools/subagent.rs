@@ -27,6 +27,12 @@ impl ToolExecutor {
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty());
+        let agent = req
+            .args
+            .get("agent")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
         let engine =
             self.subagent_host.get().cloned().ok_or_else(|| {
                 CoreError::Message("The subagent runner is not available.".into())
@@ -37,6 +43,7 @@ impl ToolExecutor {
                 description,
                 prompt,
                 session_id,
+                agent,
                 &req.part_id,
             )
             .await?;

@@ -1624,6 +1624,7 @@ async fn subagent_report_is_persisted_while_the_parent_is_busy() {
             "Busy parent check",
             "Report while the parent is busy",
             None,
+            None,
             "",
         )
         .await
@@ -1718,6 +1719,7 @@ async fn subagent_inherits_an_explicit_parent_step_limit() {
             "Limit check",
             "Check the inherited step budget",
             None,
+            None,
             "",
         )
         .await
@@ -1737,6 +1739,7 @@ async fn subagent_follow_up_uses_session_id() {
             "Inspect workspace",
             "Initial task",
             None,
+            None,
             "",
         )
         .await
@@ -1751,6 +1754,7 @@ async fn subagent_follow_up_uses_session_id() {
             "Inspect workspace",
             "Follow-up: check again",
             Some(&child_id),
+            None,
             "",
         )
         .await
