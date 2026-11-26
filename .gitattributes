@@ -1,0 +1,18 @@
+# Normalize line endings on all platforms. Without this, a Windows checkout
+# rewrites text files with CRLF and binary fixtures get mangled, which made
+# skill frontmatter and PDF extraction tests fail only on Windows.
+* text=auto eol=lf
+
+# Binary assets must never be converted.
+*.png binary
+*.ico binary
+*.icns binary
+*.bmp binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# Windows scripts genuinely need CRLF to run.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
