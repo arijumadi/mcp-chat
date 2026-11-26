@@ -74,7 +74,7 @@ pub async fn run_turn(
             .map_err(|error| CoreError::Message(error.user_message()))?,
     };
 
-    let result = stream_turn(
+    let events = stream_turn(
         engine.clone(),
         spec.child_id,
         spec.prompt,
@@ -83,11 +83,9 @@ pub async fn run_turn(
         cancel,
     )
     .await;
-    // Hand the stream back even when the turn failed: the session may still be
-    // usable, and dropping the receiver would end the pump's send side.
-    if let Ok(events) = result {
-        engine.acp.put_events(spec.child_id, events).await;
-    }
+    // The stream always comes back, even after a failure: dropping the receiver
+    // would close the pump's send side and leave the session unusable.
+    engine.acp.put_events(spec.child_id, events).await;
     Ok(())
 }
 
@@ -110,7 +108,7 @@ async fn stream_turn(
     handle: &Arc<crate::acp::AcpSession>,
     events: mpsc::UnboundedReceiver<AcpEvent>,
     cancel: CancellationToken,
-) -> Result<mpsc::UnboundedReceiver<AcpEvent>> {
+) -> mpsc::UnboundedReceiver<AcpEvent> {
     let mut run = TurnRun {
         engine: &engine,
         child_id,
@@ -124,9 +122,10 @@ async fn stream_turn(
     };
 
     if handle.prompt(prompt).is_err() {
-        return Err(CoreError::Message(
-            "That ACP session has ended. Start a new session.".into(),
-        ));
+        // Recorded on the turn so the caller still gets its stream back.
+        run.failure = Some("That ACP session has ended. Start a new session.".into());
+        run.finish().await;
+        return run.events;
     }
     let _ = engine.events.send(CoreEvent::Status {
         conversation_id: child_id.to_owned(),
@@ -169,7 +168,7 @@ async fn stream_turn(
     }
 
     run.finish().await;
-    Ok(run.events)
+    run.events
 }
 
 impl TurnRun<'_> {
@@ -279,6 +278,11 @@ impl TurnRun<'_> {
             _ => "running",
         };
 
+        if !self.tools.contains_key(call_id) {
+            // A tool call ends the current segment, so the report is only the
+            // text that follows the last tool call.
+            self.text_part = None;
+        }
         if let Some(part_id) = self.tools.get(call_id).cloned() {
             let Ok(part) = messages::get_part(&self.engine.db.pool, &part_id).await else {
                 return;
@@ -378,6 +382,9 @@ fn permission_handler(
         let cancel = cancel.clone();
         Box::pin(async move {
             let call_id = format!("acp-{}", uuid::Uuid::new_v4());
+            // Register before announcing: the UI may answer the moment it sees
+            // the event, and an answer for an unknown call id would be lost.
+            let receiver = engine.approvals.register(&call_id);
             let _ = engine.events.send(CoreEvent::Approval {
                 conversation_id: child_id.clone(),
                 call_id: call_id.clone(),
@@ -397,7 +404,6 @@ fn permission_handler(
                 save_pattern: None,
                 diff: None,
             });
-            let receiver = engine.approvals.register(&call_id);
             let answer = tokio::select! {
                 _ = cancel.cancelled() => {
                     engine.approvals.cancel(&call_id);
@@ -435,12 +441,24 @@ pub fn report_from_history(history: &[MessageWithParts]) -> (String, String) {
                 .unwrap_or_else(|| "The ACP agent failed.".to_owned()),
         );
     }
-    let report = crate::agent::context::text_parts(&last.parts);
-    let report = report.trim();
-    if report.is_empty() {
-        ("failed".to_owned(), NO_ANSWER.to_owned())
-    } else {
-        ("completed".to_owned(), report.to_owned())
+    // An ACP turn starts a new text part after each tool call, so the last
+    // non-empty one is the report: the narration before a tool call is not the
+    // answer the parent asked for.
+    let report = last
+        .parts
+        .iter()
+        .rev()
+        .filter(|part| part.kind == "text")
+        .filter_map(|part| {
+            part.payload()
+                .get("text")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
+        .find(|text| !text.trim().is_empty());
+    match report {
+        Some(report) => ("completed".to_owned(), report.trim().to_owned()),
+        None => ("failed".to_owned(), NO_ANSWER.to_owned()),
     }
 }
 

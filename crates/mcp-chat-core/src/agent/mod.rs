@@ -461,6 +461,11 @@ impl ChatEngine {
         description: String,
         mut done: oneshot::Receiver<()>,
     ) {
+        let conversation_is_acp = conversations::get(&self.db.pool, &child_id)
+            .await
+            .ok()
+            .and_then(|conversation| conversation.acp_agent)
+            .is_some();
         loop {
             let _ = (&mut done).await;
             let history = messages::list_for_conversation(&self.db.pool, &child_id)
@@ -481,8 +486,15 @@ impl ChatEngine {
                     }
                 }
             }
-            let (state, report) = subagent_report(&history);
-            self.finish_subagent(&parent_id, &child_id, &description, state, &report)
+            // An ACP child reports only the text after its last tool call; an
+            // internal one reports its final message as a whole.
+            let (state, report) = if conversation_is_acp {
+                acp_turn::report_from_history(&history)
+            } else {
+                let (state, report) = subagent_report(&history);
+                (state.to_owned(), report)
+            };
+            self.finish_subagent(&parent_id, &child_id, &description, &state, &report)
                 .await;
             self.set_auto_approve(&child_id, false);
             break;
