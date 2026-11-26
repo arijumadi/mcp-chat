@@ -66,15 +66,19 @@ impl AcpManager {
         Self::default()
     }
 
+    /// Number of sessions whose pump is still running.
     pub async fn count(&self) -> usize {
-        self.sessions.lock().await.len()
+        let mut sessions = self.sessions.lock().await;
+        sessions.retain(|_, session| session.is_alive());
+        sessions.len()
     }
 
     /// Start a session for `local_id`, which is the child conversation id.
     pub async fn open(&self, spec: SessionSpec<'_>) -> Result<ActiveSession, AcpError> {
         let local_id = spec.local_id.clone();
         {
-            let sessions = self.sessions.lock().await;
+            let mut sessions = self.sessions.lock().await;
+            sessions.retain(|_, session| session.is_alive());
             check_capacity(sessions.len(), sessions.contains_key(&local_id))
                 .map_err(CapacityError::into_acp_error)?;
         }
@@ -90,8 +94,17 @@ impl AcpManager {
         })
     }
 
+    /// The live session for `local_id`, dropping it if its process is gone.
     pub async fn get(&self, local_id: &str) -> Option<Arc<AcpSession>> {
-        self.sessions.lock().await.get(local_id).cloned()
+        let mut sessions = self.sessions.lock().await;
+        match sessions.get(local_id) {
+            Some(session) if session.is_alive() => Some(session.clone()),
+            Some(_) => {
+                sessions.remove(local_id);
+                None
+            }
+            None => None,
+        }
     }
 
     pub async fn cancel(&self, local_id: &str) -> Result<(), AcpError> {

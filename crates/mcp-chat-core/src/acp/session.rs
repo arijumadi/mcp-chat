@@ -54,6 +54,12 @@ pub struct AcpSession {
     pub local_id: String,
     pub acp_session_id: String,
     pub command: String,
+    /// Whether the agent advertised `sessionCapabilities.close`. Most do not,
+    /// and sending the request anyway would report a method-not-found error.
+    pub supports_close: bool,
+    /// Cleared by the pump when the process or connection ends, so the manager
+    /// can drop a dead session instead of leaking one of its slots.
+    alive: Arc<std::sync::atomic::AtomicBool>,
     prompts: mpsc::UnboundedSender<Command>,
     connection: ConnectionTo<Agent>,
     acp_id: String,
@@ -76,11 +82,20 @@ impl AcpSession {
             })
     }
 
+    /// Whether the pump is still running.
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Close the session and let the pump terminate the process.
+    ///
+    /// The agent is asked to close only when it advertised support; either way
+    /// the pump stops and the child process is torn down.
     pub fn close(&self) -> Result<(), AcpError> {
-        self.prompts
-            .send(Command::Close)
-            .map_err(|_| AcpError::Inactive)
+        // A closed channel means the pump is already gone, so the session is
+        // already closed; that is success, not a failure to report.
+        let _ = self.prompts.send(Command::Close);
+        Ok(())
     }
 }
 
@@ -143,10 +158,12 @@ pub async fn open(
 
     let transport = ByteStreams::new(stdin.compat_write(), stdout.compat());
     let (prompt_tx, prompt_rx) = mpsc::unbounded_channel();
-    let (ready_tx, ready_rx) = oneshot::channel();
+    let (ready_tx, ready_rx) = oneshot::channel::<Result<SessionReady, AcpError>>();
     let permissions = spec.permissions.clone();
     let cwd = spec.cwd.to_path_buf();
 
+    let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let pump_alive = alive.clone();
     let pump_tail = stderr_tail.clone();
     let pump = tokio::spawn(async move {
         let result = drive(
@@ -158,27 +175,26 @@ pub async fn open(
             ready_tx,
         )
         .await;
-        // When the pump ends while the UI still expects a turn, say why instead
-        // of leaving the channel to close silently.
-        let tail = pump_tail
-            .lock()
-            .map(|tail| tail.to_string())
-            .unwrap_or_default();
-        let message = match result {
-            Err(error) => error.user_message(),
-            Ok(()) => {
-                if tail.trim().is_empty() {
-                    "The ACP session ended unexpectedly.".to_owned()
-                } else {
-                    format!("The ACP session ended unexpectedly:\n{tail}")
-                }
-            }
-        };
-        let _ = events.send(AcpEvent::TurnFailed { message });
+        // A turn failure has already been reported. Only a transport-level
+        // failure is left to explain here, and the stderr tail is the most
+        // useful thing to say.
+        if let Err(error) = result {
+            let tail = pump_tail
+                .lock()
+                .map(|tail| tail.to_string())
+                .unwrap_or_default();
+            let message = if tail.trim().is_empty() {
+                error.user_message()
+            } else {
+                format!("{}\n{}", error.user_message(), tail)
+            };
+            let _ = events.send(AcpEvent::TurnFailed { message });
+        }
+        pump_alive.store(false, std::sync::atomic::Ordering::SeqCst);
         process.terminate().await;
     });
 
-    let (connection, acp_session_id) = match ready_rx.await {
+    let ready = match ready_rx.await {
         Ok(Ok(value)) => value,
         Ok(Err(error)) => {
             pump.abort();
@@ -194,12 +210,21 @@ pub async fn open(
 
     Ok(AcpSession {
         local_id: spec.local_id,
-        acp_session_id: acp_session_id.clone(),
+        acp_session_id: ready.session_id.clone(),
         command: spec.command.to_owned(),
+        supports_close: ready.supports_close,
+        alive,
         prompts: prompt_tx,
-        connection,
-        acp_id: acp_session_id,
+        connection: ready.connection,
+        acp_id: ready.session_id,
     })
+}
+
+/// What the caller needs once the connection is live.
+struct SessionReady {
+    connection: ConnectionTo<Agent>,
+    session_id: String,
+    supports_close: bool,
 }
 
 async fn drive<T>(
@@ -208,7 +233,7 @@ async fn drive<T>(
     events: mpsc::UnboundedSender<AcpEvent>,
     permissions: PermissionHandler,
     cwd: std::path::PathBuf,
-    ready: oneshot::Sender<Result<(ConnectionTo<Agent>, String), AcpError>>,
+    ready: oneshot::Sender<Result<SessionReady, AcpError>>,
 ) -> Result<(), AcpError>
 where
     T: ConnectTo<Client> + Send + 'static,
@@ -221,10 +246,18 @@ where
                 .send_request(InitializeRequest::new(ProtocolVersion::V1))
                 .block_task()
                 .await;
-            if let Err(error) = initialized {
-                let _ = ready.send(Err(map_sdk_error(error)));
-                return Ok(());
-            }
+            let initialized = match initialized {
+                Ok(response) => response,
+                Err(error) => {
+                    let _ = ready.send(Err(map_sdk_error(error)));
+                    return Ok(());
+                }
+            };
+            let supports_close = initialized
+                .agent_capabilities
+                .session_capabilities
+                .close
+                .is_some();
 
             // ACP requires an absolute cwd; callers canonicalize it.
             // `start_session` returns a `'static` session, so the pump can loop
@@ -238,19 +271,29 @@ where
                 }
             };
 
-            let _ = ready.send(Ok((
-                session.connection().clone(),
-                session.session_id().to_string(),
-            )));
+            let _ = ready.send(Ok(SessionReady {
+                connection: session.connection().clone(),
+                session_id: session.session_id().to_string(),
+                supports_close,
+            }));
 
-            while let Some(command) = prompts.recv().await {
+            // Every turn failure is reported exactly once, right where it
+            // becomes known; the pump wrapper only reports transport failures.
+            'turn: while let Some(command) = prompts.recv().await {
                 match command {
                     Command::Close => {
-                        let _ = session
-                            .connection()
-                            .send_request(CloseSessionRequest::new(session.session_id().clone()))
-                            .block_task()
-                            .await;
+                        // `session/close` is opt-in: only call it when the agent
+                        // advertised the capability, or it answers with
+                        // method-not-found.
+                        if supports_close {
+                            let _ = session
+                                .connection()
+                                .send_request(CloseSessionRequest::new(
+                                    session.session_id().clone(),
+                                ))
+                                .block_task()
+                                .await;
+                        }
                         break;
                     }
                     Command::Prompt(text) => {
@@ -258,8 +301,10 @@ where
                             let _ = events.send(AcpEvent::TurnFailed {
                                 message: AcpError::Inactive.user_message(),
                             });
-                            break;
+                            break 'turn;
                         }
+                        // Only this turn ends on a failed prompt: the agent may
+                        // still be healthy and accept the next one.
                         loop {
                             match session.read_update().await {
                                 Ok(SessionMessage::PromptResponse(Ok(response))) => {
@@ -282,10 +327,12 @@ where
                                 // variants this SDK version does not define.
                                 Ok(_) => {}
                                 Err(error) => {
+                                    // The update stream is gone, so the
+                                    // connection is dead and no turn can follow.
                                     let _ = events.send(AcpEvent::TurnFailed {
                                         message: map_sdk_error(error).user_message(),
                                     });
-                                    break;
+                                    break 'turn;
                                 }
                             }
                         }
@@ -351,8 +398,8 @@ fn emit_update(update: SessionUpdate, events: &mpsc::UnboundedSender<AcpEvent>) 
             let _ = events.send(AcpEvent::ToolCall {
                 call_id: call.tool_call_id.to_string(),
                 title: call.title,
-                kind: Some(format!("{:?}", call.kind).to_lowercase()),
-                status: format!("{:?}", call.status).to_lowercase(),
+                kind: Some(wire_name(&call.kind)),
+                status: wire_name(&call.status),
                 detail: None,
             });
         }
@@ -361,10 +408,10 @@ fn emit_update(update: SessionUpdate, events: &mpsc::UnboundedSender<AcpEvent>) 
             let _ = events.send(AcpEvent::ToolCall {
                 call_id: update.tool_call_id.to_string(),
                 title: fields.title.unwrap_or_default(),
-                kind: fields.kind.map(|kind| format!("{kind:?}").to_lowercase()),
+                kind: fields.kind.map(|kind| wire_name(&kind)),
                 status: fields
                     .status
-                    .map(|status| format!("{status:?}").to_lowercase())
+                    .map(|status| wire_name(&status))
                     .unwrap_or_else(|| "in_progress".to_owned()),
                 detail: None,
             });
@@ -377,6 +424,17 @@ fn emit_update(update: SessionUpdate, events: &mpsc::UnboundedSender<AcpEvent>) 
         }
         _ => {}
     }
+}
+
+/// The protocol's wire name for an enum value (`AllowOnce` -> `allow_once`).
+///
+/// `Debug` yields `AllowOnce`, which would never match the snake_case names
+/// used by `select_option` and the rest of the protocol.
+fn wire_name<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 fn content_text(content: &agent_client_protocol::v1::schema::ContentBlock) -> Option<String> {
@@ -394,18 +452,11 @@ fn permission_info(request: &RequestPermissionRequest) -> PermissionRequestInfo 
             .title
             .clone()
             .unwrap_or_else(|| "ACP tool call".to_owned()),
-        kind: request
-            .tool_call
-            .fields
-            .kind
-            .map(|kind| format!("{kind:?}").to_lowercase()),
+        kind: request.tool_call.fields.kind.map(|kind| wire_name(&kind)),
         options: request
             .options
             .iter()
-            .map(|option| {
-                let kind = format!("{:?}", option.kind).to_lowercase();
-                (option.option_id.to_string(), Some(kind))
-            })
+            .map(|option| (option.option_id.to_string(), Some(wire_name(&option.kind))))
             .collect(),
     }
 }
@@ -438,10 +489,7 @@ fn permission_response(
 }
 
 fn stop_reason(response: &agent_client_protocol::v1::schema::PromptResponse) -> String {
-    serde_json::to_value(response.stop_reason)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "end_turn".to_owned())
+    wire_name(&response.stop_reason)
 }
 
 fn map_sdk_error(error: agent_client_protocol::Error) -> AcpError {
@@ -460,4 +508,89 @@ fn map_sdk_error(error: agent_client_protocol::Error) -> AcpError {
         };
     }
     AcpError::Protocol { message }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_client_protocol::v1::schema::{PermissionOptionKind, ToolCallStatus, ToolKind};
+
+    #[test]
+    fn permission_kinds_use_their_wire_names() {
+        // `Debug` would give `AllowOnce`, which never matches `select_option`.
+        assert_eq!(wire_name(&PermissionOptionKind::AllowOnce), "allow_once");
+        assert_eq!(
+            wire_name(&PermissionOptionKind::AllowAlways),
+            "allow_always"
+        );
+        assert_eq!(wire_name(&PermissionOptionKind::RejectOnce), "reject_once");
+        assert_eq!(
+            wire_name(&PermissionOptionKind::RejectAlways),
+            "reject_always"
+        );
+    }
+
+    #[test]
+    fn tool_names_and_statuses_use_their_wire_names() {
+        assert_eq!(wire_name(&ToolKind::Read), "read");
+        assert_eq!(wire_name(&ToolKind::Execute), "execute");
+        assert_eq!(wire_name(&ToolCallStatus::Pending), "pending");
+        assert_eq!(wire_name(&ToolCallStatus::InProgress), "in_progress");
+        assert_eq!(wire_name(&ToolCallStatus::Completed), "completed");
+        assert_eq!(wire_name(&ToolCallStatus::Failed), "failed");
+    }
+
+    #[test]
+    fn wire_names_make_approval_pick_allow_once() {
+        let info = PermissionRequestInfo {
+            title: "Run tests".into(),
+            kind: Some(wire_name(&ToolKind::Execute)),
+            options: [
+                PermissionOptionKind::AllowOnce,
+                PermissionOptionKind::AllowAlways,
+                PermissionOptionKind::RejectOnce,
+            ]
+            .into_iter()
+            .map(|kind| (wire_name(&kind), Some(wire_name(&kind))))
+            .collect(),
+        };
+        let response = permission_response(&info, PermissionDecision::Approve);
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["outcome"]["outcome"], "selected");
+        assert_eq!(json["outcome"]["optionId"], "allow_once");
+    }
+
+    #[test]
+    fn an_allow_always_only_request_is_cancelled() {
+        let info = PermissionRequestInfo {
+            title: "Run tests".into(),
+            kind: Some(wire_name(&ToolKind::Execute)),
+            options: [PermissionOptionKind::AllowAlways]
+                .into_iter()
+                .map(|kind| (wire_name(&kind), Some(wire_name(&kind))))
+                .collect(),
+        };
+        let response = permission_response(&info, PermissionDecision::Approve);
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["outcome"]["outcome"], "cancelled");
+    }
+
+    #[test]
+    fn rejection_prefers_reject_once() {
+        let info = PermissionRequestInfo {
+            title: "Run tests".into(),
+            kind: Some(wire_name(&ToolKind::Execute)),
+            options: [
+                PermissionOptionKind::AllowOnce,
+                PermissionOptionKind::RejectOnce,
+                PermissionOptionKind::RejectAlways,
+            ]
+            .into_iter()
+            .map(|kind| (wire_name(&kind), Some(wire_name(&kind))))
+            .collect(),
+        };
+        let response = permission_response(&info, PermissionDecision::Reject);
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["outcome"]["optionId"], "reject_once");
+    }
 }
