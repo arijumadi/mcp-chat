@@ -3,6 +3,12 @@ name: ACP Phase 0 Spike
 # Throwaway spike workflow. Run it from the spike branch only.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - spike/acp-phase0
+    paths:
+      - ".github/workflows/acp-phase0.yml"
+      - "spikes/acp-phase0/**"
 
 permissions:
   contents: read
