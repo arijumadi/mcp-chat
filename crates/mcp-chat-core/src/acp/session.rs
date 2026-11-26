@@ -93,11 +93,16 @@ pub struct SessionSpec<'a> {
     /// Absolute working directory for the child and for `session/new`.
     pub cwd: &'a Path,
     pub permissions: PermissionHandler,
-    pub events: mpsc::UnboundedSender<AcpEvent>,
 }
 
 /// Spawn the agent, initialize, create a session, and leave the pump running.
-pub async fn open(spec: SessionSpec<'_>) -> Result<AcpSession, AcpError> {
+///
+/// `events` is the sink for turn updates. The caller keeps the matching
+/// receiver, so the pump can always report why it stopped.
+pub async fn open(
+    spec: SessionSpec<'_>,
+    events: mpsc::UnboundedSender<AcpEvent>,
+) -> Result<AcpSession, AcpError> {
     let mut process = AgentProcess::spawn(spec.command, spec.args, spec.env, Some(spec.cwd))?;
     let stdout = process
         .child
@@ -139,7 +144,6 @@ pub async fn open(spec: SessionSpec<'_>) -> Result<AcpSession, AcpError> {
     let transport = ByteStreams::new(stdin.compat_write(), stdout.compat());
     let (prompt_tx, prompt_rx) = mpsc::unbounded_channel();
     let (ready_tx, ready_rx) = oneshot::channel();
-    let events = spec.events.clone();
     let permissions = spec.permissions.clone();
     let cwd = spec.cwd.to_path_buf();
 

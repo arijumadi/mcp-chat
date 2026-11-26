@@ -33,7 +33,6 @@ async fn open_session(
 ) {
     let argv = vec![scenario.to_owned()];
     let command = mock_agent();
-    let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel();
     let active = manager
         .open(
             SessionSpec {
@@ -43,7 +42,6 @@ async fn open_session(
                 env: &[],
                 cwd,
                 permissions: no_permissions(),
-                events: events_tx,
             },
             no_permissions(),
         )
@@ -116,7 +114,6 @@ async fn missing_binary_is_reported_as_not_found() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path().canonicalize().unwrap();
     let manager = AcpManager::new();
-    let (events_tx, _events) = tokio::sync::mpsc::unbounded_channel();
     let args: Vec<String> = Vec::new();
     let error = manager
         .open(
@@ -127,7 +124,6 @@ async fn missing_binary_is_reported_as_not_found() {
                 env: &[],
                 cwd: &cwd,
                 permissions: no_permissions(),
-                events: events_tx,
             },
             no_permissions(),
         )

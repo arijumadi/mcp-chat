@@ -84,14 +84,7 @@ impl AcpManager {
         }
 
         let (events_tx, events_rx) = mpsc::unbounded_channel();
-        let handle = Arc::new(
-            open(SessionSpec {
-                permissions,
-                events: events_tx,
-                ..spec
-            })
-            .await?,
-        );
+        let handle = Arc::new(open(spec, events_tx).await?);
 
         self.sessions.lock().await.insert(local_id, handle.clone());
 
