@@ -287,7 +287,17 @@ pub fn run(scenario: &str) {
                                     "kind": if is_delete { "delete" } else { "execute" },
                                     "locations": [
                                         { "path": "/tmp/example/src/main.rs", "line": 4 }
-                                    ]
+                                    ],
+                                    // A delete has no diff to preview; every
+                                    // other permission request shows one.
+                                    "content": if is_delete { json!([]) } else { json!([
+                                        {
+                                            "type": "diff",
+                                            "path": "/tmp/example/src/main.rs",
+                                            "oldText": "fn main() {\n    old();\n}\n",
+                                            "newText": "fn main() {\n    new();\n}\n"
+                                        }
+                                    ]) }
                                 },
                                 "options": [
                                     { "optionId": "allow-once", "name": "Allow", "kind": "allow_once" },
