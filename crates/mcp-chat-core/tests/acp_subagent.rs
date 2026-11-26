@@ -131,7 +131,7 @@ async fn an_acp_subagent_runs_and_reports_back() {
 }
 
 #[tokio::test]
-async fn an_acp_child_refuses_a_direct_message() {
+async fn an_acp_child_accepts_a_message_but_refuses_a_history_edit() {
     let harness = Harness::new().await;
     harness.register_agent("mock", "echo").await;
     let (_message_id, part_id) = harness.parent_tool_part().await;
@@ -149,28 +149,23 @@ async fn an_acp_child_refuses_a_direct_message() {
         .unwrap();
     let _ = wait_for_report(&harness, 40).await;
 
-    // ACP children are driven by the agent, so a direct send must be refused
-    // rather than silently starting the LLM loop.
-    let error = harness
+    // A message is fine: the agent runs the turn. What Jarvis must refuse is
+    // rewriting the history the agent owns.
+    harness
         .engine
         .send_message(&child_id, "direct")
         .await
-        .expect_err("ACP child must refuse a direct message");
+        .expect("a message is routed to the agent");
+
+    let error = harness
+        .engine
+        .regenerate(&child_id)
+        .await
+        .expect_err("regenerate must be refused");
     assert!(
-        error.user_message().contains("ACP agent"),
+        error.user_message().contains("keeps its own history"),
         "{}",
         error.user_message()
-    );
-
-    // And the refusal must not have written a message.
-    let history = messages::list_for_conversation(&harness.db.pool, &child_id)
-        .await
-        .unwrap();
-    assert!(
-        !history
-            .iter()
-            .any(|item| matches!(&item.parts[..], [part] if part.payload()["text"] == "direct")),
-        "a refused send must leave no message behind"
     );
 }
 
@@ -220,4 +215,168 @@ async fn wait_for_report(harness: &Harness, attempts: usize) -> String {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     panic!("no subagent report arrived");
+}
+
+#[tokio::test]
+async fn a_main_chat_can_be_bound_to_an_acp_agent_and_run_a_turn() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "echo").await;
+
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("mock"))
+        .await
+        .expect("bind agent");
+    let bound = conversations::get(&harness.db.pool, &harness.parent_id)
+        .await
+        .unwrap();
+    assert_eq!(bound.acp_agent.as_deref(), Some("mock"));
+
+    // A normal message is allowed on an ACP chat; the turn runs the agent.
+    harness
+        .engine
+        .send_message(&harness.parent_id, "hello from the main chat")
+        .await
+        .expect("send");
+
+    let answer = wait_for_assistant_text(&harness, &harness.parent_id, 60).await;
+    assert!(answer.contains("hello from the main chat"), "{answer}");
+
+    // The session id must be persisted, or a restart could never resume.
+    let after = conversations::get(&harness.db.pool, &harness.parent_id)
+        .await
+        .unwrap();
+    assert!(
+        after.acp_session_id.is_some(),
+        "the ACP session id must be stored for resume"
+    );
+}
+
+#[tokio::test]
+async fn regenerate_is_refused_on_an_acp_chat() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "echo").await;
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("mock"))
+        .await
+        .unwrap();
+
+    let error = harness
+        .engine
+        .regenerate(&harness.parent_id)
+        .await
+        .expect_err("regenerate must be refused");
+    assert!(
+        error.user_message().contains("keeps its own history"),
+        "{}",
+        error.user_message()
+    );
+}
+
+#[tokio::test]
+async fn unbinding_an_acp_chat_clears_the_marker() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "echo").await;
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("mock"))
+        .await
+        .unwrap();
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, None)
+        .await
+        .expect("unbind");
+
+    let conversation = conversations::get(&harness.db.pool, &harness.parent_id)
+        .await
+        .unwrap();
+    assert!(
+        conversation.acp_agent.is_none(),
+        "unbinding must clear the marker so the next turn uses the LLM again"
+    );
+}
+
+#[tokio::test]
+async fn binding_an_unknown_agent_is_reported() {
+    let harness = Harness::new().await;
+    let error = harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("nope"))
+        .await
+        .expect_err("unknown slug must fail");
+    assert!(
+        error.user_message().contains("nope"),
+        "{}",
+        error.user_message()
+    );
+}
+
+/// Poll a conversation for the newest assistant text.
+async fn wait_for_assistant_text(
+    harness: &Harness,
+    conversation_id: &str,
+    attempts: usize,
+) -> String {
+    for _ in 0..attempts {
+        let history = messages::list_for_conversation(&harness.db.pool, conversation_id)
+            .await
+            .unwrap();
+        if let Some(last) = history
+            .iter()
+            .rev()
+            .find(|item| item.message.role == "assistant" && item.message.status != "streaming")
+        {
+            let text = mcp_chat_core::agent::context::text_parts(&last.parts);
+            if !text.trim().is_empty() {
+                return text;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("no assistant answer arrived");
+}
+
+#[tokio::test]
+async fn probing_a_working_agent_reports_its_name() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "echo").await;
+    let agent = acp_agents::get_by_slug(&harness.db.pool, "mock")
+        .await
+        .unwrap()
+        .unwrap();
+    let workspace = harness._tmp.path().join("workspace");
+
+    let probe = ChatEngine::probe_acp_agent(&agent, &workspace)
+        .await
+        .expect("probe should reach the agent");
+    assert!(probe.ok, "{}", probe.message);
+    assert_eq!(probe.agent_name.as_deref(), Some("mock-acp"));
+    assert!(probe.session_id.is_some(), "the probe must open a session");
+}
+
+#[tokio::test]
+async fn probing_a_missing_binary_explains_what_is_wrong() {
+    let harness = Harness::new().await;
+    let config = AcpAgentConfig {
+        name: "Broken".into(),
+        slug: "broken".into(),
+        command: "jarvis-missing-acp-agent".into(),
+        args_json: "[]".into(),
+        env_json: "{}".into(),
+        permission_policy: "ask".into(),
+        enabled: true,
+    };
+    let agent = acp_agents::create(&harness.db.pool, &config).await.unwrap();
+    let workspace = harness._tmp.path().join("workspace");
+
+    let error = ChatEngine::probe_acp_agent(&agent, &workspace)
+        .await
+        .expect_err("a missing binary must fail");
+    assert!(
+        error.user_message().contains("was not found"),
+        "{}",
+        error.user_message()
+    );
 }

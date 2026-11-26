@@ -5,6 +5,11 @@ on:
   pull_request:
     paths:
       - "crates/mcp-chat-core/**"
+      - "src-tauri/**"
+      - "src/**"
+      - "shared/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
       - "tests/mock_servers/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -14,6 +19,11 @@ on:
       - master
     paths:
       - "crates/mcp-chat-core/**"
+      - "src-tauri/**"
+      - "src/**"
+      - "shared/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
       - "tests/mock_servers/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -62,3 +72,80 @@ jobs:
 
       - name: Mock server tests
         run: cargo test -p mcp-mock
+
+  app:
+    # `build.yml` only runs on a tag, so without this job a broken Tauri command
+    # would first surface during a release. Type-checking the app crate is
+    # enough to catch it; a full bundle build stays on the release path.
+    name: App crate (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: app-crate
+
+      - name: Install Tauri Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev
+
+      # The Tauri build script needs the frontend entry point to exist.
+      - name: Create frontend placeholder
+        run: mkdir -p dist && echo '<!doctype html>' > dist/index.html
+
+      - name: Check the app crate
+        run: cargo check -p mcp-chat --all-targets
+
+  frontend:
+    # Same reason as the app job: the release workflow is the only other place
+    # that compiles the frontend, and it runs on tags.
+    name: Frontend (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.34.7
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test

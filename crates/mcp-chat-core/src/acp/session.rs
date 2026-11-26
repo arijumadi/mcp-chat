@@ -13,7 +13,7 @@ use agent_client_protocol::v1::schema::{
     CancelNotification, CloseSessionRequest, InitializeRequest, RequestPermissionRequest,
     SessionNotification, SessionUpdate,
 };
-use agent_client_protocol::v1::{ConnectionTo, SessionMessage, SessionSetup};
+use agent_client_protocol::v1::{ConnectionTo, SessionMessage};
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo};
 use futures::future::BoxFuture;
 use tokio::sync::{mpsc, oneshot};
@@ -57,9 +57,12 @@ pub struct AcpSession {
     /// Whether the agent advertised `sessionCapabilities.close`. Most do not,
     /// and sending the request anyway would report a method-not-found error.
     pub supports_close: bool,
+    /// Name and version the agent reported during `initialize`, if any.
+    pub agent_info: Option<(String, String)>,
     /// Cleared by the pump when the process or connection ends, so the manager
     /// can drop a dead session instead of leaking one of its slots.
     alive: Arc<std::sync::atomic::AtomicBool>,
+    resumed: bool,
     prompts: mpsc::UnboundedSender<Command>,
     connection: ConnectionTo<Agent>,
     acp_id: String,
@@ -80,6 +83,11 @@ impl AcpSession {
             .map_err(|error| AcpError::Protocol {
                 message: error.to_string(),
             })
+    }
+
+    /// Whether this handle continues a session the agent already knew.
+    pub fn resumed(&self) -> bool {
+        self.resumed
     }
 
     /// Whether the pump is still running.
@@ -105,8 +113,11 @@ pub struct SessionSpec<'a> {
     pub command: &'a str,
     pub args: &'a [String],
     pub env: &'a [(String, String)],
-    /// Absolute working directory for the child and for `session/new`.
+    /// Absolute working directory for the child and for the session request.
     pub cwd: &'a Path,
+    /// Resume an existing ACP session instead of creating a new one. Only
+    /// honoured when the agent advertises `sessionCapabilities.resume`.
+    pub resume: Option<String>,
     pub permissions: PermissionHandler,
 }
 
@@ -161,6 +172,7 @@ pub async fn open(
     let (ready_tx, ready_rx) = oneshot::channel::<Result<SessionReady, AcpError>>();
     let permissions = spec.permissions.clone();
     let cwd = spec.cwd.to_path_buf();
+    let resume = spec.resume.clone();
 
     let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let pump_alive = alive.clone();
@@ -172,6 +184,7 @@ pub async fn open(
             events.clone(),
             permissions,
             cwd,
+            resume,
             ready_tx,
         )
         .await;
@@ -213,7 +226,9 @@ pub async fn open(
         acp_session_id: ready.session_id.clone(),
         command: spec.command.to_owned(),
         supports_close: ready.supports_close,
+        agent_info: ready.agent_info,
         alive,
+        resumed: ready.resumed,
         prompts: prompt_tx,
         connection: ready.connection,
         acp_id: ready.session_id,
@@ -225,6 +240,10 @@ struct SessionReady {
     connection: ConnectionTo<Agent>,
     session_id: String,
     supports_close: bool,
+    /// True when the agent accepted the requested resume id, false when a new
+    /// session was created (including after a failed resume).
+    resumed: bool,
+    agent_info: Option<(String, String)>,
 }
 
 async fn drive<T>(
@@ -233,6 +252,7 @@ async fn drive<T>(
     events: mpsc::UnboundedSender<AcpEvent>,
     permissions: PermissionHandler,
     cwd: std::path::PathBuf,
+    resume: Option<String>,
     ready: oneshot::Sender<Result<SessionReady, AcpError>>,
 ) -> Result<(), AcpError>
 where
@@ -253,28 +273,70 @@ where
                     return Ok(());
                 }
             };
-            let supports_close = initialized
-                .agent_capabilities
-                .session_capabilities
-                .close
-                .is_some();
+            let session_caps = &initialized.agent_capabilities.session_capabilities;
+            let supports_close = session_caps.close.is_some();
+            let supports_resume = session_caps.resume.is_some();
+            let agent_info = initialized
+                .agent_info
+                .as_ref()
+                .map(|info| (info.name.clone(), info.version.clone()));
 
             // ACP requires an absolute cwd; callers canonicalize it.
             // `start_session` returns a `'static` session, so the pump can loop
             // here without borrowing the closure's stack frame.
-            let setup = cx.build_session(&cwd).block_task().start_session().await;
-            let SessionSetup { mut session, .. } = match setup {
-                Ok(setup) => setup,
-                Err(error) => {
-                    let _ = ready.send(Err(map_sdk_error(error)));
-                    return Ok(());
+            //
+            // Resume is best effort: a stale id (the agent deleted the session,
+            // or the app was restarted against a different agent state) must
+            // fall back to a fresh session rather than fail the turn.
+            let mut resumed = false;
+            let new_session = || async {
+                cx.build_session(&cwd)
+                    .block_task()
+                    .start_session()
+                    .await
+                    .map(|setup| setup.session)
+            };
+            let mut session = match (resume, supports_resume) {
+                (Some(session_id), true) => {
+                    match cx
+                        .resume_session(session_id, &cwd)
+                        .block_task()
+                        .start_session()
+                        .await
+                    {
+                        Ok(setup) => {
+                            resumed = true;
+                            setup.session
+                        }
+                        Err(error) => {
+                            tracing::debug!(
+                                "ACP session resume failed, starting a new session: {error}"
+                            );
+                            match new_session().await {
+                                Ok(session) => session,
+                                Err(error) => {
+                                    let _ = ready.send(Err(map_sdk_error(error)));
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
                 }
+                _ => match new_session().await {
+                    Ok(session) => session,
+                    Err(error) => {
+                        let _ = ready.send(Err(map_sdk_error(error)));
+                        return Ok(());
+                    }
+                },
             };
 
             let _ = ready.send(Ok(SessionReady {
                 connection: session.connection().clone(),
                 session_id: session.session_id().to_string(),
                 supports_close,
+                resumed,
+                agent_info,
             }));
 
             // Every turn failure is reported exactly once, right where it

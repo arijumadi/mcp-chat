@@ -58,6 +58,7 @@ async fn open_session_with(
             args: &argv,
             env: &[],
             cwd,
+            resume: None,
             permissions,
         })
         .await
@@ -137,6 +138,7 @@ async fn missing_binary_is_reported_as_not_found() {
             args: &args,
             env: &[],
             cwd: &cwd,
+            resume: None,
             permissions: no_permissions(),
         })
         .await

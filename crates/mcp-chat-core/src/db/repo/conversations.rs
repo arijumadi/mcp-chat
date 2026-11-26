@@ -154,6 +154,8 @@ pub async fn set_acp(
     agent: &str,
     acp_session_id: Option<&str>,
 ) -> Result<()> {
+    // An empty slug clears the binding; NULL is reserved for "not ACP".
+    let agent = (!agent.trim().is_empty()).then_some(agent);
     sqlx::query(
         "UPDATE conversations SET acp_agent = ?2, acp_session_id = ?3, updated_at = ?4 WHERE id = ?1",
     )

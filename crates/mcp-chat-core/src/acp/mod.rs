@@ -24,6 +24,17 @@ pub use events::{AcpEvent, TurnOutcome, TurnTranscript};
 pub use manager::{AcpManager, MAX_ACTIVE_SESSIONS};
 pub use session::{AcpSession, PermissionDecision, PermissionHandler, PermissionRequestInfo};
 
+/// Result of probing a configured agent, used by the settings UI.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpProbe {
+    pub ok: bool,
+    pub message: String,
+    pub session_id: Option<String>,
+    pub agent_name: Option<String>,
+    pub agent_version: Option<String>,
+}
+
 pub use crate::db::repo::acp_agents::{
     PermissionKind, PermissionOption, PermissionOutcome, PermissionPolicy, auto_decide,
     select_option,

@@ -1,3 +1,4 @@
+pub mod acp;
 pub mod attachments;
 pub mod chat;
 pub mod providers;

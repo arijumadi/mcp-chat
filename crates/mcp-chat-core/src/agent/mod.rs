@@ -230,6 +230,113 @@ impl ChatEngine {
         Ok((child.id, content))
     }
 
+    /// Start an agent, initialize it, open a session, then close it.
+    ///
+    /// Used by the settings probe. A wrong flag, a missing binary, and an
+    /// unauthenticated agent all look identical in the config, so the only
+    /// honest check is to speak the protocol once.
+    pub async fn probe_acp_agent(
+        agent: &crate::models::AcpAgent,
+        workspace: &std::path::Path,
+    ) -> Result<crate::acp::AcpProbe> {
+        use crate::acp::session::PermissionDecision;
+
+        let args = acp_agents::agent_args(agent)?;
+        let env = acp_agents::agent_env(agent)?;
+        let no_permissions: crate::acp::PermissionHandler = Arc::new(|_| {
+            // A probe must never approve anything: decline and let the agent
+            // finish the handshake.
+            Box::pin(async { PermissionDecision::Cancel })
+        });
+        let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
+        let session = crate::acp::session::open(
+            crate::acp::session::SessionSpec {
+                local_id: "probe".into(),
+                command: &agent.command,
+                args: &args,
+                env: &env,
+                cwd: workspace,
+                resume: None,
+                permissions: no_permissions,
+            },
+            events_tx,
+        )
+        .await;
+
+        match session {
+            Ok(session) => {
+                let (name, version) = match &session.agent_info {
+                    Some((name, version)) => (Some(name.clone()), Some(version.clone())),
+                    None => (None, None),
+                };
+                let session_id = session.acp_session_id.clone();
+                // Closing is best effort: the handle is dropped either way, and
+                // the pump terminates the process.
+                let _ = session.close();
+                Ok(crate::acp::AcpProbe {
+                    ok: true,
+                    message: match (&name, &version) {
+                        (Some(name), Some(version)) => {
+                            format!("Connected to {name} {version}.")
+                        }
+                        _ => "Connected successfully.".to_owned(),
+                    },
+                    session_id: Some(session_id),
+                    agent_name: name,
+                    agent_version: version,
+                })
+            }
+            Err(error) => Err(CoreError::Message(error.user_message())),
+        }
+    }
+
+    /// Bind a conversation to an ACP agent, or clear the binding.
+    ///
+    /// The agent then runs every turn of that conversation instead of the LLM
+    /// loop. Its own history is authoritative, so Jarvis does not send the
+    /// transcript: only the newest user message is forwarded each turn.
+    pub async fn set_conversation_agent(
+        &self,
+        conversation_id: &str,
+        slug: Option<&str>,
+    ) -> Result<()> {
+        if self.in_flight(conversation_id) {
+            return Err(CoreError::Message(
+                "Stop the current turn before changing the agent.".into(),
+            ));
+        }
+        let Some(slug) = slug.map(str::trim).filter(|value| !value.is_empty()) else {
+            // Unbinding mid-conversation keeps the live session until it ends;
+            // the next turn simply goes back to the LLM.
+            conversations::set_acp(&self.db.pool, conversation_id, "", None).await?;
+            if let Some(session) = self.acp.get(conversation_id).await {
+                let _ = session.close();
+            }
+            self.acp.close(conversation_id).await.ok();
+            let _ = self.events.send(CoreEvent::ConversationUpdated {
+                conversation_id: conversation_id.to_owned(),
+            });
+            return Ok(());
+        };
+        let agent = acp_agents::get_by_slug(&self.db.pool, slug)
+            .await?
+            .ok_or_else(|| {
+                CoreError::Message(format!(
+                    "No ACP agent is registered with the slug {slug:?}."
+                ))
+            })?;
+        if !agent.enabled {
+            return Err(CoreError::Message(format!(
+                "The ACP agent {slug:?} is disabled."
+            )));
+        }
+        conversations::set_acp(&self.db.pool, conversation_id, &agent.slug, None).await?;
+        let _ = self.events.send(CoreEvent::ConversationUpdated {
+            conversation_id: conversation_id.to_owned(),
+        });
+        Ok(())
+    }
+
     /// Launch a child backed by an external ACP agent.
     ///
     /// Mirrors [`Self::launch_subagent`] so the parent sees one kind of report,
@@ -339,16 +446,26 @@ impl ChatEngine {
         slug: &str,
         cancel: CancellationToken,
     ) -> Result<()> {
-        let agent = acp_agents::get_by_slug(&self.db.pool, slug)
-            .await?
-            .ok_or_else(|| {
-                CoreError::Message(format!(
-                    "No ACP agent is registered with the slug {slug:?}."
-                ))
-            })?;
-        let conversation = conversations::get(&self.db.pool, conversation_id).await?;
-        // The last user message is the prompt for this turn; the child history
-        // stays the record, exactly like the internal runner.
+        let agent = match acp_agents::get_by_slug(&self.db.pool, slug).await? {
+            Some(agent) if agent.enabled => agent,
+            Some(_) => {
+                let message = format!("The ACP agent {slug:?} is disabled.");
+                self.fail_acp_turn(conversation_id, &message).await;
+                return Ok(());
+            }
+            None => {
+                // The row can be renamed or deleted after a chat is bound to it;
+                // say so instead of silently falling back to the LLM.
+                let message = format!(
+                    "The ACP agent bound to this chat ({slug:?}) no longer exists. Pick another agent, or switch back to the built-in model."
+                );
+                self.fail_acp_turn(conversation_id, &message).await;
+                return Ok(());
+            }
+        };
+
+        // Only the newest user message is forwarded. The agent owns the rest of
+        // the conversation, so sending Jarvis history would duplicate it.
         let history = messages::list_for_conversation(&self.db.pool, conversation_id).await?;
         let prompt = history
             .iter()
@@ -359,7 +476,7 @@ impl ChatEngine {
         if prompt.trim().is_empty() {
             return Ok(());
         }
-        // The working directory must stay inside the parent's workspace.
+
         let workspace =
             crate::agent::tools::workspace_root_for_conversation(&self.db.pool, conversation_id)
                 .await?;
@@ -373,9 +490,38 @@ impl ChatEngine {
             },
             cancel,
         )
-        .await?;
-        let _ = conversation.acp_session_id;
-        Ok(())
+        .await
+    }
+
+    /// Record a failure that happened before any transcript existed, so the
+    /// chat does not sit on a user message with no answer.
+    async fn fail_acp_turn(&self, conversation_id: &str, message: &str) {
+        if let Ok(assistant) =
+            messages::create(&self.db.pool, conversation_id, "assistant", "error").await
+        {
+            let _ = messages::append_part(
+                &self.db.pool,
+                &assistant.id,
+                "text",
+                &PartPayload::Text {
+                    text: message.to_owned(),
+                },
+            )
+            .await;
+            let _ =
+                messages::set_status(&self.db.pool, &assistant.id, "error", Some(message)).await;
+            let _ = self.events.send(CoreEvent::MessageEnd {
+                conversation_id: conversation_id.to_owned(),
+                message_id: assistant.id,
+                status: "error".into(),
+                error: Some(message.to_owned()),
+            });
+        }
+        let _ = self.events.send(CoreEvent::Status {
+            conversation_id: conversation_id.to_owned(),
+            status: crate::events::TurnStatus::Idle,
+            message: Some(message.to_owned()),
+        });
     }
 
     async fn mark_subagent_part(&self, parent_id: &str, part_id: &str, child_id: &str) {
@@ -638,7 +784,6 @@ impl ChatEngine {
         attachment_ids: &[String],
         contexts: &[MessageContext],
     ) -> Result<Message> {
-        self.reject_acp_turn(conversation_id).await?;
         let text = text.trim();
         if text.is_empty() && attachment_ids.is_empty() && contexts.is_empty() {
             return Err(CoreError::invalid(
@@ -812,7 +957,7 @@ impl ChatEngine {
     }
 
     pub async fn regenerate(self: &Arc<Self>, conversation_id: &str) -> Result<()> {
-        self.reject_acp_turn(conversation_id).await?;
+        self.reject_acp_history_edit(conversation_id).await?;
         if self.in_flight(conversation_id) {
             return Err(CoreError::Message(
                 "This conversation is already generating a response.".into(),
@@ -836,7 +981,7 @@ impl ChatEngine {
     /// Resume a turn that stopped at the max-step limit. Adds a hidden
     /// synthetic user message and starts a fresh step budget.
     pub async fn continue_turn(self: &Arc<Self>, conversation_id: &str) -> Result<()> {
-        self.reject_acp_turn(conversation_id).await?;
+        self.reject_acp_history_edit(conversation_id).await?;
         if self.in_flight(conversation_id) {
             return Err(CoreError::Message(
                 "This conversation is already generating a response.".into(),
@@ -968,16 +1113,18 @@ impl ChatEngine {
         })
     }
 
-    /// Reject a turn on a conversation that an ACP agent owns.
+    /// Reject an operation that an ACP conversation cannot support.
     ///
-    /// The agent runs the prompt itself, so Jarvis must not run its LLM loop or
-    /// regenerate history for that child. Callers check this *before* writing
-    /// rows, or a rejected request would leave a stray user message.
-    async fn reject_acp_turn(&self, conversation_id: &str) -> Result<()> {
+    /// A normal message is fine: the agent runs the prompt itself, and
+    /// `start_turn_with_done` routes the turn to it. Regenerating or continuing
+    /// is not, because those rewrite Jarvis history the agent owns. Callers
+    /// check this *before* writing rows, or a rejected request would leave a
+    /// stray message behind.
+    async fn reject_acp_history_edit(&self, conversation_id: &str) -> Result<()> {
         if let Ok(conversation) = conversations::get(&self.db.pool, conversation_id).await {
             if conversation.acp_agent.is_some() {
                 return Err(CoreError::Message(
-                    "This conversation is run by an ACP agent; send a follow-up through its parent chat."
+                    "This conversation is run by an ACP agent, which keeps its own history. Regenerate and continue are not available here."
                         .into(),
                 ));
             }
