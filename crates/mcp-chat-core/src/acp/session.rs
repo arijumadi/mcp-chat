@@ -698,6 +698,20 @@ mod tests {
     use super::*;
     use agent_client_protocol::v1::schema::{PermissionOptionKind, ToolCallStatus, ToolKind};
 
+    /// Build the information the client keeps from a permission request.
+    fn permission_request(kinds: &[PermissionOptionKind]) -> PermissionRequestInfo {
+        PermissionRequestInfo {
+            title: "Run tests".into(),
+            kind: Some(wire_name(&ToolKind::Execute)),
+            options: kinds
+                .iter()
+                .map(|kind| (wire_name(kind), Some(wire_name(kind))))
+                .collect(),
+            diffs: Vec::new(),
+            locations: Vec::new(),
+        }
+    }
+
     #[test]
     fn permission_kinds_use_their_wire_names() {
         // `Debug` would give `AllowOnce`, which never matches `select_option`.
@@ -725,18 +739,11 @@ mod tests {
 
     #[test]
     fn wire_names_make_approval_pick_allow_once() {
-        let info = PermissionRequestInfo {
-            title: "Run tests".into(),
-            kind: Some(wire_name(&ToolKind::Execute)),
-            options: [
-                PermissionOptionKind::AllowOnce,
-                PermissionOptionKind::AllowAlways,
-                PermissionOptionKind::RejectOnce,
-            ]
-            .into_iter()
-            .map(|kind| (wire_name(&kind), Some(wire_name(&kind))))
-            .collect(),
-        };
+        let info = permission_request(&[
+            PermissionOptionKind::AllowOnce,
+            PermissionOptionKind::AllowAlways,
+            PermissionOptionKind::RejectOnce,
+        ]);
         let response = permission_response(&info, PermissionDecision::Approve);
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["outcome"]["outcome"], "selected");
@@ -745,14 +752,7 @@ mod tests {
 
     #[test]
     fn an_allow_always_only_request_is_cancelled() {
-        let info = PermissionRequestInfo {
-            title: "Run tests".into(),
-            kind: Some(wire_name(&ToolKind::Execute)),
-            options: [PermissionOptionKind::AllowAlways]
-                .into_iter()
-                .map(|kind| (wire_name(&kind), Some(wire_name(&kind))))
-                .collect(),
-        };
+        let info = permission_request(&[PermissionOptionKind::AllowAlways]);
         let response = permission_response(&info, PermissionDecision::Approve);
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["outcome"]["outcome"], "cancelled");
@@ -760,17 +760,10 @@ mod tests {
 
     #[test]
     fn cancelling_answers_cancelled_not_a_rejection() {
-        let info = PermissionRequestInfo {
-            title: "Run tests".into(),
-            kind: Some(wire_name(&ToolKind::Execute)),
-            options: [
-                PermissionOptionKind::AllowOnce,
-                PermissionOptionKind::RejectOnce,
-            ]
-            .into_iter()
-            .map(|kind| (wire_name(&kind), Some(wire_name(&kind))))
-            .collect(),
-        };
+        let info = permission_request(&[
+            PermissionOptionKind::AllowOnce,
+            PermissionOptionKind::RejectOnce,
+        ]);
         let response = permission_response(&info, PermissionDecision::Cancel);
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(
@@ -782,18 +775,11 @@ mod tests {
 
     #[test]
     fn rejection_prefers_reject_once() {
-        let info = PermissionRequestInfo {
-            title: "Run tests".into(),
-            kind: Some(wire_name(&ToolKind::Execute)),
-            options: [
-                PermissionOptionKind::AllowOnce,
-                PermissionOptionKind::RejectOnce,
-                PermissionOptionKind::RejectAlways,
-            ]
-            .into_iter()
-            .map(|kind| (wire_name(&kind), Some(wire_name(&kind))))
-            .collect(),
-        };
+        let info = permission_request(&[
+            PermissionOptionKind::AllowOnce,
+            PermissionOptionKind::RejectOnce,
+            PermissionOptionKind::RejectAlways,
+        ]);
         let response = permission_response(&info, PermissionDecision::Reject);
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["outcome"]["optionId"], "reject_once");
