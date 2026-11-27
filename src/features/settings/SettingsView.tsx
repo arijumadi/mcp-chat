@@ -382,7 +382,7 @@ export function SettingsView() {
           <Section
             id="acp"
             title="ACP agents"
-            description="External agents that speak the Agent Client Protocol. Paste a preset, then use Test to prove the command works on this machine. A chat can run on one of these instead of the built-in model."
+            description="External agents that speak the Agent Client Protocol. Paste a preset, then use Test to prove the command works on this machine. A chat can run on one of these instead of Jarvis."
           >
             <AcpAgentsSettings />
           </Section>

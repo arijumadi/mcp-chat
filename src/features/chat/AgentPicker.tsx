@@ -55,7 +55,7 @@ export function AgentPicker({
   if (agents.length === 0) return null;
 
   const bound = conversation.acpAgent ?? null;
-  const label = bound ? (agents.find((a) => a.slug === bound)?.name ?? bound) : "Built-in model";
+  const label = bound ? (agents.find((a) => a.slug === bound)?.name ?? bound) : "Jarvis";
 
   const choose = async (slug: string | null) => {
     setBusy(true);
@@ -92,7 +92,7 @@ export function AgentPicker({
       toast(
         slug
           ? "This chat now runs on the ACP agent."
-          : "This chat is back on the built-in model.",
+          : "This chat is back on Jarvis.",
         "info",
       );
     } catch (error) {
@@ -134,7 +134,7 @@ export function AgentPicker({
             className="focus-ring flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-[var(--panel-2)]"
           >
             <div className="min-w-0">
-              <div className="text-[11.5px] font-medium">Built-in model</div>
+              <div className="text-[11.5px] font-medium">Jarvis</div>
               <div className="text-[10.5px]" style={{ color: "var(--muted)" }}>
                 Jarvis runs the turn with its own tools and prompt.
               </div>
