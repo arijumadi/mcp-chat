@@ -57,24 +57,18 @@ pub async fn run_turn(
     spec: TurnSpec<'_>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    // Two switches, like the built-in tools: the agent's own stored policy and
-    // the per-chat Auto button. Auto is the stronger of the two, so enabling it
-    // now applies here instead of being silently ignored.
+    // The stored policy is only a default; the per-chat Auto switch is read
+    // per request inside the handler, so toggling it mid-session works.
     let stored =
         crate::db::repo::acp_agents::PermissionPolicy::parse(&spec.agent.permission_policy)
             .unwrap_or(crate::db::repo::acp_agents::PermissionPolicy::Ask);
-    let policy = if engine.auto_approve(spec.child_id) {
-        crate::db::repo::acp_agents::PermissionPolicy::Auto
-    } else {
-        stored
-    };
     let active = ensure_session(
         engine.clone(),
         spec.child_id,
         spec.agent,
         spec.cwd,
         &cancel,
-        policy,
+        stored,
     )
     .await?;
 
@@ -498,7 +492,7 @@ fn permission_handler(
     engine: Arc<ChatEngine>,
     child_id: &str,
     cancel: &CancellationToken,
-    policy: crate::db::repo::acp_agents::PermissionPolicy,
+    stored_policy: crate::db::repo::acp_agents::PermissionPolicy,
 ) -> PermissionHandler {
     let cancel = cancel.clone();
     let child_id = child_id.to_owned();
@@ -507,6 +501,14 @@ fn permission_handler(
         let child_id = child_id.clone();
         let cancel = cancel.clone();
         Box::pin(async move {
+            // Read the switch per request, not once when the session opened:
+            // a session can outlive the toggle, and a binding now opens the
+            // session before the user has touched Auto.
+            let policy = if engine.auto_approve(&child_id) {
+                crate::db::repo::acp_agents::PermissionPolicy::Auto
+            } else {
+                stored_policy
+            };
             if policy_allows(policy, info.kind.as_deref()) {
                 return PermissionDecision::Approve;
             }
