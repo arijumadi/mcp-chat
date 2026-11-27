@@ -65,20 +65,23 @@ impl Drop for TurnSlot {
 /// the seed for a new agent, not the whole history: it can re-read files with
 /// its own tools. Roughly six thousand tokens keeps the shape of the
 /// conversation without crowding out the work.
-/// Default size of the transcript carried across an agent switch.
+/// How much conversation is carried across an agent switch, in tokens.
 ///
 /// Unlike the built-in tools, an ACP agent does not publish its context window:
 /// the protocol has no field for it, and the agent's model is its own business.
-/// A share of the window therefore cannot be computed, so this is a budget the
-/// user can raise or lower with `acp.handoff_chars`. 48k characters is roughly
-/// twelve thousand tokens, which carries a long conversation's decisions without
-/// crowding out the agent's own tools and prompt.
-const HANDOFF_DEFAULT_CHARS: usize = 48_000;
+/// A share of the window therefore cannot be computed. 200k tokens is the
+/// default because it covers a long working session whole, and a transcript
+/// beyond it is summarised rather than truncated.
+///
+/// 200k is a budget, not a promise that the agent can take it: an agent on a
+/// 128k model would reject a prompt that size. That is why the head is
+/// summarised instead of sent raw — a summary is a few thousand tokens whatever
+/// the conversation length, so the prompt stays small even when the history was
+/// enormous.
+const HANDOFF_DEFAULT_TOKENS: i64 = 200_000;
 
-/// Never send a transcript larger than this, whatever the setting says. A
-/// handoff that fills the window would make the first turn fail, which is worse
-/// than a shorter summary.
-const HANDOFF_MAX_CHARS: usize = 200_000;
+/// Rough characters per token, matching the estimator elsewhere.
+const CHARS_PER_TOKEN: usize = 4;
 
 pub struct ChatEngine {
     pub db: Db,
@@ -503,6 +506,70 @@ impl ChatEngine {
             .await;
     }
 
+    /// Summarise the head of a conversation so a large handoff still fits.
+    ///
+    /// Switching agents carries the transcript, but an agent's window is
+    /// unknown and 200k tokens is a lot to assume. Rather than truncating the
+    /// oldest half away — which loses the objective and the decisions — the
+    /// same summariser `compact` uses is asked for a dense Markdown handoff.
+    /// `None` means the summary could not be produced, and the caller falls back
+    /// to the plain transcript.
+    pub async fn summarize_for_handoff(
+        self: &Arc<Self>,
+        conversation_id: &str,
+        older: &[crate::models::MessageWithParts],
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Option<String> {
+        if older.is_empty() {
+            return None;
+        }
+        let conversation = conversations::get(&self.db.pool, conversation_id)
+            .await
+            .ok()?;
+        let (provider, model, api_key, _context_window, max_tokens) =
+            self.resolve(&conversation).await.ok()?;
+        let kind = crate::models::ProviderKind::parse(&provider.kind)?;
+        let (mut messages, _) = crate::agent::context::build_messages(older).await;
+        if messages.is_empty() {
+            return None;
+        }
+        messages.push(crate::llm::ChatMessage::text(
+            crate::llm::ChatRole::User,
+            crate::agent::runner::COMPACTION_INSTRUCTION,
+        ));
+        let request = crate::llm::ChatRequest {
+            kind,
+            base_url: provider.base_url.clone(),
+            api_key,
+            model,
+            system: None,
+            messages,
+            tools: Vec::new(),
+            tool_choice: crate::llm::ToolChoice::None,
+            max_tokens: max_tokens.min(4096),
+            temperature: None,
+            reasoning_effort: None,
+        };
+        match crate::llm::complete(kind, request, cancel.clone()).await {
+            Ok(summary) if !summary.trim().is_empty() => Some(summary),
+            Ok(_) => {
+                tracing::warn!(
+                    conversation = %conversation_id,
+                    "the handoff summariser returned an empty result"
+                );
+                None
+            }
+            Err(error) => {
+                tracing::warn!(
+                    conversation = %conversation_id,
+                    error = %error.user_message(),
+                    "could not summarise the head of the conversation for a handoff"
+                );
+                None
+            }
+        }
+    }
+
     /// Drop the live session for a conversation, if any.
     ///
     /// `AcpManager::close` also removes the registry entry, which is what makes
@@ -671,15 +738,52 @@ impl ChatEngine {
             .filter(|earlier| !earlier.is_empty());
         let carried = match earlier {
             Some(earlier) => {
-                let configured = settings::get_i64(
-                    &self.db.pool,
-                    "acp.handoff_chars",
-                    HANDOFF_DEFAULT_CHARS as i64,
-                )
-                .await
-                .unwrap_or(HANDOFF_DEFAULT_CHARS as i64);
-                let budget = (configured.max(1) as usize).min(HANDOFF_MAX_CHARS);
-                crate::agent::context::transcript_for_handoff(earlier, budget)
+                let tokens =
+                    settings::get_i64(&self.db.pool, "acp.handoff_tokens", HANDOFF_DEFAULT_TOKENS)
+                        .await
+                        .unwrap_or(HANDOFF_DEFAULT_TOKENS)
+                        .max(1_000);
+                let budget = (tokens as usize).saturating_mul(CHARS_PER_TOKEN);
+                let (older_end, _) = crate::agent::context::handoff_split(earlier, budget);
+                if older_end == 0 {
+                    // It all fits; send it verbatim.
+                    crate::agent::context::transcript_for_handoff(earlier, budget)
+                } else {
+                    // Too long to send raw. Summarise the head with the same
+                    // instruction compaction uses, so what survives is the
+                    // objective and the decisions rather than a truncated
+                    // fragment. The tail stays verbatim.
+                    let _ = self.events.send(CoreEvent::Status {
+                        conversation_id: conversation_id.to_owned(),
+                        status: crate::events::TurnStatus::Compacting,
+                        message: Some("Summarising the conversation for the new agent…".into()),
+                    });
+                    let summary = self
+                        .summarize_for_handoff(conversation_id, &earlier[..older_end], &cancel)
+                        .await;
+                    let _ = self.events.send(CoreEvent::Status {
+                        conversation_id: conversation_id.to_owned(),
+                        status: crate::events::TurnStatus::Thinking,
+                        message: None,
+                    });
+                    let tail = crate::agent::context::transcript_for_handoff(
+                        &earlier[older_end..],
+                        budget,
+                    );
+                    match summary {
+                        Some(summary) => {
+                            format!("[summary of the older conversation]\n{summary}\n\n{tail}")
+                        }
+                        // Summarising failed — no provider, no key, a network
+                        // error. The recent tail still helps, but it must say it
+                        // is only part of the story, or the new agent will assume
+                        // the conversation began there.
+                        None => format!(
+                            "[The earlier part of this conversation could not be summarised, \
+                             so only the most recent messages follow.]\n\n{tail}"
+                        ),
+                    }
+                }
             }
             None => String::new(),
         };

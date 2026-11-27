@@ -30,7 +30,7 @@ use crate::mcp::tools::ToolRegistry;
 use crate::models::{PartPayload, ProviderKind};
 use crate::{CoreError, Result, now_ms};
 
-const COMPACTION_INSTRUCTION: &str = r#"Compaction task: create a handoff summary of the older conversation above. The newest messages are retained verbatim and are not part of this request.
+pub(crate) const COMPACTION_INSTRUCTION: &str = r#"Compaction task: create a handoff summary of the older conversation above. The newest messages are retained verbatim and are not part of this request.
 
 Return only Markdown with exactly these sections. If a section has no content, write "(none)".
 

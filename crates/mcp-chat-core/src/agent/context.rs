@@ -568,6 +568,73 @@ pub fn transcript_for_handoff(history: &[MessageWithParts], limit: usize) -> Str
     }
 }
 
+/// Split a handoff into the part that must be summarised and the part that fits.
+///
+/// Returns `(older, recent)` boundaries as indices into `history`. `recent` is
+/// the tail that fits the budget; everything before it is what a summary must
+/// cover. Empty `older` means the transcript already fits.
+pub fn handoff_split(history: &[MessageWithParts], budget_chars: usize) -> (usize, usize) {
+    let mut kept = 0usize;
+    let mut start = history.len();
+    for index in (0..history.len()).rev() {
+        let message = &history[index];
+        if message.message.role == "tool" || message.message.status == "synthetic" {
+            continue;
+        }
+        let tokens = message_tokens(message);
+        let chars = tokens.saturating_mul(4);
+        if kept + chars > budget_chars && start < history.len() {
+            break;
+        }
+        kept += chars;
+        start = index;
+    }
+    // Never split a tool row away from the call that produced it.
+    while start > 0 && history[start].message.role == "tool" {
+        start -= 1;
+    }
+    (start, history.len())
+}
+
+/// Estimate the characters one stored message will occupy in a prompt.
+pub fn message_tokens(message: &MessageWithParts) -> usize {
+    let mut chars = 0usize;
+    for part in &message.parts {
+        let payload = part.payload();
+        match part.kind.as_str() {
+            "text" => {
+                chars += payload
+                    .get("text")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .chars()
+                    .count()
+            }
+            "tool_call" => {
+                chars += serde_json::to_string(&payload.get("args").cloned().unwrap_or(Value::Null))
+                    .map(|value| value.len())
+                    .unwrap_or(0)
+            }
+            "tool_result" => {
+                chars += payload
+                    .get("content")
+                    .and_then(|value| value.as_str())
+                    .map(str::len)
+                    .unwrap_or(0)
+            }
+            "summary" => {
+                chars += payload
+                    .get("text")
+                    .and_then(|value| value.as_str())
+                    .map(str::len)
+                    .unwrap_or(0)
+            }
+            _ => {}
+        }
+    }
+    (chars / 4).max(1)
+}
+
 /// The block prepended to the first prompt of a newly opened session.
 pub fn handoff_block(transcript: &str) -> String {
     format!(
@@ -1013,5 +1080,35 @@ mod tests {
             transcript.contains("message number 49"),
             "the newest messages must survive the trim: {transcript}"
         );
+    }
+
+    /// A transcript under the budget is sent whole; one over it is split so the
+    /// head can be summarised instead of silently dropped.
+    #[tokio::test]
+    async fn a_handoff_splits_only_when_the_budget_is_exceeded() {
+        let mut history = Vec::new();
+        for index in 0..20 {
+            history.push(message_with_parts(vec![Part {
+                id: format!("p{index}"),
+                message_id: "m1".into(),
+                idx: 0,
+                kind: "text".into(),
+                payload_json: json!({"text": format!("message {index} with some words in it")})
+                    .to_string(),
+            }]));
+        }
+
+        // Generous budget: nothing to summarise.
+        let (older, _) = handoff_split(&history, 1_000_000);
+        assert_eq!(older, 0, "a transcript that fits must not be summarised");
+
+        // Tight budget: an older head is separated from a recent tail.
+        let (older, recent) = handoff_split(&history, 200);
+        assert!(
+            older > 0,
+            "a long transcript must produce a head to summarise"
+        );
+        assert_eq!(recent, history.len());
+        assert!(older < history.len(), "the tail must not be empty");
     }
 }
