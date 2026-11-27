@@ -63,6 +63,8 @@ export interface AppStore {
   agentCommands: AgentCommand[];
   /// Model, thinking level, mode, and anything else the agent exposes.
   agentConfig: AgentConfigOption[];
+  /// True while an ACP agent is starting and its options are not known yet.
+  agentPreparing: boolean;
   conversations: Conversation[];
   conversationLimit: number;
   conversationHasMore: boolean;
@@ -101,7 +103,7 @@ export interface AppStore {
   init: () => Promise<void>;
   refreshConversations: () => Promise<void>;
   refreshAgentCommands: (conversationId: string) => Promise<void>;
-  refreshAgentConfig: (conversationId: string) => Promise<void>;
+  refreshAgentConfig: (conversationId: string) => Promise<AgentConfigOption[]>;
   setAgentConfig: (conversationId: string, configId: string, value: string) => Promise<void>;
   loadMoreConversations: () => Promise<void>;
   refreshProviders: () => Promise<void>;
@@ -181,6 +183,7 @@ export const useApp = create<AppStore>()((set, get) => ({
   bootError: null,
   agentCommands: [],
   agentConfig: [],
+  agentPreparing: false,
   conversations: [],
   conversationLimit: 200,
   conversationHasMore: false,
@@ -277,8 +280,10 @@ export const useApp = create<AppStore>()((set, get) => ({
         conversationId,
       });
       set({ agentConfig: config });
+      return config;
     } catch {
       set({ agentConfig: [] });
+      return [];
     }
   },
 

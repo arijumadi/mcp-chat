@@ -25,6 +25,7 @@ export function AgentPicker({
   const [agents, setAgents] = useState<AcpAgentView[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -64,19 +65,36 @@ export function AgentPicker({
         slug,
       });
       await refreshConversations();
-      // Fetch the new agent's options now. ACP sessions are opened when the
-      // binding is written, so they are available immediately.
-      await Promise.all([
-        refreshAgentConfig(conversation.id),
-        refreshAgentCommands(conversation.id),
-      ]);
+      setOpen(false);
+      setBusy(false);
+
+      // The switch itself is already done. Opening the agent happens in the
+      // background and takes a second or two, so poll briefly instead of
+      // holding the menu open: the user can keep working meanwhile.
+      if (slug) {
+        setPreparing(true);
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          const [config] = await Promise.all([
+            refreshAgentConfig(conversation.id),
+            refreshAgentCommands(conversation.id),
+          ]);
+          if (config.length > 0) break;
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+        setPreparing(false);
+      } else {
+        await Promise.all([
+          refreshAgentConfig(conversation.id),
+          refreshAgentCommands(conversation.id),
+        ]);
+      }
+
       toast(
         slug
           ? "This chat now runs on the ACP agent."
           : "This chat is back on the built-in model.",
         "info",
       );
-      setOpen(false);
     } catch (error) {
       toast(String(error), "error");
     } finally {
@@ -98,6 +116,11 @@ export function AgentPicker({
         <span className="truncate font-medium" style={{ color: "var(--fg)" }}>
           {label}
         </span>
+        {preparing ? (
+          <span className="truncate text-[10px]" style={{ color: "var(--muted)" }}>
+            starting…
+          </span>
+        ) : null}
         <ChevronDown size={12} />
       </button>
       {open ? (
