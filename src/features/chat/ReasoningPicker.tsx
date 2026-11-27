@@ -48,18 +48,18 @@ export function ReasoningPicker({
         type="button"
         onClick={() => setOpen((value) => !value)}
         disabled={disabled}
-        className="focus-ring flex max-w-[140px] items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-[10.5px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
+        className="focus-ring flex max-w-[130px] items-center gap-1 rounded-md border border-transparent px-1.5 py-1 text-[10px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
         style={{ color: "var(--muted)" }}
         title={`Reasoning effort: ${selected.label}`}
         aria-label={`Reasoning effort: ${selected.label}`}
         aria-haspopup="listbox"
         aria-expanded={open}
       >
-        <Brain size={11} className="shrink-0" />
+        <Brain size={10} className="shrink-0" />
         <span className="truncate font-medium" style={{ color: "var(--fg)" }}>
           {selected.label}
         </span>
-        <ChevronDown size={11} className="shrink-0" />
+        <ChevronDown size={10} className="shrink-0" />
       </button>
 
       {open ? (

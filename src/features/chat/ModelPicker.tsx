@@ -63,7 +63,7 @@ export function ModelPicker({
       <button
         onClick={() => setOpen((value) => !value)}
         disabled={disabled}
-        className="focus-ring flex max-w-[220px] items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-[10.5px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
+        className="focus-ring flex max-w-[200px] items-center gap-1 rounded-md border border-transparent px-1.5 py-1 text-[10px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
         style={{ color: "var(--muted)" }}
         title="Change model"
       >
@@ -84,7 +84,7 @@ export function ModelPicker({
             aria-label="Provider key missing"
           />
         ) : null}
-        <ChevronDown size={11} className="shrink-0" />
+        <ChevronDown size={10} className="shrink-0" />
       </button>
 
       {open ? (

@@ -108,11 +108,11 @@ export function AgentPicker({
         type="button"
         onClick={() => setOpen((value) => !value)}
         disabled={disabled || busy}
-        className="focus-ring flex max-w-[220px] items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-[10.5px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
+        className="focus-ring flex max-w-[200px] items-center gap-1 rounded-md border border-transparent px-1.5 py-1 text-[10px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
         style={{ color: "var(--muted)" }}
         title={bound ? "This chat runs on an ACP agent" : "Change agent"}
       >
-        <Bot size={12} />
+        <Bot size={11} />
         <span className="truncate font-medium" style={{ color: "var(--fg)" }}>
           {label}
         </span>
@@ -121,7 +121,7 @@ export function AgentPicker({
             starting…
           </span>
         ) : null}
-        <ChevronDown size={12} />
+        <ChevronDown size={10} />
       </button>
       {open ? (
         <div
