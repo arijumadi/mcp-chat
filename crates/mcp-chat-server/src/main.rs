@@ -322,3 +322,117 @@ fn init_logging() {
         .with_ansi(false)
         .try_init();
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use mcp_chat_core::agent::ChatEngine;
+    use mcp_chat_core::db::Db;
+    use mcp_chat_core::mcp::McpManager;
+    use mcp_chat_core::secrets::MemoryStore;
+
+    use crate::api;
+    use crate::state::AppState;
+
+    async fn harness() -> (Arc<AppState>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open_memory().await.unwrap();
+        let secrets: Arc<dyn mcp_chat_core::secrets::SecretStore> =
+            Arc::new(MemoryStore::default());
+        let mcp = Arc::new(McpManager::new(db.clone(), secrets.clone()));
+        let engine = ChatEngine::new(
+            db.clone(),
+            secrets.clone(),
+            mcp.clone(),
+            dir.path().join("tool-output"),
+            dir.path().join("attachments"),
+        );
+        std::fs::create_dir_all(&engine.attachments_dir).unwrap();
+        let state = Arc::new(AppState {
+            engine,
+            db,
+            secrets,
+            mcp,
+            data_dir: dir.path().to_path_buf(),
+            output_dir: dir.path().join("tool-output"),
+            static_dir: dir.path().to_path_buf(),
+            auth: crate::auth::Auth::new("t".into(), false, Vec::new()),
+        });
+        (state, dir)
+    }
+
+    /// A one-pixel PNG, so the type detection path is the real one.
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+    /// Reported: picking an attachment and pressing send failed with
+    /// "invalid type: null, expected a string". The upload returned a list
+    /// while the caller expected a single attachment, so every field was
+    /// undefined and `attachmentIds` became `[null]`.
+    #[tokio::test]
+    async fn an_upload_returns_one_attachment_not_a_list() {
+        let (state, _dir) = harness().await;
+        let value = api::dispatch(
+            &state,
+            "stage_attachment_upload",
+            serde_json::json!({
+                "data": format!("data:image/png;base64,{PNG}"),
+                "name": "pixel.png",
+            }),
+        )
+        .await
+        .expect("upload");
+
+        let object = value
+            .as_object()
+            .expect("the frontend reads `staged.id`, so this must be one object");
+        assert_eq!(
+            object.get("id").and_then(|id| id.as_str()).map(str::len),
+            Some(36),
+            "a missing id becomes null in `attachmentIds`"
+        );
+        assert_eq!(
+            object.get("kind").and_then(|kind| kind.as_str()),
+            Some("image")
+        );
+    }
+
+    /// The id from an upload must be accepted by `send_message`, which is the
+    /// step that actually failed in the report.
+    #[tokio::test]
+    async fn an_uploaded_id_can_be_sent() {
+        let (state, _dir) = harness().await;
+        let conversation = api::dispatch(
+            &state,
+            "create_conversation",
+            serde_json::json!({ "input": {} }),
+        )
+        .await
+        .expect("conversation");
+        let conversation_id = conversation["id"].as_str().unwrap().to_owned();
+
+        let staged = api::dispatch(
+            &state,
+            "stage_attachment_upload",
+            serde_json::json!({
+                "data": format!("data:image/png;base64,{PNG}"),
+                "name": "pixel.png",
+            }),
+        )
+        .await
+        .expect("upload");
+        let id = staged["id"].as_str().expect("id").to_owned();
+
+        api::dispatch(
+            &state,
+            "send_message",
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "text": "here is a picture",
+                "attachmentIds": [id],
+            }),
+        )
+        .await
+        .expect("the attachment id must be accepted by send_message");
+    }
+}
