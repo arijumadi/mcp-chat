@@ -42,7 +42,7 @@ impl AgentProcess {
             });
         }
 
-        let mut child_command = build_command(command, args);
+        let mut child_command = build_command(&resolve_program(command), args);
         child_command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -153,6 +153,66 @@ fn kill_tree(pid: Option<u32>) {
         .status();
 }
 
+/// Find the program when it is not on `PATH`.
+///
+/// A desktop session starts its shell from a login profile, so `pip install
+/// --user`, `npm -g`, and vendor installers all land on `PATH`. A systemd unit
+/// or a container does not: it inherits a minimal `PATH` where `~/.local/bin`
+/// and `~/.cargo/bin` are missing, and an agent that is installed and working
+/// reports "command not found".
+///
+/// Only the user's own bin directories are added, and only as a fallback: an
+/// explicit `PATH` entry always wins. A name that already contains a separator
+/// is left alone so an absolute path from the registry keeps working.
+fn resolve_program(program: &str) -> String {
+    let program = program.trim();
+    if program.is_empty() || program.contains(std::path::MAIN_SEPARATOR) {
+        return program.to_owned();
+    }
+    #[cfg(windows)]
+    {
+        // Windows already searches the current directory and PATHEXT, and its
+        // per-user install location is not these directories.
+        return program.to_owned();
+    }
+    #[cfg(unix)]
+    {
+        if let Some(found) = search_path(program) {
+            return found;
+        }
+        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+            return program.to_owned();
+        };
+        for relative in [".local/bin", ".cargo/bin", ".bun/bin", "bin"] {
+            let candidate = home.join(relative).join(program);
+            if is_executable(&candidate) {
+                return candidate.display().to_string();
+            }
+        }
+        program.to_owned()
+    }
+}
+
+#[cfg(unix)]
+fn search_path(program: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    for entry in std::env::split_paths(&path) {
+        let candidate = entry.join(program);
+        if is_executable(&candidate) {
+            return Some(candidate.display().to_string());
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
 /// Build the platform command, wrapping package runners and `.cmd` shims.
 pub fn build_command(program: &str, args: &[String]) -> Command {
     #[cfg(windows)]
@@ -253,5 +313,58 @@ mod tests {
             started.elapsed() < std::time::Duration::from_secs(20),
             "terminate should not hang"
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod resolve_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A systemd unit has a minimal PATH. A vendor agent installed into
+    /// `~/.local/bin` is then invisible, and the report is "command not found"
+    /// for something that is installed and working.
+    #[test]
+    fn finds_an_agent_in_the_user_bin_directory() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let program = bin.join("fake-acp-agent");
+        std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // SAFETY: this test does not run concurrently with anything that reads
+        // HOME, and it restores the value before returning.
+        let previous_home = std::env::var_os("HOME");
+        let previous_path = std::env::var_os("PATH");
+        unsafe {
+            std::env::set_var("HOME", home.path());
+            // Deliberately without the user bin directory, like systemd.
+            std::env::set_var("PATH", "/usr/bin:/bin");
+        }
+
+        let resolved = resolve_program("fake-acp-agent");
+
+        unsafe {
+            match previous_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match previous_path {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+
+        assert_eq!(
+            resolved,
+            program.display().to_string(),
+            "a fallback must find the agent the unit cannot"
+        );
+    }
+
+    #[test]
+    fn leaves_an_absolute_path_alone() {
+        assert_eq!(resolve_program("/opt/agent/bin/agy"), "/opt/agent/bin/agy");
     }
 }
