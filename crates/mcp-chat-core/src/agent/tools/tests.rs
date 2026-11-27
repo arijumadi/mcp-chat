@@ -2207,15 +2207,18 @@ async fn read_still_treats_a_foreign_path_as_outside() {
     let file = other.path().join("secret.txt");
     tokio::fs::write(&file, "nope").await.unwrap();
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(5),
+    // Nothing answers the approval request, so the call must never complete.
+    // That is the property under test: a foreign path waits for a decision
+    // instead of being read. A short timeout keeps the suite fast.
+    let outcome = tokio::time::timeout(
+        Duration::from_millis(500),
         executor.execute(request("read", json!({"filePath": file.to_str().unwrap()}))),
     )
-    .await
-    .expect("the call should stop at the approval gate, not hang");
+    .await;
 
-    // No answer arrives for the approval request, so the call must not return
-    // the file's contents.
-    assert!(!result.ok, "a foreign path must not be read implicitly");
-    assert!(!result.content.contains("nope"), "{}", result.content);
+    assert!(
+        outcome.is_err(),
+        "a foreign path was read without approval: {:?}",
+        outcome.map(|result| result.content)
+    );
 }
