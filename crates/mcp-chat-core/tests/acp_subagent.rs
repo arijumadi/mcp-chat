@@ -544,3 +544,63 @@ async fn wait_for_state(harness: &Harness, conversation_id: &str) -> (String, St
     }
     panic!("the turn never settled");
 }
+
+/// The model, thinking level and mode come from `session/new`. Binding a chat
+/// used to only write the marker, so the pickers stayed empty until the first
+/// message created the session.
+#[tokio::test]
+async fn binding_a_chat_makes_its_options_available_immediately() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "echo").await;
+
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("mock"))
+        .await
+        .expect("bind");
+
+    let options = harness.engine.agent_config(&harness.parent_id).await;
+    assert!(
+        !options.is_empty(),
+        "the pickers need the agent's options before the first message"
+    );
+    let model = options.iter().find(|option| option.id == "model").unwrap();
+    assert_eq!(model.current_value, "mock-model-a");
+    assert!(options.iter().any(|option| option.id == "mode"));
+}
+
+/// Binding must survive an agent that cannot start: the chat keeps the binding
+/// and the failure shows up on the turn, where the user can see it.
+#[tokio::test]
+async fn binding_a_broken_agent_keeps_the_binding() {
+    let harness = Harness::new().await;
+    let config = AcpAgentConfig {
+        name: "Broken".into(),
+        slug: "broken".into(),
+        command: "jarvis-missing-acp-agent".into(),
+        args_json: "[]".into(),
+        env_json: "{}".into(),
+        permission_policy: "ask".into(),
+        enabled: true,
+    };
+    acp_agents::create(&harness.db.pool, &config).await.unwrap();
+
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("broken"))
+        .await
+        .expect("binding should not fail on a missing binary");
+
+    let conversation = conversations::get(&harness.db.pool, &harness.parent_id)
+        .await
+        .unwrap();
+    assert_eq!(conversation.acp_agent.as_deref(), Some("broken"));
+    assert!(
+        harness
+            .engine
+            .agent_config(&harness.parent_id)
+            .await
+            .is_empty(),
+        "a broken agent exposes no options"
+    );
+}

@@ -57,54 +57,20 @@ pub async fn run_turn(
     spec: TurnSpec<'_>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let args = acp_agents::agent_args(spec.agent)?;
-    let env = acp_agents::agent_env(spec.agent)?;
-    // Two switches, like the built-in tools: the agent's own stored policy and
-    // the per-chat Auto button. Auto is the stronger of the two, so enabling it
-    // now applies here instead of being silently ignored.
+    // The stored policy is only a default; the per-chat Auto switch is read
+    // per request inside the handler, so toggling it mid-session works.
     let stored =
         crate::db::repo::acp_agents::PermissionPolicy::parse(&spec.agent.permission_policy)
             .unwrap_or(crate::db::repo::acp_agents::PermissionPolicy::Ask);
-    let policy = if engine.auto_approve(spec.child_id) {
-        crate::db::repo::acp_agents::PermissionPolicy::Auto
-    } else {
-        stored
-    };
-    let handler = permission_handler(engine.clone(), spec.child_id, &cancel, policy);
-
-    let active = match engine.acp.take(spec.child_id).await {
-        Some(active) => active,
-        None => {
-            // A stored id lets the agent continue the conversation after an
-            // app restart; the client falls back to a fresh session when the
-            // agent no longer knows it.
-            let resume = conversations::get(&engine.db.pool, spec.child_id)
-                .await
-                .ok()
-                .and_then(|conversation| conversation.acp_session_id);
-            let active = engine
-                .acp
-                .open(crate::acp::session::SessionSpec {
-                    local_id: spec.child_id.to_owned(),
-                    command: &spec.agent.command,
-                    args: &args,
-                    env: &env,
-                    cwd: spec.cwd,
-                    resume,
-                    permissions: handler,
-                })
-                .await
-                .map_err(|error| CoreError::Message(error.user_message()))?;
-            conversations::set_acp_session_id(
-                &engine.db.pool,
-                spec.child_id,
-                &active.handle.acp_session_id,
-            )
-            .await
-            .ok();
-            active
-        }
-    };
+    let active = ensure_session(
+        engine.clone(),
+        spec.child_id,
+        spec.agent,
+        spec.cwd,
+        &cancel,
+        stored,
+    )
+    .await?;
 
     // Only blocks the agent advertised are sent; the builder degrades the rest
     // to a visible note rather than provoking a protocol error.
@@ -128,6 +94,58 @@ pub async fn run_turn(
     // would close the pump's send side and leave the session unusable.
     engine.acp.put_events(spec.child_id, events).await;
     Ok(())
+}
+
+/// Open the chat's ACP session if it is not already running.
+///
+/// Called before a turn, and again when a chat is bound to an agent: the model,
+/// thinking level and mode only exist once the agent has answered
+/// `session/new`, so binding without opening left the pickers empty until the
+/// first message arrived.
+pub async fn ensure_session(
+    engine: Arc<ChatEngine>,
+    conversation_id: &str,
+    agent: &crate::models::AcpAgent,
+    cwd: &std::path::Path,
+    cancel: &CancellationToken,
+    policy: crate::db::repo::acp_agents::PermissionPolicy,
+) -> Result<crate::acp::manager::ActiveSession> {
+    if let Some(active) = engine.acp.take(conversation_id).await {
+        return Ok(active);
+    }
+
+    let args = acp_agents::agent_args(agent)?;
+    let env = acp_agents::agent_env(agent)?;
+    let handler = permission_handler(engine.clone(), conversation_id, cancel, policy);
+
+    // A stored id lets the agent continue the conversation after an app
+    // restart; the client falls back to a fresh session when the agent no
+    // longer knows it.
+    let resume = conversations::get(&engine.db.pool, conversation_id)
+        .await
+        .ok()
+        .and_then(|conversation| conversation.acp_session_id);
+    let active = engine
+        .acp
+        .open(crate::acp::session::SessionSpec {
+            local_id: conversation_id.to_owned(),
+            command: &agent.command,
+            args: &args,
+            env: &env,
+            cwd,
+            resume,
+            permissions: handler,
+        })
+        .await
+        .map_err(|error| CoreError::Message(error.user_message()))?;
+    conversations::set_acp_session_id(
+        &engine.db.pool,
+        conversation_id,
+        &active.handle.acp_session_id,
+    )
+    .await
+    .ok();
+    Ok(active)
 }
 
 struct TurnRun<'a> {
@@ -474,7 +492,7 @@ fn permission_handler(
     engine: Arc<ChatEngine>,
     child_id: &str,
     cancel: &CancellationToken,
-    policy: crate::db::repo::acp_agents::PermissionPolicy,
+    stored_policy: crate::db::repo::acp_agents::PermissionPolicy,
 ) -> PermissionHandler {
     let cancel = cancel.clone();
     let child_id = child_id.to_owned();
@@ -483,6 +501,14 @@ fn permission_handler(
         let child_id = child_id.clone();
         let cancel = cancel.clone();
         Box::pin(async move {
+            // Read the switch per request, not once when the session opened:
+            // a session can outlive the toggle, and a binding now opens the
+            // session before the user has touched Auto.
+            let policy = if engine.auto_approve(&child_id) {
+                crate::db::repo::acp_agents::PermissionPolicy::Auto
+            } else {
+                stored_policy
+            };
             if policy_allows(policy, info.kind.as_deref()) {
                 return PermissionDecision::Approve;
             }
