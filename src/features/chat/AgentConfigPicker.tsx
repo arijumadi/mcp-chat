@@ -40,9 +40,9 @@ export function AgentConfigPicker({
     option.currentValue;
 
   return (
-    <div ref={ref} className="flex min-w-0 items-center gap-1 overflow-hidden">
+    <div ref={ref} className="flex min-w-0 flex-wrap items-center gap-1 sm:flex-nowrap">
       {selectable.map((option) => (
-        <div key={option.id} className="relative">
+        <div key={option.id} className="relative min-w-0">
           <button
             type="button"
             onClick={() => setOpen((value) => (value === option.id ? null : option.id))}

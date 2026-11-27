@@ -529,7 +529,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
             title="Enter to send · Shift+Enter for a new line · drop or paste files"
             aria-label="Message"
           />
-          <div className="mt-0.5 flex items-center gap-1 overflow-x-auto px-0.5 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1 px-0.5 sm:flex-nowrap">
             <button
               type="button"
               onClick={() => void chooseFiles()}
@@ -545,7 +545,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
                 <Paperclip size={13} />
               )}
             </button>
-            <div className="flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 sm:flex-nowrap">
               {conversation.acpAgent ? (
                 <AgentConfigPicker conversation={conversation} disabled={active} />
               ) : (
@@ -605,7 +605,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
           that change rarely, and sitting next to the composer buttons they made
           the input look crowded for no benefit while typing.
         */}
-        <div className="mt-1 flex flex-wrap items-center gap-1 px-0.5">
+        <div className="mt-1 flex min-w-0 items-center gap-1 px-0.5">
           <AgentPicker conversation={conversation} disabled={active} />
           <WorkspacePicker conversation={conversation} disabled={active} />
         </div>

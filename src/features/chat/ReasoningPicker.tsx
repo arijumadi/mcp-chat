@@ -43,7 +43,7 @@ export function ReasoningPicker({
   };
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative min-w-0 shrink">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}

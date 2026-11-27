@@ -98,7 +98,7 @@ export function WorkspacePicker({
   const choices = recent.filter((path) => path !== current);
 
   return (
-    <div ref={ref} className="relative min-w-0">
+    <div ref={ref} className="relative min-w-0 shrink">
       <button
         type="button"
         onClick={() => setOpenPicker((value) => !value)}

@@ -59,7 +59,7 @@ export function ModelPicker({
   };
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative min-w-0 shrink">
       <button
         onClick={() => setOpen((value) => !value)}
         disabled={disabled}
