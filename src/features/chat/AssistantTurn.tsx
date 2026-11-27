@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { memo, useId, useState } from "react";
 import { AlertCircle, ChevronDown, Loader2 } from "lucide-react";
 import type { MessageWithParts, Part } from "@/lib/types";
 import { parsePayload, partText } from "@/app/store";
@@ -14,13 +14,22 @@ interface Flattened {
   index: number;
 }
 
-export function AssistantTurn({
-  messages,
-  canRetry,
-}: {
-  messages: MessageWithParts[];
-  canRetry: boolean;
-}) {
+/**
+ * Consecutive assistant messages, rendered as one turn.
+ *
+ * The transcript hands this a freshly built array on every store update, so the
+ * default shallow comparison would never skip a render. Comparing the elements
+ * is what works: the store only replaces the message that actually changed, so
+ * a finished turn keeps its identity while the newest one streams.
+ */
+export const AssistantTurn = memo(
+  function AssistantTurn({
+    messages,
+    canRetry,
+  }: {
+    messages: MessageWithParts[];
+    canRetry: boolean;
+  }) {
   // Activity rows are visible by default. The header only hides a long list.
   const [open, setOpen] = useState(true);
   const listId = useId();
@@ -205,4 +214,11 @@ export function AssistantTurn({
       ) : null}
     </div>
   );
-}
+  },
+  // Shallow array comparison: same length, same message objects in the same
+  // order. The store never mutates a message in place, it replaces it.
+  (prev, next) =>
+    prev.canRetry === next.canRetry &&
+    prev.messages.length === next.messages.length &&
+    prev.messages.every((message, index) => message === next.messages[index]),
+);

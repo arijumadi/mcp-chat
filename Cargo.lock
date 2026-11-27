@@ -3070,6 +3070,7 @@ dependencies = [
  "mcp-chat-core",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3080,7 +3081,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-mock"
-version = "0.11.3"
+version = "0.12.0"
 dependencies = [
  "axum",
  "bytes",

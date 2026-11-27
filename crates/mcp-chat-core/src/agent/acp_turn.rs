@@ -171,8 +171,13 @@ struct TurnRun<'a> {
     events: mpsc::UnboundedReceiver<AcpEvent>,
     message_id: Option<String>,
     text: String,
+    reasoning: String,
     text_part: Option<String>,
     reasoning_part: Option<String>,
+    /// When the accumulated text was last written to SQLite. Writing on every
+    /// chunk costs a synchronous disk write per token; the built-in runner
+    /// already batches at 250ms and this path did not.
+    last_flush: std::time::Instant,
     tools: HashMap<String, String>,
     failure: Option<String>,
     /// The user stopped this turn, so the transcript is incomplete on purpose.
@@ -193,8 +198,10 @@ async fn stream_turn(
         events,
         message_id: None,
         text: String::new(),
+        reasoning: String::new(),
         text_part: None,
         reasoning_part: None,
+        last_flush: std::time::Instant::now(),
         tools: HashMap::new(),
         failure: None,
         cancelled: false,
@@ -337,7 +344,20 @@ impl TurnRun<'_> {
             delta_type: "text".into(),
             text: chunk.to_owned(),
         });
-        let _ = messages::update_part_text(&self.engine.db.pool, &part_id, &self.text).await;
+        self.flush_if_due(&part_id).await;
+    }
+
+    /// Persist the accumulated text at most every 250ms.
+    ///
+    /// The stream does not wait for this: deltas already went out on the event
+    /// bus. This only decides how often the transcript is durable, which is what
+    /// a reload or a second client reads.
+    async fn flush_if_due(&mut self, part_id: &str) {
+        if self.last_flush.elapsed() < std::time::Duration::from_millis(250) {
+            return;
+        }
+        self.last_flush = std::time::Instant::now();
+        let _ = messages::update_part_text(&self.engine.db.pool, part_id, &self.text).await;
     }
 
     async fn append_reasoning(&mut self, chunk: &str) {
@@ -362,6 +382,7 @@ impl TurnRun<'_> {
         let Some(part_id) = self.reasoning_part.clone() else {
             return;
         };
+        self.reasoning.push_str(chunk);
         let _ = self.engine.events.send(CoreEvent::Delta {
             conversation_id: self.child_id.to_owned(),
             message_id,
@@ -369,7 +390,11 @@ impl TurnRun<'_> {
             delta_type: "reasoning".into(),
             text: chunk.to_owned(),
         });
-        let _ = messages::update_part_text(&self.engine.db.pool, &part_id, chunk).await;
+        if self.last_flush.elapsed() >= std::time::Duration::from_millis(250) {
+            self.last_flush = std::time::Instant::now();
+            let _ =
+                messages::update_part_text(&self.engine.db.pool, &part_id, &self.reasoning).await;
+        }
     }
 
     async fn upsert_tool(
@@ -454,6 +479,20 @@ impl TurnRun<'_> {
 
     /// Settle the message and its status.
     async fn finish(&mut self) {
+        // Flush what the 250ms batch might still be holding, so the last words
+        // of a turn survive a reload.
+        if let Some(part_id) = self.text_part.clone() {
+            if !self.text.is_empty() {
+                let _ =
+                    messages::update_part_text(&self.engine.db.pool, &part_id, &self.text).await;
+            }
+        }
+        if let Some(part_id) = self.reasoning_part.clone() {
+            if !self.reasoning.is_empty() {
+                let _ = messages::update_part_text(&self.engine.db.pool, &part_id, &self.reasoning)
+                    .await;
+            }
+        }
         // A failure that happens before the agent emits anything leaves no
         // assistant message behind. Without this the chat keeps only the user
         // message and the run looks like it silently did nothing — which is

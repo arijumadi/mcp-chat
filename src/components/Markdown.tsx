@@ -1,5 +1,6 @@
 import {
   isValidElement,
+  memo,
   useRef,
   useState,
   type ReactNode,
@@ -95,7 +96,13 @@ function safeUrl(url: string): string {
   return "";
 }
 
-export function Markdown({ text }: { text: string }) {
+/**
+ * Markdown is expensive: remark + rehype + highlight run over the whole block
+ * on every render. Streaming re-renders the transcript on each token, so without
+ * this memo every finished message in the history was re-parsed many times a
+ * second. `text` is a string, so the default shallow comparison is enough.
+ */
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="md">
       <ReactMarkdown
@@ -109,4 +116,4 @@ export function Markdown({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});
