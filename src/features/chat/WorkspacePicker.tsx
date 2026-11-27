@@ -20,6 +20,7 @@ export function WorkspacePicker({
   const setWorkspace = useApp((state) => state.setConversationWorkspace);
   const toast = useApp((state) => state.toast);
   const [openPicker, setOpenPicker] = useState(false);
+  const [manualPath, setManualPath] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -68,9 +69,18 @@ export function WorkspacePicker({
     }
   };
 
+  const browser = !window.__MCP_CHAT_MOCK__ && !("__TAURI_INTERNALS__" in window);
+
   const choose = async () => {
     if (window.__MCP_CHAT_MOCK__) {
       await apply(appInfo?.workspaceDir ?? "/home/you/project");
+      return;
+    }
+    if (browser) {
+      // No native folder dialog, and the browser cannot see the server's
+      // filesystem anyway. The path has to be typed, and the server validates
+      // it before saving.
+      await apply(manualPath);
       return;
     }
     try {
@@ -93,15 +103,15 @@ export function WorkspacePicker({
         type="button"
         onClick={() => setOpenPicker((value) => !value)}
         disabled={disabled}
-        className="focus-ring flex max-w-[170px] items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-[10.5px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
+        className="focus-ring flex max-w-[160px] items-center gap-1 rounded-md border border-transparent px-1.5 py-1 text-[10px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
         style={{ color: "var(--muted)" }}
         title={current || "Choose workspace"}
       >
-        <Folder size={11} className="shrink-0" />
+        <Folder size={10} className="shrink-0" />
         <span className="truncate" style={{ color: "var(--fg)" }}>
           {current ? baseName(current) : "Workspace"}
         </span>
-        <ChevronDown size={10} className="shrink-0" />
+        <ChevronDown size={9} className="shrink-0" />
       </button>
 
       {openPicker ? (
@@ -148,6 +158,36 @@ export function WorkspacePicker({
               {error}
             </div>
           ) : null}
+          {browser ? (
+            <div className="mt-2.5 grid gap-1.5">
+              <label
+                className="text-[10.5px] font-medium"
+                style={{ color: "var(--muted)" }}
+                htmlFor="workspace-path"
+              >
+                Folder on the server
+              </label>
+              <input
+                id="workspace-path"
+                value={manualPath}
+                onChange={(event) => setManualPath(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void apply(manualPath);
+                  }
+                }}
+                placeholder={appInfo?.workspaceDir ?? "/srv/project"}
+                spellCheck={false}
+                className="focus-ring w-full rounded-lg border px-2 py-1.5 font-mono text-[11.5px] outline-none"
+                style={{
+                  background: "var(--panel-2)",
+                  borderColor: "var(--border)",
+                  color: "var(--fg)",
+                }}
+              />
+            </div>
+          ) : null}
           <div className="mt-3 flex flex-wrap items-center gap-1">
             <button
               type="button"
@@ -157,7 +197,7 @@ export function WorkspacePicker({
               style={{ color: "var(--accent)" }}
             >
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Folder size={12} />}
-              Choose folder…
+              {browser ? "Use this path" : "Choose folder…"}
             </button>
             {appInfo?.workspaceDir && appInfo.workspaceDir !== current ? (
               <button

@@ -59,6 +59,30 @@ impl Drop for TurnSlot {
     }
 }
 
+/// How much of a conversation is carried across an agent switch.
+///
+/// A model context is tens of thousands of tokens and the transcript is only
+/// the seed for a new agent, not the whole history: it can re-read files with
+/// its own tools. Roughly six thousand tokens keeps the shape of the
+/// conversation without crowding out the work.
+/// How much conversation is carried across an agent switch, in tokens.
+///
+/// Unlike the built-in tools, an ACP agent does not publish its context window:
+/// the protocol has no field for it, and the agent's model is its own business.
+/// A share of the window therefore cannot be computed. 200k tokens is the
+/// default because it covers a long working session whole, and a transcript
+/// beyond it is summarised rather than truncated.
+///
+/// 200k is a budget, not a promise that the agent can take it: an agent on a
+/// 128k model would reject a prompt that size. That is why the head is
+/// summarised instead of sent raw — a summary is a few thousand tokens whatever
+/// the conversation length, so the prompt stays small even when the history was
+/// enormous.
+const HANDOFF_DEFAULT_TOKENS: i64 = 200_000;
+
+/// Rough characters per token, matching the estimator elsewhere.
+const CHARS_PER_TOKEN: usize = 4;
+
 pub struct ChatEngine {
     pub db: Db,
     pub secrets: Arc<dyn SecretStore>,
@@ -358,10 +382,7 @@ impl ChatEngine {
             // Unbinding mid-conversation keeps the live session until it ends;
             // the next turn simply goes back to the LLM.
             conversations::set_acp(&self.db.pool, conversation_id, "", None).await?;
-            if let Some(session) = self.acp.get(conversation_id).await {
-                let _ = session.close();
-            }
-            self.acp.close(conversation_id).await.ok();
+            self.close_acp_session(conversation_id).await;
             let _ = self.events.send(CoreEvent::ConversationUpdated {
                 conversation_id: conversation_id.to_owned(),
             });
@@ -379,6 +400,12 @@ impl ChatEngine {
                 "The ACP agent {slug:?} is disabled."
             )));
         }
+        // Switching agents replaces the session, so close the old one first.
+        // `ensure_session` keys on the conversation id alone, so a stale entry
+        // would be reused and the new agent's process would never start — and
+        // the manager's four-session cap would be reached by leaked processes.
+        self.close_acp_session(conversation_id).await;
+
         conversations::set_acp(&self.db.pool, conversation_id, &agent.slug, None).await?;
 
         // Tell the UI immediately. Opening the agent takes seconds — a real
@@ -389,12 +416,28 @@ impl ChatEngine {
             conversation_id: conversation_id.to_owned(),
         });
 
-        // Open the session in the background. The options still arrive without
-        // the first message: the pump announces them, and a second
-        // `ConversationUpdated` makes the pickers ask again.
+        self.open_acp_session_in_background(conversation_id.to_owned(), agent.id.clone())
+            .await;
+
+        Ok(())
+    }
+
+    /// Open the bound agent's session without blocking the caller.
+    ///
+    /// Used when a chat is bound to an agent and again when its workspace
+    /// moves, because a session's working directory is fixed at creation. The
+    /// pickers load on the `ConversationUpdated` this sends at the end, which
+    /// is why the options appear without sending a message.
+    pub async fn open_acp_session_in_background(
+        self: &Arc<Self>,
+        conversation_id: String,
+        agent_id: String,
+    ) {
         let engine = self.clone();
-        let conversation_id = conversation_id.to_owned();
         tokio::spawn(async move {
+            let Ok(agent) = acp_agents::get(&engine.db.pool, &agent_id).await else {
+                return;
+            };
             let workspace = match crate::agent::tools::workspace_root_for_conversation(
                 &engine.db.pool,
                 &conversation_id,
@@ -426,8 +469,6 @@ impl ChatEngine {
             {
                 Ok(active) => {
                     engine.acp.put_events(&conversation_id, active.events).await;
-                    // The pickers load on this event; without it they would
-                    // wait for the first turn, which is what felt broken.
                     let _ = engine.events.send(CoreEvent::ConversationUpdated {
                         conversation_id: conversation_id.clone(),
                     });
@@ -436,13 +477,109 @@ impl ChatEngine {
                     tracing::warn!(
                         conversation = %conversation_id,
                         error = %error.user_message(),
-                        "could not open the ACP session while binding"
+                        "could not open the ACP session"
                     );
                 }
             }
         });
+    }
 
-        Ok(())
+    /// Re-open the session after something moved its working directory.
+    ///
+    /// A session's cwd is fixed at `session/new` and the protocol cannot change
+    /// it, so a workspace change closes the session. Reopening keeps the
+    /// pickers populated; a chat that is not bound to an agent does nothing.
+    pub async fn reopen_acp_session_if_bound(self: &Arc<Self>, conversation_id: &str) {
+        let Ok(conversation) = conversations::get(&self.db.pool, conversation_id).await else {
+            return;
+        };
+        let Some(slug) = conversation
+            .acp_agent
+            .filter(|slug| !slug.trim().is_empty())
+        else {
+            return;
+        };
+        let Ok(Some(agent)) = acp_agents::get_by_slug(&self.db.pool, &slug).await else {
+            return;
+        };
+        self.open_acp_session_in_background(conversation_id.to_owned(), agent.id)
+            .await;
+    }
+
+    /// Summarise the head of a conversation so a large handoff still fits.
+    ///
+    /// Switching agents carries the transcript, but an agent's window is
+    /// unknown and 200k tokens is a lot to assume. Rather than truncating the
+    /// oldest half away — which loses the objective and the decisions — the
+    /// same summariser `compact` uses is asked for a dense Markdown handoff.
+    /// `None` means the summary could not be produced, and the caller falls back
+    /// to the plain transcript.
+    pub async fn summarize_for_handoff(
+        self: &Arc<Self>,
+        conversation_id: &str,
+        older: &[crate::models::MessageWithParts],
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Option<String> {
+        if older.is_empty() {
+            return None;
+        }
+        let conversation = conversations::get(&self.db.pool, conversation_id)
+            .await
+            .ok()?;
+        let (provider, model, api_key, _context_window, max_tokens) =
+            self.resolve(&conversation).await.ok()?;
+        let kind = crate::models::ProviderKind::parse(&provider.kind)?;
+        let (mut messages, _) = crate::agent::context::build_messages(older).await;
+        if messages.is_empty() {
+            return None;
+        }
+        messages.push(crate::llm::ChatMessage::text(
+            crate::llm::ChatRole::User,
+            crate::agent::runner::COMPACTION_INSTRUCTION,
+        ));
+        let request = crate::llm::ChatRequest {
+            kind,
+            base_url: provider.base_url.clone(),
+            api_key,
+            model,
+            system: None,
+            messages,
+            tools: Vec::new(),
+            tool_choice: crate::llm::ToolChoice::None,
+            max_tokens: max_tokens.min(4096),
+            temperature: None,
+            reasoning_effort: None,
+        };
+        match crate::llm::complete(kind, request, cancel.clone()).await {
+            Ok(summary) if !summary.trim().is_empty() => Some(summary),
+            Ok(_) => {
+                tracing::warn!(
+                    conversation = %conversation_id,
+                    "the handoff summariser returned an empty result"
+                );
+                None
+            }
+            Err(error) => {
+                tracing::warn!(
+                    conversation = %conversation_id,
+                    error = %error.user_message(),
+                    "could not summarise the head of the conversation for a handoff"
+                );
+                None
+            }
+        }
+    }
+
+    /// Drop the live session for a conversation, if any.
+    ///
+    /// `AcpManager::close` also removes the registry entry, which is what makes
+    /// the four-session cap meaningful: without this, every switch, workspace
+    /// change and deletion leaves a process behind until the cap is hit.
+    pub async fn close_acp_session(&self, conversation_id: &str) {
+        if let Some(session) = self.acp.get(conversation_id).await {
+            let _ = session.close();
+        }
+        self.acp.close(conversation_id).await.ok();
     }
 
     /// Launch a child backed by an external ACP agent.
@@ -592,6 +729,64 @@ impl ChatEngine {
         let workspace =
             crate::agent::tools::workspace_root_for_conversation(&self.db.pool, conversation_id)
                 .await?;
+        // Everything before this message is the context a freshly opened
+        // session would otherwise miss. `history` already ends with the message
+        // being sent, so drop it to avoid repeating the prompt.
+        let earlier = history
+            .split_last()
+            .map(|(_, earlier)| earlier)
+            .filter(|earlier| !earlier.is_empty());
+        let carried = match earlier {
+            Some(earlier) => {
+                let tokens =
+                    settings::get_i64(&self.db.pool, "acp.handoff_tokens", HANDOFF_DEFAULT_TOKENS)
+                        .await
+                        .unwrap_or(HANDOFF_DEFAULT_TOKENS)
+                        .max(1_000);
+                let budget = (tokens as usize).saturating_mul(CHARS_PER_TOKEN);
+                let (older_end, _) = crate::agent::context::handoff_split(earlier, budget);
+                if older_end == 0 {
+                    // It all fits; send it verbatim.
+                    crate::agent::context::transcript_for_handoff(earlier, budget)
+                } else {
+                    // Too long to send raw. Summarise the head with the same
+                    // instruction compaction uses, so what survives is the
+                    // objective and the decisions rather than a truncated
+                    // fragment. The tail stays verbatim.
+                    let _ = self.events.send(CoreEvent::Status {
+                        conversation_id: conversation_id.to_owned(),
+                        status: crate::events::TurnStatus::Compacting,
+                        message: Some("Summarising the conversation for the new agent…".into()),
+                    });
+                    let summary = self
+                        .summarize_for_handoff(conversation_id, &earlier[..older_end], &cancel)
+                        .await;
+                    let _ = self.events.send(CoreEvent::Status {
+                        conversation_id: conversation_id.to_owned(),
+                        status: crate::events::TurnStatus::Thinking,
+                        message: None,
+                    });
+                    let tail = crate::agent::context::transcript_for_handoff(
+                        &earlier[older_end..],
+                        budget,
+                    );
+                    match summary {
+                        Some(summary) => {
+                            format!("[summary of the older conversation]\n{summary}\n\n{tail}")
+                        }
+                        // Summarising failed — no provider, no key, a network
+                        // error. The recent tail still helps, but it must say it
+                        // is only part of the story, or the new agent will assume
+                        // the conversation began there.
+                        None => format!(
+                            "[The earlier part of this conversation could not be summarised, \
+                             so only the most recent messages follow.]\n\n{tail}"
+                        ),
+                    }
+                }
+            }
+            None => String::new(),
+        };
         acp_turn::run_turn(
             self.clone(),
             acp_turn::TurnSpec {
@@ -601,6 +796,7 @@ impl ChatEngine {
                 contexts,
                 agent: &agent,
                 cwd: &workspace,
+                handoff: &carried,
             },
             cancel,
         )

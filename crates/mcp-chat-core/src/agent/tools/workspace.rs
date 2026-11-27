@@ -156,14 +156,40 @@ pub(crate) fn resolve_in_workspace(workspace: &Path, raw: &str) -> Result<PathBu
     Ok(normalized)
 }
 
-/// Read-only tools may leave the workspace in auto mode or after an explicit
-/// per-call approval. Writes and shell commands still use the workspace-confined
-/// resolver.
-pub(crate) fn resolve_read_path(
+/// Read a path that is inside the workspace or inside `attachments`.
+///
+/// `attachments` holds files the user attached, which the app copied there. The
+/// model is told that path, so it must be readable without the extra approval
+/// that a genuinely external path needs.
+pub(crate) fn resolve_read_path_with(
     workspace: &Path,
+    attachments: Option<&Path>,
     raw: &str,
     allow_outside: bool,
 ) -> Result<PathBuf> {
+    if raw.trim().is_empty() {
+        return Err(CoreError::invalid("filePath is required"));
+    }
+    if let Some(root) = attachments {
+        let input = PathBuf::from(raw);
+        if input.is_absolute() {
+            // Canonicalize both sides before comparing. On Windows a temp
+            // directory comes back as `\\?\C:\...` from one API and bare
+            // `C:\...` from another, and a prefix test across the two forms is
+            // always false. Only a canonical path can be trusted to check a
+            // symlink escape anyway.
+            let root = root.canonicalize().map(|path| simplify_path(&path)).ok();
+            let normalized = input.canonicalize().map(|path| simplify_path(&path)).ok();
+            if let (Some(root), Some(normalized)) = (root, normalized) {
+                if !path_is_within(&root, &normalized) {
+                    return Err(CoreError::invalid(
+                        "Path resolves outside the attachments folder.",
+                    ));
+                }
+                return Ok(normalized);
+            }
+        }
+    }
     if !allow_outside {
         return resolve_in_workspace(workspace, raw);
     }
@@ -183,9 +209,32 @@ pub(crate) fn resolve_read_path(
 }
 
 /// True when the target is outside the workspace, including symlink escapes.
+///
+/// A path inside `attachments` counts as inside: attachments are copied there
+/// by the app itself, and the model has to be able to open what the user sent
+/// rather than guessing a filename in the workspace.
 pub(crate) fn path_is_outside(workspace: &Path, raw: &str) -> bool {
+    path_is_outside_of(workspace, None, raw)
+}
+
+/// Same as [`path_is_outside`], but with an extra readable root.
+pub(crate) fn path_is_outside_of(workspace: &Path, attachments: Option<&Path>, raw: &str) -> bool {
     if raw.trim().is_empty() {
         return false;
+    }
+    if let Some(attachments) = attachments {
+        // Both sides canonicalized: Windows mixes `\\?\C:\...` and `C:\...`
+        // between APIs, so a raw prefix test is unreliable.
+        let candidate = Path::new(raw);
+        if candidate.is_absolute() {
+            let root = attachments.canonicalize().ok();
+            let candidate = candidate.canonicalize().ok();
+            if let (Some(root), Some(candidate)) = (root, candidate) {
+                if path_is_within(&simplify_path(&root), &simplify_path(&candidate)) {
+                    return false;
+                }
+            }
+        }
     }
     let input = PathBuf::from(raw);
     let joined = if input.is_absolute() {
@@ -194,13 +243,17 @@ pub(crate) fn path_is_outside(workspace: &Path, raw: &str) -> bool {
         workspace.join(input)
     };
     let normalized = simplify_path(&normalize_lexically(&joined));
-    if !path_is_within(workspace, &normalized) {
+    let inside = |path: &Path| {
+        path_is_within(workspace, path)
+            || attachments.is_some_and(|root| path_is_within(root, path))
+    };
+    if !inside(&normalized) {
         return true;
     }
     if normalized.exists() {
         return normalized
             .canonicalize()
-            .map(|path| !path_is_within(workspace, &path))
+            .map(|path| !inside(&path))
             .unwrap_or(true);
     }
     let mut ancestor = normalized.parent();
@@ -208,7 +261,7 @@ pub(crate) fn path_is_outside(workspace: &Path, raw: &str) -> bool {
         if path.exists() {
             return path
                 .canonicalize()
-                .map(|path| !path_is_within(workspace, &path))
+                .map(|path| !inside(&path))
                 .unwrap_or(true);
         }
         ancestor = path.parent();

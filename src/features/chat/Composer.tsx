@@ -129,9 +129,20 @@ export function Composer({ conversation }: { conversation: Conversation }) {
       const onDrop = (event: DragEvent) => {
         if (!hasFiles(event)) return;
         event.preventDefault();
-        useApp
-          .getState()
-          .toast("Drag and drop is available in the desktop app.", "info");
+        if (window.__MCP_CHAT_MOCK__) {
+          useApp
+            .getState()
+            .toast("Drag and drop is available in the desktop app.", "info");
+          return;
+        }
+        // Server mode: the browser owns the files, so upload them instead of
+        // pretending we can read a path.
+        const files = Array.from(event.dataTransfer?.files ?? []);
+        if (files.length === 0) return;
+        void (async () => {
+          const stageFile = useApp.getState().stageFile;
+          for (const file of files) await stageFile(file);
+        })();
       };
       window.addEventListener("dragover", onDragOver);
       window.addEventListener("drop", onDrop);
@@ -237,6 +248,23 @@ export function Composer({ conversation }: { conversation: Conversation }) {
         .toast("The native file picker is unavailable in the browser demo.", "info");
       return;
     }
+    if (!("__TAURI_INTERNALS__" in window)) {
+      // No native dialog in a browser, but a plain input works and the file is
+      // uploaded through the same staging path.
+      const input = document.createElement("input");
+      input.type = "file";
+      input.multiple = true;
+      input.onchange = () => {
+        const files = Array.from(input.files ?? []);
+        if (files.length === 0) return;
+        void (async () => {
+          const stageFile = useApp.getState().stageFile;
+          for (const file of files) await stageFile(file);
+        })();
+      };
+      input.click();
+      return;
+    }
     setAttaching(true);
     try {
       const selected = await open({
@@ -329,7 +357,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
         ) : null}
         <div
           className={cn(
-            "rounded-2xl border p-2 transition",
+            "rounded-xl border p-1.5 transition",
             active && "opacity-95",
           )}
           style={{
@@ -496,37 +524,35 @@ export function Composer({ conversation }: { conversation: Conversation }) {
                   ? "Message the agent, or type / for its commands…"
                   : "Message the model…"
             }
-            className="max-h-[240px] min-h-[38px] w-full resize-none bg-transparent px-2 py-2 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:cursor-not-allowed"
-            style={{ fontSize: "var(--chat-fs)" }}
+            className="max-h-[200px] min-h-[34px] w-full resize-none bg-transparent px-1.5 py-1.5 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:cursor-not-allowed"
+            style={{ fontSize: "calc(var(--chat-fs) - 1px)" }}
+            title="Enter to send · Shift+Enter for a new line · drop or paste files"
             aria-label="Message"
           />
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 px-1">
+          <div className="mt-0.5 flex flex-wrap items-center gap-1 px-0.5">
             <button
               type="button"
               onClick={() => void chooseFiles()}
               disabled={active || disabled || attaching}
-              className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="focus-ring flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-40"
               style={{ color: "var(--muted)" }}
               title="Attach files or images — drop or paste them here"
               aria-label="Attach files or images"
             >
               {attaching ? (
-                <Loader2 size={14} className="animate-spin" />
+                <Loader2 size={13} className="animate-spin" />
               ) : (
-                <Paperclip size={14} />
+                <Paperclip size={13} />
               )}
             </button>
-            <AgentPicker conversation={conversation} disabled={active} />
             {conversation.acpAgent ? (
               <AgentConfigPicker conversation={conversation} disabled={active} />
-            ) : null}
-            {conversation.acpAgent ? null : (
+            ) : (
               <>
                 <ModelPicker conversation={conversation} disabled={active} />
                 <ReasoningPicker conversation={conversation} disabled={active} />
               </>
             )}
-            <WorkspacePicker conversation={conversation} disabled={active} />
             <AutoApproveButton />
             <div className="ml-auto flex items-center gap-2">
               {active ? (
@@ -535,51 +561,60 @@ export function Composer({ conversation }: { conversation: Conversation }) {
                     <button
                       onClick={submit}
                       disabled={!canSteer}
-                      className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="focus-ring flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
                       style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
                       title="Steer: stop the current turn and send this message"
                       aria-label="Steer message"
                     >
                       {steering ? (
-                        <Loader2 size={15} className="animate-spin" />
+                        <Loader2 size={13} className="animate-spin" />
                       ) : (
-                        <ArrowUp size={16} strokeWidth={2.2} />
+                        <ArrowUp size={14} strokeWidth={2.2} />
                       )}
                     </button>
                   ) : null}
                   <button
                     onClick={() => void stop()}
-                    className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition hover:brightness-95"
+                    className="focus-ring flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition hover:brightness-95"
                     style={{ background: "var(--fg)", color: "var(--bg)" }}
                     title="Stop generating (Esc)"
                     aria-label="Stop generating"
                   >
-                    <Square size={12} fill="currentColor" />
+                    <Square size={10} fill="currentColor" />
                   </button>
                 </>
               ) : (
                 <button
                   onClick={submit}
                   disabled={!canSend}
-                  className="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-30"
+                  className="focus-ring flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-30"
                   style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
                   title="Send (Enter)"
                   aria-label="Send message"
                 >
-                  <ArrowUp size={16} strokeWidth={2.2} />
+                  <ArrowUp size={14} strokeWidth={2.2} />
                 </button>
               )}
             </div>
           </div>
         </div>
+        {/*
+          Agent and workspace moved out of the box. Both are per-chat settings
+          that change rarely, and sitting next to the composer buttons they made
+          the input look crowded for no benefit while typing.
+        */}
+        <div className="mt-1 flex flex-wrap items-center gap-1 px-0.5">
+          <AgentPicker conversation={conversation} disabled={active} />
+          <WorkspacePicker conversation={conversation} disabled={active} />
+        </div>
         <div
-          className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 text-[10.5px]"
+          className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 text-[10px]"
           style={{ color: "var(--faint)" }}
         >
           <span>
             {steering
               ? "Steering… stopping the current turn"
-              : "Enter to send · Shift+Enter newline · drop or paste files"}
+              : "Enter to send · Shift+Enter newline"}
           </span>
           <span>
             {active && step

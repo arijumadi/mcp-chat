@@ -30,7 +30,7 @@ use crate::mcp::tools::ToolRegistry;
 use crate::models::{PartPayload, ProviderKind};
 use crate::{CoreError, Result, now_ms};
 
-const COMPACTION_INSTRUCTION: &str = r#"Compaction task: create a handoff summary of the older conversation above. The newest messages are retained verbatim and are not part of this request.
+pub(crate) const COMPACTION_INSTRUCTION: &str = r#"Compaction task: create a handoff summary of the older conversation above. The newest messages are retained verbatim and are not part of this request.
 
 Return only Markdown with exactly these sections. If a section has no content, write "(none)".
 
@@ -256,6 +256,14 @@ async fn drive(
         max_tokens,
         system,
     };
+    // One command must not be able to fill the window, but the right share
+    // depends on the model. Resolved here, where the window is known, and
+    // handed to every tool call this turn.
+    let output_scale = settings::get_i64(&engine.db.pool, "tools.output_scale", 100)
+        .await
+        .unwrap_or(100);
+    let output_limits =
+        crate::agent::tools::OutputLimits::for_context(resolved.context_window, output_scale);
 
     let (registry, defaults, tool_defs, active_server_slugs, tool_mode) =
         load_tools(&engine, &conversation).await;
@@ -407,6 +415,7 @@ async fn drive(
             tools_disabled,
             estimate as i64,
             resolved.context_window,
+            output_limits,
             cancel.clone(),
         )
         .await;
@@ -735,6 +744,7 @@ async fn run_stream(
     tools_disabled: bool,
     prompt_tokens: i64,
     context_window: i64,
+    output_limits: crate::agent::tools::OutputLimits,
     cancel: CancellationToken,
 ) -> StreamRun {
     let mut result = StreamRun {
@@ -897,6 +907,7 @@ async fn run_stream(
                             active_server_slugs,
                             tools_disabled,
                             cancel.clone(),
+                            output_limits,
                             call,
                             &mut handles,
                         )
@@ -1005,6 +1016,7 @@ async fn run_stream(
                     active_server_slugs,
                     tools_disabled,
                     cancel.clone(),
+                    output_limits,
                     call,
                     &mut handles,
                 )
@@ -1166,6 +1178,7 @@ async fn dispatch_call(
     active_server_slugs: &[String],
     tools_disabled: bool,
     cancel: CancellationToken,
+    output_limits: crate::agent::tools::OutputLimits,
     call: &mut CallState,
     handles: &mut Vec<(usize, JoinHandle<crate::agent::tools::ToolExecResult>)>,
 ) -> Result<()> {
@@ -1260,6 +1273,7 @@ async fn dispatch_call(
         disabled: tools_disabled,
         cancel,
         active_server_slugs: active_server_slugs.to_vec(),
+        output_limits,
     };
     let executor = engine.executor.clone();
     let handle = tokio::spawn(async move { executor.execute(request).await });
@@ -1347,6 +1361,9 @@ async fn settle_call_error(
         disabled: false,
         cancel: CancellationToken::new(),
         active_server_slugs: active_server_slugs.to_vec(),
+        // Never executed: this request exists only to carry the error text into
+        // the transcript, so the limit is irrelevant.
+        output_limits: crate::agent::tools::OutputLimits::default(),
     };
     call.dispatched = true;
     let state = if message.contains("interrupted") {

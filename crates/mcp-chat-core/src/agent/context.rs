@@ -233,18 +233,41 @@ pub async fn build_messages(history: &[MessageWithParts]) -> (Vec<ChatMessage>, 
                             .get("truncated")
                             .and_then(|value| value.as_bool())
                             .unwrap_or(false);
-                        blocks.push(ContentBlock::Text(format!(
-                            "[Attached file: {name} ({mime}){}]\n{content}\n[/Attached file]",
-                            if truncated { ", truncated" } else { "" }
-                        )));
+                        // The path matters even when the text is inlined: it
+                        // lets the model re-read ranges, or the original file,
+                        // instead of guessing names in the workspace.
+                        let path = payload.get("path").and_then(|value| value.as_str());
+                        blocks.push(ContentBlock::Text(match path {
+                            Some(path) => format!(
+                                "[Attached file: {name} ({mime}){}\nStored at: {path}\n{content}\n[/Attached file]",
+                                if truncated { ", truncated" } else { "" }
+                            ),
+                            None => format!(
+                                "[Attached file: {name} ({mime}){}]\n{content}\n[/Attached file]",
+                                if truncated { ", truncated" } else { "" }
+                            ),
+                        }));
                     } else {
                         let size = payload
                             .get("size")
                             .and_then(|value| value.as_i64())
                             .unwrap_or(0);
-                        blocks.push(ContentBlock::Text(format!(
-                            "[Attached binary file: {name} ({mime}, {size} bytes). Its binary content is not included in this message.]"
-                        )));
+                        // Without the path a binary attachment is only a name
+                        // and a size, and the model reasonably concludes the
+                        // file is missing. It is on disk; say where.
+                        match payload.get("path").and_then(|value| value.as_str()) {
+                            Some(path) => blocks.push(ContentBlock::Text(format!(
+                                "[Attached file: {name} ({mime}, {size} bytes). Its content is not \
+                                 inlined because it is binary. The file exists at: {path}\nThat \
+                                 path is readable. `read` only handles text, so use `bash` (for \
+                                 example `unzip -l` for an Office file, or a Python library) to \
+                                 inspect it.]"
+                            ))),
+                            None => blocks.push(ContentBlock::Text(format!(
+                                "[Attached binary file: {name} ({mime}, {size} bytes). Its binary \
+                                 content is not included in this message.]"
+                            ))),
+                        }
                     }
                 }
                 messages.push(ChatMessage {
@@ -446,6 +469,181 @@ pub fn estimate_tokens(messages: &[ChatMessage], tools: &[ToolDef], system: Opti
                 .unwrap_or(0);
     }
     (chars / 4).max(1)
+}
+
+/// A compact transcript to carry a chat across an agent switch.
+///
+/// Two ACP agents cannot share a session: the session id belongs to one agent,
+/// and its history lives inside that agent's own store. Switching therefore
+/// starts a fresh session, and without this the new agent would answer as if the
+/// conversation had just begun.
+///
+/// The transcript is built from parts Jarvis already stores, so no model call
+/// is involved and switching stays instant and free. Tool output is trimmed hard
+/// because the new agent can re-read files itself; what it needs is what was
+/// asked, what was decided, and what changed.
+pub fn transcript_for_handoff(history: &[MessageWithParts], limit: usize) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for message in history {
+        // Synthetic rows and tool transcript rows are attachment points for the
+        // provider, not part of the conversation a person would recognise.
+        if message.message.status == "synthetic" || message.message.role == "tool" {
+            continue;
+        }
+        let mut text = String::new();
+        for part in &message.parts {
+            let payload = part.payload();
+            match part.kind.as_str() {
+                "text" => {
+                    if let Some(value) = payload.get("text").and_then(|v| v.as_str()) {
+                        if !text.is_empty() {
+                            text.push('\n');
+                        }
+                        text.push_str(value);
+                    }
+                }
+                "tool_call" => {
+                    let name = payload
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("tool");
+                    let arguments = payload.get("args").cloned().unwrap_or_default();
+                    let arguments =
+                        truncate_chars(&serde_json::to_string(&arguments).unwrap_or_default(), 160)
+                            .0;
+                    let state = payload.get("state").and_then(|v| v.as_str()).unwrap_or("");
+                    text.push_str(&format!("\n[tool {name} {state} {arguments}]"));
+                }
+                "summary" => {
+                    if let Some(value) = payload.get("text").and_then(|v| v.as_str()) {
+                        text.push_str(&format!("\n[earlier summary] {value}"));
+                    }
+                }
+                "context" => {
+                    let path = payload.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    text.push_str(&format!("\n[file context {path}]"));
+                }
+                "attachment" => {
+                    let name = payload
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("file");
+                    let path = payload.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    text.push_str(&format!("\n[attached {name} at {path}]"));
+                }
+                _ => {}
+            }
+        }
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let role = match message.message.role.as_str() {
+            "assistant" => "Assistant",
+            "system" => "System",
+            _ => "User",
+        };
+        lines.push(format!("{role}: {text}"));
+    }
+    // Keep the end of the conversation: the most recent decisions are what the
+    // next agent needs, and the start is usually a greeting. `truncate_chars`
+    // cuts from the front, which is the opposite of what a handoff wants, so
+    // drop whole messages from the top until the rest fits.
+    let mut kept: std::collections::VecDeque<String> = lines.into();
+    let mut total: usize = kept.iter().map(|line| line.chars().count() + 2).sum();
+    while total > limit && kept.len() > 1 {
+        if let Some(dropped) = kept.pop_front() {
+            total = total.saturating_sub(dropped.chars().count() + 2);
+        }
+    }
+    let joined = kept.into_iter().collect::<Vec<_>>().join("\n\n");
+    if joined.chars().count() <= limit {
+        joined
+    } else {
+        // A single message longer than the whole budget: keep its tail, which
+        // is where the conclusion sits.
+        let mut chars = joined.chars().rev().take(limit).collect::<Vec<_>>();
+        chars.reverse();
+        format!("[trimmed] ...{}", chars.into_iter().collect::<String>())
+    }
+}
+
+/// Split a handoff into the part that must be summarised and the part that fits.
+///
+/// Returns `(older, recent)` boundaries as indices into `history`. `recent` is
+/// the tail that fits the budget; everything before it is what a summary must
+/// cover. Empty `older` means the transcript already fits.
+pub fn handoff_split(history: &[MessageWithParts], budget_chars: usize) -> (usize, usize) {
+    let mut kept = 0usize;
+    let mut start = history.len();
+    for index in (0..history.len()).rev() {
+        let message = &history[index];
+        if message.message.role == "tool" || message.message.status == "synthetic" {
+            continue;
+        }
+        let tokens = message_tokens(message);
+        let chars = tokens.saturating_mul(4);
+        if kept + chars > budget_chars && start < history.len() {
+            break;
+        }
+        kept += chars;
+        start = index;
+    }
+    // Never split a tool row away from the call that produced it.
+    while start > 0 && history[start].message.role == "tool" {
+        start -= 1;
+    }
+    (start, history.len())
+}
+
+/// Estimate the characters one stored message will occupy in a prompt.
+pub fn message_tokens(message: &MessageWithParts) -> usize {
+    let mut chars = 0usize;
+    for part in &message.parts {
+        let payload = part.payload();
+        match part.kind.as_str() {
+            "text" => {
+                chars += payload
+                    .get("text")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .chars()
+                    .count()
+            }
+            "tool_call" => {
+                chars += serde_json::to_string(&payload.get("args").cloned().unwrap_or(Value::Null))
+                    .map(|value| value.len())
+                    .unwrap_or(0)
+            }
+            "tool_result" => {
+                chars += payload
+                    .get("content")
+                    .and_then(|value| value.as_str())
+                    .map(str::len)
+                    .unwrap_or(0)
+            }
+            "summary" => {
+                chars += payload
+                    .get("text")
+                    .and_then(|value| value.as_str())
+                    .map(str::len)
+                    .unwrap_or(0)
+            }
+            _ => {}
+        }
+    }
+    (chars / 4).max(1)
+}
+
+/// The block prepended to the first prompt of a newly opened session.
+pub fn handoff_block(transcript: &str) -> String {
+    format!(
+        "You are taking over this conversation from another agent. Nothing you \
+         remember is available from it, so here is what has happened so far, \
+         oldest first. Carry on from the last message; do not repeat the summary \
+         back unless asked.\n\n<previous_conversation>\n{transcript}\n\
+         </previous_conversation>"
+    )
 }
 
 pub fn transcript_for_summary(history: &[MessageWithParts]) -> String {
@@ -702,6 +900,39 @@ mod tests {
         ));
     }
 
+    /// Reported: an attached spreadsheet made the model answer "there is no
+    /// such file". The prompt only had a name and a size, so there was nothing
+    /// to open.
+    #[tokio::test]
+    async fn a_binary_attachment_tells_the_model_where_it_is() {
+        let history = vec![message_with_parts(vec![Part {
+            id: "attachment".into(),
+            message_id: "m1".into(),
+            idx: 0,
+            kind: "attachment".into(),
+            payload_json: json!({
+                "id": "a1",
+                "name": "laporan.xlsx",
+                "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "size": 41_234,
+                "fileKind": "file",
+                "path": "/var/lib/jarvis/attachments/c1/m1/laporan.xlsx",
+            })
+            .to_string(),
+        }])];
+        let (messages, _) = build_messages(&history).await;
+        let text = messages[0].text_content();
+        assert!(text.contains("laporan.xlsx"), "{text}");
+        assert!(
+            text.contains("/var/lib/jarvis/attachments/c1/m1/laporan.xlsx"),
+            "the model needs the real path, not just the name: {text}"
+        );
+        assert!(
+            text.contains("readable"),
+            "it must know the path is allowed: {text}"
+        );
+    }
+
     #[tokio::test]
     async fn text_attachments_are_inlined_for_the_model() {
         let history = vec![message_with_parts(vec![Part {
@@ -724,5 +955,160 @@ mod tests {
         let text = messages[0].text_content();
         assert!(text.contains("notes.txt"));
         assert!(text.contains("hello"));
+    }
+
+    /// Switching agents starts a new ACP session, and a new session knows
+    /// nothing. The transcript is what stops the next agent from answering as
+    /// if the chat had just begun.
+    #[tokio::test]
+    async fn a_handoff_carries_the_conversation_forward() {
+        let history = vec![
+            message_with_parts(vec![Part {
+                id: "u1".into(),
+                message_id: "m1".into(),
+                idx: 0,
+                kind: "text".into(),
+                payload_json: json!({"text": "refactor the parser"}).to_string(),
+            }]),
+            MessageWithParts {
+                message: Message {
+                    id: "m2".into(),
+                    conversation_id: "c1".into(),
+                    role: "assistant".into(),
+                    created_at: 1,
+                    status: "completed".into(),
+                    error: None,
+                },
+                parts: vec![
+                    Part {
+                        id: "a1".into(),
+                        message_id: "m2".into(),
+                        idx: 0,
+                        kind: "text".into(),
+                        payload_json: json!({"text": "I moved parse() into parser.rs."})
+                            .to_string(),
+                    },
+                    Part {
+                        id: "t1".into(),
+                        message_id: "m2".into(),
+                        idx: 1,
+                        kind: "tool_call".into(),
+                        payload_json: json!({
+                            "name": "write",
+                            "state": "completed",
+                            "callId": "c-1",
+                            "args": {"filePath": "src/parser.rs"}
+                        })
+                        .to_string(),
+                    },
+                ],
+            },
+        ];
+
+        let transcript = transcript_for_handoff(&history, 24_000);
+        assert!(transcript.contains("refactor the parser"), "{transcript}");
+        assert!(transcript.contains("moved parse()"), "{transcript}");
+        assert!(
+            transcript.contains("src/parser.rs"),
+            "the new agent needs to know which files were touched: {transcript}"
+        );
+
+        let block = handoff_block(&transcript);
+        assert!(block.contains("<previous_conversation>"), "{block}");
+        assert!(block.contains("taking over"), "{block}");
+    }
+
+    /// Tool transcripts and synthetic rows are provider scaffolding, not
+    /// conversation; carrying them would spend the budget on noise.
+    #[tokio::test]
+    async fn a_handoff_skips_tool_and_synthetic_rows() {
+        let history = vec![
+            MessageWithParts {
+                message: Message {
+                    id: "t".into(),
+                    conversation_id: "c1".into(),
+                    role: "tool".into(),
+                    created_at: 0,
+                    status: "completed".into(),
+                    error: None,
+                },
+                parts: vec![Part {
+                    id: "p".into(),
+                    message_id: "t".into(),
+                    idx: 0,
+                    kind: "text".into(),
+                    payload_json: json!({"text": "raw provider payload"}).to_string(),
+                }],
+            },
+            MessageWithParts {
+                message: Message {
+                    id: "s".into(),
+                    conversation_id: "c1".into(),
+                    role: "user".into(),
+                    created_at: 1,
+                    status: "synthetic".into(),
+                    error: None,
+                },
+                parts: vec![Part {
+                    id: "p2".into(),
+                    message_id: "s".into(),
+                    idx: 0,
+                    kind: "text".into(),
+                    payload_json: json!({"text": "continue please"}).to_string(),
+                }],
+            },
+        ];
+        assert!(transcript_for_handoff(&history, 24_000).is_empty());
+    }
+
+    /// A long chat must not blow the budget; the recent end is what matters.
+    #[tokio::test]
+    async fn a_handoff_keeps_the_recent_end_when_it_is_long() {
+        let mut history = Vec::new();
+        for index in 0..50 {
+            history.push(message_with_parts(vec![Part {
+                id: format!("p{index}"),
+                message_id: "m1".into(),
+                idx: 0,
+                kind: "text".into(),
+                payload_json: json!({"text": format!("message number {index}")}).to_string(),
+            }]));
+        }
+        let transcript = transcript_for_handoff(&history, 400);
+        assert!(transcript.chars().count() < 600, "{transcript}");
+        assert!(
+            transcript.contains("message number 49"),
+            "the newest messages must survive the trim: {transcript}"
+        );
+    }
+
+    /// A transcript under the budget is sent whole; one over it is split so the
+    /// head can be summarised instead of silently dropped.
+    #[tokio::test]
+    async fn a_handoff_splits_only_when_the_budget_is_exceeded() {
+        let mut history = Vec::new();
+        for index in 0..20 {
+            history.push(message_with_parts(vec![Part {
+                id: format!("p{index}"),
+                message_id: "m1".into(),
+                idx: 0,
+                kind: "text".into(),
+                payload_json: json!({"text": format!("message {index} with some words in it")})
+                    .to_string(),
+            }]));
+        }
+
+        // Generous budget: nothing to summarise.
+        let (older, _) = handoff_split(&history, 1_000_000);
+        assert_eq!(older, 0, "a transcript that fits must not be summarised");
+
+        // Tight budget: an older head is separated from a recent tail.
+        let (older, recent) = handoff_split(&history, 200);
+        assert!(
+            older > 0,
+            "a long transcript must produce a head to summarise"
+        );
+        assert_eq!(recent, history.len());
+        assert!(older < history.len(), "the tail must not be empty");
     }
 }

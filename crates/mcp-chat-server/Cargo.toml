@@ -1,0 +1,29 @@
+[package]
+name = "mcp-chat-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Headless HTTP server for Jarvis: the same engine and web UI, reachable from another computer"
+
+[[bin]]
+name = "jarvis-server"
+path = "src/main.rs"
+
+[dependencies]
+mcp-chat-core = { path = "../mcp-chat-core" }
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

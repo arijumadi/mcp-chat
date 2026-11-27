@@ -423,6 +423,7 @@ fn request(name: &str, args: Value) -> ToolExecRequest {
         disabled: false,
         cancel: CancellationToken::new(),
         active_server_slugs: Vec::new(),
+        output_limits: crate::agent::tools::OutputLimits::default(),
     }
 }
 
@@ -2169,4 +2170,107 @@ async fn an_empty_options_list_is_refused_before_the_user_is_asked() {
     while let Ok(event) = events.try_recv() {
         assert!(!matches!(event, CoreEvent::InputRequest { .. }));
     }
+}
+
+/// A file the user attached lives in the app's attachments directory, not in
+/// the workspace. The model is told that path, so `read` has to accept it
+/// without asking for outside-workspace approval.
+#[tokio::test]
+async fn read_accepts_an_attached_file_by_its_stored_path() {
+    let workspace = tempfile::tempdir().unwrap();
+    let attachments = tempfile::tempdir().unwrap();
+    let mut executor = test_executor(workspace.path()).await;
+    // Point the executor at a separate attachments root, as the real app does:
+    // attachments live beside the database, not inside the project.
+    executor.attachments_dir = attachments.path().to_path_buf();
+    let file = attachments.path().join("notes.txt");
+    tokio::fs::write(&file, "row one\nrow two\n").await.unwrap();
+
+    let result = executor
+        .execute(request("read", json!({"filePath": file.to_str().unwrap()})))
+        .await;
+
+    assert!(result.ok, "read failed: {}", result.content);
+    assert!(result.content.contains("row one"), "{}", result.content);
+    // Completing without an approval answer proves the path was accepted as
+    // readable.
+}
+
+/// A path that is neither in the workspace nor in attachments is still outside
+/// and still needs a decision.
+#[tokio::test]
+async fn read_still_treats_a_foreign_path_as_outside() {
+    let workspace = tempfile::tempdir().unwrap();
+    let attachments = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let mut executor = test_executor(workspace.path()).await;
+    executor.attachments_dir = attachments.path().to_path_buf();
+    let file = other.path().join("secret.txt");
+    tokio::fs::write(&file, "nope").await.unwrap();
+
+    // Nothing answers the approval request, so the call must never complete.
+    // That is the property under test: a foreign path waits for a decision
+    // instead of being read. A short timeout keeps the suite fast.
+    let outcome = tokio::time::timeout(
+        Duration::from_millis(500),
+        executor.execute(request("read", json!({"filePath": file.to_str().unwrap()}))),
+    )
+    .await;
+
+    assert!(
+        outcome.is_err(),
+        "a foreign path was read without approval: {:?}",
+        outcome.map(|result| result.content)
+    );
+}
+
+/// The limits used to be fixed at 12k/16k/24k characters whatever the model,
+/// which is under 3% of a 128k window. They now follow the window, with a floor
+/// so a small model is still workable and a ceiling so one result cannot fill
+/// the context by itself.
+#[test]
+fn output_limits_follow_the_model_window() {
+    let small = crate::agent::tools::OutputLimits::for_context(16_000, 100);
+    let large = crate::agent::tools::OutputLimits::for_context(1_000_000, 100);
+
+    assert!(
+        small.shell >= 4_000,
+        "a small window still gets a usable preview: {}",
+        small.shell
+    );
+    assert!(
+        large.shell > small.shell,
+        "a larger window must allow more: {} vs {}",
+        large.shell,
+        small.shell
+    );
+    assert!(
+        large.read <= 60_000,
+        "one result must not flood even a huge window: {}",
+        large.read
+    );
+
+    let default = crate::agent::tools::OutputLimits::for_context(128_000, 100);
+    assert!(
+        default.shell > 16_000,
+        "the old fixed 16k was below the share: {}",
+        default.shell
+    );
+
+    // `other` is already at 30k for a 128k window, and doubling it hits the
+    // 60k ceiling, so compare against a window where the ceiling is not in the
+    // way. The ceiling is deliberate: one result must never flood the context.
+    let modest = crate::agent::tools::OutputLimits::for_context(32_000, 100);
+    let doubled = crate::agent::tools::OutputLimits::for_context(32_000, 200);
+    assert!(
+        doubled.other > modest.other,
+        "the setting scales the limits: {} vs {}",
+        doubled.other,
+        modest.other
+    );
+    assert_eq!(
+        crate::agent::tools::OutputLimits::for_context(1_000_000, 400).other,
+        60_000,
+        "the ceiling holds whatever the setting says"
+    );
 }

@@ -152,6 +152,7 @@ pub async fn delete_conversation(
     conversation_id: String,
 ) -> CmdResult<()> {
     state.engine.stop(&conversation_id);
+    state.engine.close_acp_session(&conversation_id).await;
     state.engine.set_auto_approve(&conversation_id, false);
     let history = messages::list_for_conversation(&state.db.pool, &conversation_id)
         .await
@@ -230,12 +231,23 @@ pub async fn set_conversation_workspace(
     let path =
         mcp_chat_core::agent::tools::resolve_workspace_path(&workspace_root).map_err(cmd_err)?;
     let value = path.display().to_string();
+    // An ACP session's working directory is fixed at `session/new`; the
+    // protocol cannot move it. Reusing the session would leave the agent in the
+    // old folder, so drop it and let the next message open a fresh one.
+    state.engine.close_acp_session(&conversation_id).await;
+    conversations::set_acp_session_id(&state.db.pool, &conversation_id, "")
+        .await
+        .ok();
     conversations::set_workspace(&state.db.pool, &conversation_id, Some(&value))
         .await
         .map_err(cmd_err)?;
     settings::set(&state.db.pool, "workspace.last", &value)
         .await
         .map_err(cmd_err)?;
+    state
+        .engine
+        .reopen_acp_session_if_bound(&conversation_id)
+        .await;
     let mut recent: Vec<String> = settings::get(&state.db.pool, "workspace.recent")
         .await
         .map_err(cmd_err)?
