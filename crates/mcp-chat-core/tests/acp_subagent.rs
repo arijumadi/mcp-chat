@@ -548,8 +548,11 @@ async fn wait_for_state(harness: &Harness, conversation_id: &str) -> (String, St
 /// The model, thinking level and mode come from `session/new`. Binding a chat
 /// used to only write the marker, so the pickers stayed empty until the first
 /// message created the session.
+///
+/// The options arrive asynchronously now that the switch does not block on the
+/// agent starting, so this waits for them rather than reading once.
 #[tokio::test]
-async fn binding_a_chat_makes_its_options_available_immediately() {
+async fn binding_a_chat_makes_its_options_available_without_a_message() {
     let harness = Harness::new().await;
     harness.register_agent("mock", "echo").await;
 
@@ -559,7 +562,14 @@ async fn binding_a_chat_makes_its_options_available_immediately() {
         .await
         .expect("bind");
 
-    let options = harness.engine.agent_config(&harness.parent_id).await;
+    let mut options = Vec::new();
+    for _ in 0..100 {
+        options = harness.engine.agent_config(&harness.parent_id).await;
+        if !options.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     assert!(
         !options.is_empty(),
         "the pickers need the agent's options before the first message"
