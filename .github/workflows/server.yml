@@ -7,7 +7,7 @@ name: Server build
 on:
   workflow_dispatch:
   push:
-    branches: [master]
+    branches: [master, feat/server-mode]
     paths:
       - "crates/mcp-chat-server/**"
       - "crates/mcp-chat-core/**"
