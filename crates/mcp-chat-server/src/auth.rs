@@ -138,7 +138,15 @@ pub async fn require_token(
     if path.starts_with("/login/") {
         return next.run(request).await;
     }
-    if path.starts_with("/api/") {
+    // A redirect is right for a page the user navigated to, and wrong for a
+    // subresource: a stale cookie would turn every script into a 303 and the
+    // app would render blank with no explanation. Only HTML gets redirected.
+    let wants_html = request
+        .headers()
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("text/html"));
+    if path.starts_with("/api/") || !wants_html {
         return (StatusCode::UNAUTHORIZED, "Not signed in").into_response();
     }
     redirect_to_login()
