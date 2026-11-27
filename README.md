@@ -12,6 +12,8 @@ Bring your own model. Connect the MCP servers you already trust. Keep your keys,
 
 Jarvis is not another chat wrapper. It runs the agent loop locally, connects to real tools over MCP, and asks before anything touches your files or runs a command.
 
+It is a desktop app, and it is also a **headless server**: the same engine and the same UI, reachable from another computer, with every process and file staying on the host. See [Server mode](#server-mode).
+
 ## Why Jarvis
 
 ### Your model, your key
@@ -48,6 +50,10 @@ Reasoning effort from Default to Max, context compaction, steering, background s
 
 **Hand a chat to an external agent.** Jarvis speaks the Agent Client Protocol, so OpenCode, Codex, Gemini CLI and Antigravity CLI can run a conversation end to end. Add one in Settings, press **Test** to prove the command actually works on that machine, then pick it in the composer. Pass its slug to the `subagent` tool instead to run the same agent as a background worker and keep Jarvis in charge. An ACP agent brings its own model, tools, sign-in and history, so Jarvis's system prompt, skills and MCP catalog do not apply to a chat it owns, and slash commands come from the agent itself. Choose whether it may auto-approve read-only work, approve everything except deletes, or must ask for every call; the composer's Auto button also covers the agent for that chat. The agent's own model, thinking level and mode appear beside the agent picker, and its slash commands are suggested when you type `/`. Jarvis answers `fs/read_text_file` for the agent, confined to the chat workspace, and advertises no other client capability it cannot honour.
 
+**Keep working across agent switches.** Switching from Antigravity to OpenCode mid-conversation now carries the context: Jarvis builds a handoff summary from its own transcript (objective, decisions, files touched) and gives it to the new agent, because two ACP agents cannot share a session. Switch, workspace changes, deletions and crashes all close the old session, so processes are not leaked and the model picker never goes blank.
+
+**Reach it from another machine.** Run the same build headless on a server and open it in any browser. Workspace, database, MCP servers, ACP agents and tool processes stay on the host; only the view travels. See [Server mode](#server-mode).
+
 **Use subscription-backed agent runtimes.** OAuth 2.0 + PKCE with dynamic client registration, loopback callback, refresh tokens and keychain storage. Designed for subscription-backed servers such as T3 Code.
 
 ## At a glance
@@ -61,6 +67,7 @@ Reasoning effort from Default to Max, context compaction, steering, background s
 | **ACP agents** | OpenCode, Codex, Gemini CLI, Antigravity CLI over ACP v1; whole chat or background subagent, ask or auto-approve reads |
 | **Bundled skills** | docx, pdf, spreadsheet, excalidraw, manage-skill |
 | **Safety** | per-server policy, per-call approvals, diff preview, shell guard, workspace confinement |
+| **Server mode** | `jarvis-server`: same engine and UI over HTTP + SSE, cookie token auth, no GUI, no Docker needed |
 | **Platforms** | Windows, Linux and macOS from source; Windows NSIS and Linux packages published |
 | **Privacy** | no telemetry, no account, no cloud transcript sync |
 
@@ -73,6 +80,7 @@ Get the latest build from **[GitHub Releases](https://github.com/arijumadi/mcp-c
 - **Windows:** NSIS installer. Existing 0.3.24+ installs can self-update.
 - **Linux:** AppImage or `.deb`. AppImage self-updates; `.deb` is managed by your package manager.
 - **macOS:** build from source with the steps below.
+- **Server (Linux x64):** `jarvis-server-linux-x64.tar.gz` from the **Server build** workflow artifact. One binary and a `dist/` folder — no Node, WebKit or X server on the host.
 
 ### Build from source
 
@@ -111,15 +119,45 @@ No MCP server yet? Jarvis still works as a local-first chat and coding agent wit
 |---|---|
 | ![MCP servers](docs/screenshots/servers.png) | ![Skills](docs/screenshots/skills.png) |
 
+## Server mode
+
+`jarvis-server` is the same engine and the same web UI without the Tauri shell. Everything — processes, workspace, database, secrets, ACP agents, MCP servers — stays on the host. The browser is only a view.
+
+```bash
+JARVIS_DATA_DIR=/var/lib/jarvis \
+JARVIS_WORKSPACE=/srv/jarvis/workspace \
+JARVIS_STATIC_DIR=/opt/jarvis/dist \
+JARVIS_BIND=127.0.0.1:8787 \
+/opt/jarvis/jarvis-server
+```
+
+On first start it prints an access token. Open `http://<host>:8787/login/`, paste it, and the browser keeps an HttpOnly cookie.
+
+**It is not a rewrite.** The frontend already routed every command through one `invoke()` wrapper and every event through one `subscribe()`, so the server answers the same command names with the same arguments. The 20k-line UI runs unmodified.
+
+| | Desktop | Server |
+|---|---|---|
+| Transport | Tauri IPC, in-process | HTTP `POST /api/invoke` + SSE `/api/events` |
+| GUI | WebView2 / WebKitGTK | any browser |
+| Engine, prompts, tools | shared | shared |
+| Secrets | OS keychain | `secrets.json`, mode `0600` |
+| Updates | in-app updater | redeploy the binary |
+| Users | one | one |
+
+**Reach it safely.** This process can run `bash` and write files as its user, so the token is the only thing between a request and a shell. Bind to loopback and use an SSH tunnel or Tailscale, or put a TLS reverse proxy in front. Never expose the port directly to the internet.
+
+Full deployment notes — systemd unit, environment variables, backup layout, and the known gaps — are in **[SERVER.md](SERVER.md)**.
+
 ## Security model
 
 - No accounts, cloud sync, telemetry or crash reporting.
 - All network I/O happens in Rust. The webview never calls provider or MCP endpoints.
-- API keys, MCP bearer tokens and OAuth sessions live in the OS keychain (`com.mcpchat.app`), not SQLite or `localStorage`.
+- API keys, MCP bearer tokens and OAuth sessions live in the OS keychain (`com.mcpchat.app`), not SQLite or `localStorage`. The headless server has no keychain, so it uses a `0600` file in the data directory instead — weaker, and documented in [SERVER.md](SERVER.md).
+- In server mode the only credential is one access token, carried by an HttpOnly cookie (or `Authorization: Bearer`). `JARVIS_ALLOWED_HOST` pins the `Host` header against DNS rebinding, and the bind address defaults to loopback.
 - Update checks are optional and send no message content or identifiers.
 - Markdown raw HTML is disabled, links open in the system browser, and remote images are not loaded.
 - MCP URLs must use HTTPS, except loopback during development. Local stdio servers run as child processes with your user permissions; only add commands and packages you trust.
-- CSP is strict; `connect-src` is limited to Tauri IPC.
+- The desktop app ships a strict CSP with `connect-src` limited to Tauri IPC. The server serves the same bundle over HTTP, where CSP comes from the reverse proxy if you use one; that is one reason to run it behind a proxy rather than exposing the port.
 
 Read the full [security notes](ARCHITECTURE.md) and the [feature reference](docs/FEATURES.md).
 
@@ -162,7 +200,7 @@ The repository includes a mock MCP/LLM server for integration tests:
 cargo run -p mcp-mock
 ```
 
-Current verification: **257 Vitest tests, 249 Rust tests and 74 Playwright tests** pass. The native Tauri bundles are built by the tag workflow on Windows and Linux.
+Current verification: **268 Vitest tests and 356 Rust tests** pass on Ubuntu and Windows in CI. Playwright covers the browser flows locally. The native Tauri bundles are built by the tag workflow on Windows and Linux.
 
 ## Documentation
 
@@ -171,6 +209,7 @@ Current verification: **257 Vitest tests, 249 Rust tests and 74 Playwright tests
 | [Feature reference](docs/FEATURES.md) | Every user-facing capability and edge case |
 | [Architecture](ARCHITECTURE.md) | Agent loop, MCP negotiation, storage, prompt and security decisions |
 | [Packaging](PACKAGING.md) | Windows, macOS and Linux installers, signing and updates |
+| [Server mode](SERVER.md) | Deployment, systemd, tokens, TLS, backup and the server's limits |
 | [Desktop setup](RUN-ON-DESKTOP.md) | Moving a headless build onto a desktop |
 | [Releases](https://github.com/arijumadi/mcp-chat/releases) | Downloadable builds and release notes |
 
