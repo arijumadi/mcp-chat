@@ -1,0 +1,90 @@
+name: Server build
+
+# Separate from `build.yml` on purpose: a failure here must not block a desktop
+# release, because the desktop and the server are independent deliverables that
+# happen to share a repository.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "crates/mcp-chat-server/**"
+      - "crates/mcp-chat-core/**"
+      - "src/**"
+      - "shared/**"
+      - "index.html"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "vite.config.ts"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/server.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: server-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: jarvis-server (linux-x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.34.7
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: server-bin
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the web UI
+        run: pnpm build
+
+      - name: Build the server
+        run: cargo build --release -p mcp-chat-server
+
+      # The tarball is the whole deployment: the binary plus the bundle it
+      # serves. No Node, no WebKit, no X server on the target host.
+      - name: Package
+        run: |
+          set -euo pipefail
+          mkdir -p package
+          cp target/release/jarvis-server package/
+          cp -r dist package/dist
+          cp README.md package/ 2>/dev/null || true
+          cp SERVER.md package/ 2>/dev/null || true
+          tar -czf jarvis-server-linux-x64.tar.gz -C package .
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-server-linux-x64
+          path: jarvis-server-linux-x64.tar.gz
+          if-no-files-found: error

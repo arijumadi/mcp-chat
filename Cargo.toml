@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/mcp-chat-core", "src-tauri", "tests/mock_servers"]
+members = [
+    "crates/mcp-chat-core",
+    "crates/mcp-chat-server",
+    "src-tauri",
+    "tests/mock_servers",
+]
 
 [workspace.package]
 version = "0.11.3"

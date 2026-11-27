@@ -129,9 +129,20 @@ export function Composer({ conversation }: { conversation: Conversation }) {
       const onDrop = (event: DragEvent) => {
         if (!hasFiles(event)) return;
         event.preventDefault();
-        useApp
-          .getState()
-          .toast("Drag and drop is available in the desktop app.", "info");
+        if (window.__MCP_CHAT_MOCK__) {
+          useApp
+            .getState()
+            .toast("Drag and drop is available in the desktop app.", "info");
+          return;
+        }
+        // Server mode: the browser owns the files, so upload them instead of
+        // pretending we can read a path.
+        const files = Array.from(event.dataTransfer?.files ?? []);
+        if (files.length === 0) return;
+        void (async () => {
+          const stageFile = useApp.getState().stageFile;
+          for (const file of files) await stageFile(file);
+        })();
       };
       window.addEventListener("dragover", onDragOver);
       window.addEventListener("drop", onDrop);
@@ -235,6 +246,23 @@ export function Composer({ conversation }: { conversation: Conversation }) {
       useApp
         .getState()
         .toast("The native file picker is unavailable in the browser demo.", "info");
+      return;
+    }
+    if (!("__TAURI_INTERNALS__" in window)) {
+      // No native dialog in a browser, but a plain input works and the file is
+      // uploaded through the same staging path.
+      const input = document.createElement("input");
+      input.type = "file";
+      input.multiple = true;
+      input.onchange = () => {
+        const files = Array.from(input.files ?? []);
+        if (files.length === 0) return;
+        void (async () => {
+          const stageFile = useApp.getState().stageFile;
+          for (const file of files) await stageFile(file);
+        })();
+      };
+      input.click();
       return;
     }
     setAttaching(true);

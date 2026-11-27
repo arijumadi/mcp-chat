@@ -120,6 +120,8 @@ export interface AppStore {
   removeContext: (id: string) => void;
   stageAttachments: (paths: string[]) => Promise<void>;
   stageImageFile: (file: File) => Promise<void>;
+  /** Upload any file from the browser, where no server-side path exists. */
+  stageFile: (file: File) => Promise<void>;
   stageClipboardImage: () => Promise<void>;
   removeAttachment: (id: string) => Promise<void>;
   setDraft: (text: string) => void;
@@ -764,6 +766,36 @@ export const useApp = create<AppStore>()((set, get) => ({
       const staged = await call<Attachment>("stage_attachment_bytes", {
         data,
         name: file.name || "clipboard.png",
+      });
+      set((state) => ({
+        pendingAttachments: [...state.pendingAttachments, staged].slice(0, 6),
+      }));
+    } catch (error) {
+      get().toast(String(error), "error");
+    }
+  },
+
+  async stageFile(file) {
+    const existing = get().pendingAttachments;
+    if (existing.length >= 6) {
+      get().toast("You can attach up to 6 files per message.", "error");
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      get().toast(`${file.name} is larger than 25 MB.`, "error");
+      return;
+    }
+    try {
+      const data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ""));
+        reader.onerror = () =>
+          reject(reader.error ?? new Error("Could not read the file."));
+        reader.readAsDataURL(file);
+      });
+      const staged = await call<Attachment>("stage_attachment_upload", {
+        data,
+        name: file.name || "file",
       });
       set((state) => ({
         pendingAttachments: [...state.pendingAttachments, staged].slice(0, 6),
