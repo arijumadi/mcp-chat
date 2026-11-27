@@ -325,8 +325,16 @@ pub async fn stage_attachment_upload(state: &AppState, args: Value) -> Result<Va
     let result =
         attachments::stage(&state.engine.attachments_dir, &[temp.display().to_string()]).await;
     let _ = tokio::fs::remove_dir_all(&slot).await;
+    // `stage` handles a list because the desktop can select several files at
+    // once. One upload is one file, and the caller expects a single
+    // `Attachment`: returning the array made every field undefined, which
+    // surfaced later as "invalid type: null, expected a string" when sending.
     let staged = result.map_err(err)?;
-    to_value(staged)
+    let attachment = staged
+        .into_iter()
+        .next()
+        .ok_or_else(|| "The file could not be staged.".to_string())?;
+    to_value(attachment)
 }
 
 fn safe_upload_name(raw: &str) -> String {
