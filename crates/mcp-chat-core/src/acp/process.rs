@@ -161,9 +161,12 @@ fn kill_tree(pid: Option<u32>) {
 /// and `~/.cargo/bin` are missing, and an agent that is installed and working
 /// reports "command not found".
 ///
-/// Only the user's own bin directories are added, and only as a fallback: an
-/// explicit `PATH` entry always wins. A name that already contains a separator
-/// is left alone so an absolute path from the registry keeps working.
+/// The user's own bin directories are checked first, then the interactive
+/// shell is asked. That last step matters for tools whose installer appends its
+/// directory to `PATH` in `.bashrc` (hermes, asdf, nvm, conda): those lines are
+/// skipped for non-interactive children, so the directory is not discoverable
+/// any other way. An explicit `PATH` entry always wins, and a name that already
+/// contains a separator is left alone so an absolute path keeps working.
 fn resolve_program(program: &str) -> String {
     let program = program.trim();
     if program.is_empty() || program.contains(std::path::MAIN_SEPARATOR) {
@@ -180,17 +183,75 @@ fn resolve_program(program: &str) -> String {
         if let Some(found) = search_path(program) {
             return found;
         }
-        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
-            return program.to_owned();
-        };
-        for relative in [".local/bin", ".cargo/bin", ".bun/bin", "bin"] {
-            let candidate = home.join(relative).join(program);
-            if is_executable(&candidate) {
-                return candidate.display().to_string();
+        if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            for relative in [".local/bin", ".cargo/bin", ".bun/bin", "bin"] {
+                let candidate = home.join(relative).join(program);
+                if is_executable(&candidate) {
+                    return candidate.display().to_string();
+                }
             }
+        }
+        if let Some(found) = resolve_via_shell(program, &shell_program()) {
+            return found;
         }
         program.to_owned()
     }
+}
+
+/// The user's login shell, which is where `PATH` additions actually live.
+#[cfg(unix)]
+fn shell_program() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())
+}
+
+/// Ask an interactive shell where the program is.
+///
+/// `-i` is the point: rc files start with "if not interactive, return", so a
+/// plain `sh -c` never sees the directory the installer added. The program is
+/// passed through the environment rather than pasted into the script, so a
+/// name with quotes or `$` cannot become shell code. A shell that hangs on a
+/// prompt is killed after [`SHELL_LOOKUP_TIMEOUT`] and the caller falls back to
+/// the bare name.
+#[cfg(unix)]
+fn resolve_via_shell(program: &str, shell: &str) -> Option<String> {
+    use std::time::{Duration, Instant};
+
+    const SHELL_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
+    const SHELL_LOOKUP_VAR: &str = "JARVIS_RESOLVE_PROGRAM";
+
+    let mut child = std::process::Command::new(shell)
+        .args(["-ic", r#"command -v "$JARVIS_RESOLVE_PROGRAM""#])
+        .env(SHELL_LOOKUP_VAR, program)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let deadline = Instant::now() + SHELL_LOOKUP_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+
+    let output = child.wait_with_output().ok()?;
+    // rc files may print banners; keep the last absolute path that is really
+    // executable, which is what `command -v` prints for a real binary.
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.starts_with('/') && is_executable(Path::new(line)))
+        .map(str::to_owned)
 }
 
 #[cfg(unix)]
@@ -320,21 +381,30 @@ mod tests {
 mod resolve_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::Mutex;
+
+    /// `HOME`, `PATH` and `SHELL` are process-wide, so the tests that touch
+    /// them take turns. Cargo runs tests on parallel threads by default.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn write_program(path: &std::path::Path) {
+        std::fs::write(path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
 
     /// A systemd unit has a minimal PATH. A vendor agent installed into
     /// `~/.local/bin` is then invisible, and the report is "command not found"
     /// for something that is installed and working.
     #[test]
     fn finds_an_agent_in_the_user_bin_directory() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let home = tempfile::tempdir().unwrap();
         let bin = home.path().join(".local").join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let program = bin.join("fake-acp-agent");
-        std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_program(&program);
 
-        // SAFETY: this test does not run concurrently with anything that reads
-        // HOME, and it restores the value before returning.
+        // SAFETY: ENV_LOCK serialises every test that reads or writes these.
         let previous_home = std::env::var_os("HOME");
         let previous_path = std::env::var_os("PATH");
         unsafe {
@@ -361,6 +431,53 @@ mod resolve_tests {
             program.display().to_string(),
             "a fallback must find the agent the unit cannot"
         );
+    }
+
+    /// Hermes and friends install into their own directory and add it to PATH
+    /// from `.bashrc`. That line is skipped for non-interactive children, so
+    /// neither PATH nor the standard user bin directories can see it.
+    #[test]
+    fn asks_the_interactive_shell_for_a_program_only_it_knows() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("agent-root").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let program = bin.join("fake-hermes");
+        write_program(&program);
+        std::fs::write(
+            home.path().join(".bashrc"),
+            format!("export PATH=\"{}:$PATH\"\n", bin.display()),
+        )
+        .unwrap();
+
+        // SAFETY: ENV_LOCK serialises every test that reads or writes these.
+        let previous_home = std::env::var_os("HOME");
+        let previous_path = std::env::var_os("PATH");
+        let previous_shell = std::env::var_os("SHELL");
+        unsafe {
+            std::env::set_var("HOME", home.path());
+            std::env::set_var("PATH", "/usr/bin:/bin");
+            std::env::set_var("SHELL", "/bin/bash");
+        }
+
+        let resolved = resolve_program("fake-hermes");
+
+        unsafe {
+            match previous_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match previous_path {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+            match previous_shell {
+                Some(value) => std::env::set_var("SHELL", value),
+                None => std::env::remove_var("SHELL"),
+            }
+        }
+
+        assert_eq!(resolved, program.display().to_string());
     }
 
     #[test]
