@@ -29,6 +29,14 @@ export function Sidebar() {
   const newChat = useApp((state) => state.newChat);
   const setView = useApp((state) => state.setView);
   const toggleSidebar = useApp((state) => state.toggleSidebar);
+  // The overlay covers the chat on a phone, so picking something must close it.
+  // `matchMedia` is read at the moment of the click, not at mount, so rotating
+  // or resizing does not leave a stale value.
+  const closeOnNarrow = () => {
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 639px)").matches) {
+      toggleSidebar();
+    }
+  };
   const renameConversation = useApp((state) => state.renameConversation);
   const setConversationPinned = useApp((state) => state.setConversationPinned);
   const deleteConversation = useApp((state) => state.deleteConversation);
@@ -57,8 +65,10 @@ export function Sidebar() {
   const groups = groupConversations(conversations);
 
   return (
+    // On a phone the sidebar is an overlay rather than a column: at 260px it
+    // took two thirds of a 393px screen and left the chat unusable.
     <aside
-      className="flex h-full w-[260px] shrink-0 flex-col border-r"
+      className="fixed inset-y-0 left-0 z-40 flex h-full w-[260px] max-w-[85vw] shrink-0 flex-col border-r shadow-2xl sm:static sm:z-auto sm:max-w-none sm:shadow-none"
       style={{ background: "var(--panel)", borderColor: "var(--border)" }}
     >
       <div className="flex items-center gap-2 px-3 pt-3.5 pb-2">
@@ -127,6 +137,7 @@ export function Sidebar() {
                     setQuery("");
                     clearSearch();
                     void openConversation(hit.conversationId);
+                    closeOnNarrow();
                   }}
                   className="focus-ring mb-0.5 w-full rounded-lg px-2 py-2 text-left transition hover:bg-[var(--panel-2)]"
                 >
@@ -195,7 +206,10 @@ export function Sidebar() {
                       />
                     ) : (
                       <button
-                        onClick={() => void openConversation(conversation.id)}
+                        onClick={() => {
+                          void openConversation(conversation.id);
+                          closeOnNarrow();
+                        }}
                         onDoubleClick={() => {
                           setEditingId(conversation.id);
                           setDraft(conversation.title);

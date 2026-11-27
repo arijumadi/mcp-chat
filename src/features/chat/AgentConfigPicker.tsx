@@ -40,7 +40,7 @@ export function AgentConfigPicker({
     option.currentValue;
 
   return (
-    <div ref={ref} className="flex flex-wrap items-center gap-1">
+    <div ref={ref} className="flex min-w-0 items-center gap-1 overflow-hidden">
       {selectable.map((option) => (
         <div key={option.id} className="relative">
           <button
@@ -51,8 +51,13 @@ export function AgentConfigPicker({
             style={{ color: "var(--muted)" }}
             title={option.description ?? option.name}
           >
-            <Settings2 size={10} />
-            <span className="truncate" style={{ color: "var(--faint)" }}>
+            <Settings2 size={10} className="shrink-0" />
+            {/*
+              The option name is hidden on a phone: "Thinking Level High" does
+              not fit a 393px screen and wrapping is what made the composer tall.
+              The value is what the user is actually choosing.
+            */}
+            <span className="hidden truncate sm:inline" style={{ color: "var(--faint)" }}>
               {option.name}
             </span>
             <span className="truncate font-medium" style={{ color: "var(--fg)" }}>

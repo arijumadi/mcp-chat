@@ -548,3 +548,28 @@ button {
     display: none;
   }
 }
+
+/*
+ * The composer textarea drew a scrollbar as soon as it had any content on
+ * mobile browsers, which looked like a broken box. Hide it until the content
+ * actually overflows, and keep the scroll behaviour for long drafts.
+ */
+.composer-input {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.composer-input:hover,
+.composer-input:focus {
+  scrollbar-color: var(--border-strong) transparent;
+}
+.composer-input::-webkit-scrollbar {
+  width: 6px;
+}
+.composer-input::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+}
+.composer-input:hover::-webkit-scrollbar-thumb,
+.composer-input:focus::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+}

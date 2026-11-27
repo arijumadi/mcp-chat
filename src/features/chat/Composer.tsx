@@ -524,12 +524,12 @@ export function Composer({ conversation }: { conversation: Conversation }) {
                   ? "Message the agent, or type / for its commands…"
                   : "Message the model…"
             }
-            className="max-h-[200px] min-h-[34px] w-full resize-none bg-transparent px-1.5 py-1.5 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:cursor-not-allowed"
+            className="composer-input max-h-[200px] min-h-[34px] w-full resize-none bg-transparent px-1.5 py-1.5 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:cursor-not-allowed"
             style={{ fontSize: "calc(var(--chat-fs) - 1px)" }}
             title="Enter to send · Shift+Enter for a new line · drop or paste files"
             aria-label="Message"
           />
-          <div className="mt-0.5 flex flex-wrap items-center gap-1 px-0.5">
+          <div className="mt-0.5 flex items-center gap-1 overflow-x-auto px-0.5 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <button
               type="button"
               onClick={() => void chooseFiles()}
@@ -545,16 +545,18 @@ export function Composer({ conversation }: { conversation: Conversation }) {
                 <Paperclip size={13} />
               )}
             </button>
-            {conversation.acpAgent ? (
-              <AgentConfigPicker conversation={conversation} disabled={active} />
-            ) : (
-              <>
-                <ModelPicker conversation={conversation} disabled={active} />
-                <ReasoningPicker conversation={conversation} disabled={active} />
-              </>
-            )}
-            <AutoApproveButton />
-            <div className="ml-auto flex items-center gap-2">
+            <div className="flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {conversation.acpAgent ? (
+                <AgentConfigPicker conversation={conversation} disabled={active} />
+              ) : (
+                <>
+                  <ModelPicker conversation={conversation} disabled={active} />
+                  <ReasoningPicker conversation={conversation} disabled={active} />
+                </>
+              )}
+              <AutoApproveButton />
+            </div>
+            <div className="ml-auto flex shrink-0 items-center gap-2">
               {active ? (
                 <>
                   {hasContent || steering ? (
@@ -611,12 +613,12 @@ export function Composer({ conversation }: { conversation: Conversation }) {
           className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 text-[10px]"
           style={{ color: "var(--faint)" }}
         >
-          <span>
+          <span className="hidden sm:inline">
             {steering
               ? "Steering… stopping the current turn"
               : "Enter to send · Shift+Enter newline"}
           </span>
-          <span>
+          <span className="min-w-0 truncate">
             {active && step
               ? step.max > 0
                 ? `step ${step.current}/${step.max} · `
