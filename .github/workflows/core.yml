@@ -178,3 +178,9 @@ jobs:
 
       - name: Clippy
         run: cargo clippy -p mcp-chat-server --all-targets -- -D warnings
+
+      # The dispatch layer is where a response shape can drift from what the
+      # frontend expects while both sides still typecheck. Only a test that
+      # calls the real command catches that.
+      - name: Test
+        run: cargo test -p mcp-chat-server
