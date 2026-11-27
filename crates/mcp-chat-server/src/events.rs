@@ -33,21 +33,19 @@ pub async fn events(State(state): State<Arc<AppState>>, headers: HeaderMap) -> R
         if let Some(event) = first {
             return Some((Ok::<_, Infallible>(frame(event)), (receiver, None)));
         }
-        loop {
-            match receiver.recv().await {
-                Ok(event) => return Some((Ok(frame(event)), (receiver, None))),
-                Err(broadcast::error::RecvError::Lagged(count)) => {
-                    let event = CoreEvent::Resync {
-                        reason: format!(
-                            "The UI could not keep up with {count} events; reloading the \
-                                 active conversation."
-                        ),
-                    };
-                    return Some((Ok(frame(event)), (receiver, None)));
-                }
-                Err(broadcast::error::RecvError::Closed) => return None,
-            }
-        }
+        let event = match receiver.recv().await {
+            Ok(event) => event,
+            // Losing events silently would leave the transcript wrong, so ask
+            // the client to reload, exactly like the desktop does.
+            Err(broadcast::error::RecvError::Lagged(count)) => CoreEvent::Resync {
+                reason: format!(
+                    "The UI could not keep up with {count} events; reloading the active \
+                     conversation."
+                ),
+            },
+            Err(broadcast::error::RecvError::Closed) => return None,
+        };
+        Some((Ok(frame(event)), (receiver, None)))
     });
 
     Sse::new(stream)
