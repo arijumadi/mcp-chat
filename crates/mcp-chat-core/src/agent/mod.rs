@@ -345,7 +345,7 @@ impl ChatEngine {
     /// loop. Its own history is authoritative, so Jarvis does not send the
     /// transcript: only the newest user message is forwarded each turn.
     pub async fn set_conversation_agent(
-        &self,
+        self: &Arc<Self>,
         conversation_id: &str,
         slug: Option<&str>,
     ) -> Result<()> {
