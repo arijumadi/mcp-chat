@@ -546,10 +546,26 @@ pub fn transcript_for_handoff(history: &[MessageWithParts], limit: usize) -> Str
         lines.push(format!("{role}: {text}"));
     }
     // Keep the end of the conversation: the most recent decisions are what the
-    // next agent needs, and the start is usually a greeting.
-    let joined = lines.join("\n\n");
-    let (trimmed, _) = truncate_chars(&joined, limit);
-    trimmed
+    // next agent needs, and the start is usually a greeting. `truncate_chars`
+    // cuts from the front, which is the opposite of what a handoff wants, so
+    // drop whole messages from the top until the rest fits.
+    let mut kept: std::collections::VecDeque<String> = lines.into();
+    let mut total: usize = kept.iter().map(|line| line.chars().count() + 2).sum();
+    while total > limit && kept.len() > 1 {
+        if let Some(dropped) = kept.pop_front() {
+            total = total.saturating_sub(dropped.chars().count() + 2);
+        }
+    }
+    let joined = kept.into_iter().collect::<Vec<_>>().join("\n\n");
+    if joined.chars().count() <= limit {
+        joined
+    } else {
+        // A single message longer than the whole budget: keep its tail, which
+        // is where the conclusion sits.
+        let mut chars = joined.chars().rev().take(limit).collect::<Vec<_>>();
+        chars.reverse();
+        format!("[trimmed] ...{}", chars.into_iter().collect::<String>())
+    }
 }
 
 /// The block prepended to the first prompt of a newly opened session.
