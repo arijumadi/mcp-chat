@@ -411,10 +411,9 @@ impl ChatEngine {
                     return;
                 }
             };
-            let policy = crate::db::repo::acp_agents::PermissionPolicy::parse(
-                &agent.permission_policy,
-            )
-            .unwrap_or(crate::db::repo::acp_agents::PermissionPolicy::Ask);
+            let policy =
+                crate::db::repo::acp_agents::PermissionPolicy::parse(&agent.permission_policy)
+                    .unwrap_or(crate::db::repo::acp_agents::PermissionPolicy::Ask);
             match acp_turn::ensure_session(
                 engine.clone(),
                 &conversation_id,
@@ -443,10 +442,6 @@ impl ChatEngine {
             }
         });
 
-        Ok(())
-    }        let _ = self.events.send(CoreEvent::ConversationUpdated {
-            conversation_id: conversation_id.to_owned(),
-        });
         Ok(())
     }
 

@@ -604,3 +604,45 @@ async fn binding_a_broken_agent_keeps_the_binding() {
         "a broken agent exposes no options"
     );
 }
+
+/// Switching must not wait for the agent to start. A real Antigravity session
+/// takes 1.5-2.4s to answer `session/new`, and blocking a visual change on that
+/// felt like a hang.
+#[tokio::test]
+async fn switching_returns_before_the_agent_is_ready() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "echo").await;
+
+    let started = std::time::Instant::now();
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("mock"))
+        .await
+        .expect("bind");
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "the switch blocked for {elapsed:?}; opening the agent must not be awaited"
+    );
+
+    // The binding is already visible to the UI.
+    let conversation = conversations::get(&harness.db.pool, &harness.parent_id)
+        .await
+        .unwrap();
+    assert_eq!(conversation.acp_agent.as_deref(), Some("mock"));
+
+    // The options still arrive, without sending a message.
+    let mut ready = Vec::new();
+    for _ in 0..80 {
+        ready = harness.engine.agent_config(&harness.parent_id).await;
+        if !ready.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        !ready.is_empty(),
+        "the options must still arrive in the background"
+    );
+}
