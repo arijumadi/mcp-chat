@@ -1361,7 +1361,9 @@ async fn settle_call_error(
         disabled: false,
         cancel: CancellationToken::new(),
         active_server_slugs: active_server_slugs.to_vec(),
-        output_limits,
+        // Never executed: this request exists only to carry the error text into
+        // the transcript, so the limit is irrelevant.
+        output_limits: crate::agent::tools::OutputLimits::default(),
     };
     call.dispatched = true;
     let state = if message.contains("interrupted") {

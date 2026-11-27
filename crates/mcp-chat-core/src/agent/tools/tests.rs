@@ -2222,46 +2222,46 @@ async fn read_still_treats_a_foreign_path_as_outside() {
         "a foreign path was read without approval: {:?}",
         outcome.map(|result| result.content)
     );
+}
 
-    /// The limits used to be fixed at 12k/16k/24k characters whatever the model,
-    /// which is under 3% of a 128k window. They now follow the window, with a floor
-    /// so a small model is still workable and a ceiling so one result cannot fill
-    /// the context by itself.
-    #[test]
-    fn output_limits_follow_the_model_window() {
-        let small = crate::agent::tools::OutputLimits::for_context(16_000, 100);
-        let large = crate::agent::tools::OutputLimits::for_context(1_000_000, 100);
+/// The limits used to be fixed at 12k/16k/24k characters whatever the model,
+/// which is under 3% of a 128k window. They now follow the window, with a floor
+/// so a small model is still workable and a ceiling so one result cannot fill
+/// the context by itself.
+#[test]
+fn output_limits_follow_the_model_window() {
+    let small = crate::agent::tools::OutputLimits::for_context(16_000, 100);
+    let large = crate::agent::tools::OutputLimits::for_context(1_000_000, 100);
 
-        assert!(
-            small.shell >= 4_000,
-            "a small window still gets a usable preview: {}",
-            small.shell
-        );
-        assert!(
-            large.shell > small.shell,
-            "a larger window must allow more: {} vs {}",
-            large.shell,
-            small.shell
-        );
-        assert!(
-            large.read <= 60_000,
-            "one result must not flood even a huge window: {}",
-            large.read
-        );
+    assert!(
+        small.shell >= 4_000,
+        "a small window still gets a usable preview: {}",
+        small.shell
+    );
+    assert!(
+        large.shell > small.shell,
+        "a larger window must allow more: {} vs {}",
+        large.shell,
+        small.shell
+    );
+    assert!(
+        large.read <= 60_000,
+        "one result must not flood even a huge window: {}",
+        large.read
+    );
 
-        let default = crate::agent::tools::OutputLimits::for_context(128_000, 100);
-        assert!(
-            default.shell > 16_000,
-            "the old fixed 16k was below the share: {}",
-            default.shell
-        );
+    let default = crate::agent::tools::OutputLimits::for_context(128_000, 100);
+    assert!(
+        default.shell > 16_000,
+        "the old fixed 16k was below the share: {}",
+        default.shell
+    );
 
-        let doubled = crate::agent::tools::OutputLimits::for_context(128_000, 200);
-        assert!(
-            doubled.other >= default.other * 2 - 1,
-            "the setting scales the limits: {} vs {}",
-            doubled.other,
-            default.other
-        );
-    }
+    let doubled = crate::agent::tools::OutputLimits::for_context(128_000, 200);
+    assert!(
+        doubled.other >= default.other * 2 - 1,
+        "the setting scales the limits: {} vs {}",
+        doubled.other,
+        default.other
+    );
 }
