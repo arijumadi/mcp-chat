@@ -173,7 +173,7 @@ fn resolve_program(program: &str) -> String {
     {
         // Windows already searches the current directory and PATHEXT, and its
         // per-user install location is not these directories.
-        return program.to_owned();
+        program.to_owned()
     }
     #[cfg(unix)]
     {
