@@ -172,21 +172,21 @@ pub(crate) fn resolve_read_path_with(
     }
     if let Some(root) = attachments {
         let input = PathBuf::from(raw);
-        // Compare the canonical form so a symlink cannot step out, and only
-        // then hand back the resolved path.
         if input.is_absolute() {
-            let normalized = simplify_path(&normalize_lexically(&input));
-            if path_is_within(root, &normalized) {
-                let canonical = normalized
-                    .canonicalize()
-                    .map(|path| simplify_path(&path))
-                    .map_err(|_| CoreError::invalid(format!("Path not found: {raw}")))?;
-                if !path_is_within(root, &canonical) {
+            // Canonicalize both sides before comparing. On Windows a temp
+            // directory comes back as `\\?\C:\...` from one API and bare
+            // `C:\...` from another, and a prefix test across the two forms is
+            // always false. Only a canonical path can be trusted to check a
+            // symlink escape anyway.
+            let root = root.canonicalize().map(|path| simplify_path(&path)).ok();
+            let normalized = input.canonicalize().map(|path| simplify_path(&path)).ok();
+            if let (Some(root), Some(normalized)) = (root, normalized) {
+                if !path_is_within(&root, &normalized) {
                     return Err(CoreError::invalid(
                         "Path resolves outside the attachments folder.",
                     ));
                 }
-                return Ok(canonical);
+                return Ok(normalized);
             }
         }
     }
@@ -223,8 +223,17 @@ pub(crate) fn path_is_outside_of(workspace: &Path, attachments: Option<&Path>, r
         return false;
     }
     if let Some(attachments) = attachments {
-        if path_is_within(attachments, &simplify_path(Path::new(raw))) {
-            return false;
+        // Both sides canonicalized: Windows mixes `\\?\C:\...` and `C:\...`
+        // between APIs, so a raw prefix test is unreliable.
+        let candidate = Path::new(raw);
+        if candidate.is_absolute() {
+            let root = attachments.canonicalize().ok();
+            let candidate = candidate.canonicalize().ok();
+            if let (Some(root), Some(candidate)) = (root, candidate) {
+                if path_is_within(&simplify_path(&root), &simplify_path(&candidate)) {
+                    return false;
+                }
+            }
         }
     }
     let input = PathBuf::from(raw);
