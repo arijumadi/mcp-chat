@@ -381,45 +381,67 @@ impl ChatEngine {
         }
         conversations::set_acp(&self.db.pool, conversation_id, &agent.slug, None).await?;
 
-        // Open the session now instead of waiting for the first message. The
-        // agent publishes its model, thinking level and mode in the
-        // `session/new` response, so without this the pickers stayed empty
-        // until the user had already sent something.
-        let workspace =
-            crate::agent::tools::workspace_root_for_conversation(&self.db.pool, conversation_id)
-                .await?;
-        let policy = crate::db::repo::acp_agents::PermissionPolicy::parse(&agent.permission_policy)
-            .unwrap_or(crate::db::repo::acp_agents::PermissionPolicy::Ask);
-        match acp_turn::ensure_session(
-            self.clone(),
-            conversation_id,
-            &agent,
-            &workspace,
-            &tokio_util::sync::CancellationToken::new(),
-            policy,
-        )
-        .await
-        {
-            Ok(active) => {
-                // `take` removed the session from the registry; hand it back so
-                // the turn does not have to open a second process.
-                self.acp.put_events(conversation_id, active.events).await;
-            }
-            Err(error) => {
-                // Binding must not fail because an agent is signed out; the
-                // chat keeps the binding and reports the problem on the first
-                // turn, where the user can see it in the transcript.
-                tracing::warn!(
-                    conversation = %conversation_id,
-                    error = %error.user_message(),
-                    "could not open the ACP session while binding"
-                );
-            }
-        }
-
+        // Tell the UI immediately. Opening the agent takes seconds — a real
+        // Antigravity session takes 1.5 to 2.4 just to answer `session/new` —
+        // and making the switch wait for that felt like a hang for a purely
+        // visual change.
         let _ = self.events.send(CoreEvent::ConversationUpdated {
             conversation_id: conversation_id.to_owned(),
         });
+
+        // Open the session in the background. The options still arrive without
+        // the first message: the pump announces them, and a second
+        // `ConversationUpdated` makes the pickers ask again.
+        let engine = self.clone();
+        let conversation_id = conversation_id.to_owned();
+        tokio::spawn(async move {
+            let workspace = match crate::agent::tools::workspace_root_for_conversation(
+                &engine.db.pool,
+                &conversation_id,
+            )
+            .await
+            {
+                Ok(workspace) => workspace,
+                Err(error) => {
+                    tracing::warn!(
+                        conversation = %conversation_id,
+                        error = %error.user_message(),
+                        "could not resolve the workspace for the ACP session"
+                    );
+                    return;
+                }
+            };
+            let policy =
+                crate::db::repo::acp_agents::PermissionPolicy::parse(&agent.permission_policy)
+                    .unwrap_or(crate::db::repo::acp_agents::PermissionPolicy::Ask);
+            match acp_turn::ensure_session(
+                engine.clone(),
+                &conversation_id,
+                &agent,
+                &workspace,
+                &tokio_util::sync::CancellationToken::new(),
+                policy,
+            )
+            .await
+            {
+                Ok(active) => {
+                    engine.acp.put_events(&conversation_id, active.events).await;
+                    // The pickers load on this event; without it they would
+                    // wait for the first turn, which is what felt broken.
+                    let _ = engine.events.send(CoreEvent::ConversationUpdated {
+                        conversation_id: conversation_id.clone(),
+                    });
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        conversation = %conversation_id,
+                        error = %error.user_message(),
+                        "could not open the ACP session while binding"
+                    );
+                }
+            }
+        });
+
         Ok(())
     }
 

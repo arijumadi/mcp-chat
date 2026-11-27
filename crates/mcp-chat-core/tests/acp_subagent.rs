@@ -548,8 +548,11 @@ async fn wait_for_state(harness: &Harness, conversation_id: &str) -> (String, St
 /// The model, thinking level and mode come from `session/new`. Binding a chat
 /// used to only write the marker, so the pickers stayed empty until the first
 /// message created the session.
+///
+/// The options arrive asynchronously now that the switch does not block on the
+/// agent starting, so this waits for them rather than reading once.
 #[tokio::test]
-async fn binding_a_chat_makes_its_options_available_immediately() {
+async fn binding_a_chat_makes_its_options_available_without_a_message() {
     let harness = Harness::new().await;
     harness.register_agent("mock", "echo").await;
 
@@ -559,7 +562,14 @@ async fn binding_a_chat_makes_its_options_available_immediately() {
         .await
         .expect("bind");
 
-    let options = harness.engine.agent_config(&harness.parent_id).await;
+    let mut options = Vec::new();
+    for _ in 0..100 {
+        options = harness.engine.agent_config(&harness.parent_id).await;
+        if !options.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     assert!(
         !options.is_empty(),
         "the pickers need the agent's options before the first message"
@@ -602,5 +612,47 @@ async fn binding_a_broken_agent_keeps_the_binding() {
             .await
             .is_empty(),
         "a broken agent exposes no options"
+    );
+}
+
+/// Switching must not wait for the agent to start. A real Antigravity session
+/// takes 1.5-2.4s to answer `session/new`, and blocking a visual change on that
+/// felt like a hang.
+#[tokio::test]
+async fn switching_returns_before_the_agent_is_ready() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "echo").await;
+
+    let started = std::time::Instant::now();
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("mock"))
+        .await
+        .expect("bind");
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "the switch blocked for {elapsed:?}; opening the agent must not be awaited"
+    );
+
+    // The binding is already visible to the UI.
+    let conversation = conversations::get(&harness.db.pool, &harness.parent_id)
+        .await
+        .unwrap();
+    assert_eq!(conversation.acp_agent.as_deref(), Some("mock"));
+
+    // The options still arrive, without sending a message.
+    let mut ready = Vec::new();
+    for _ in 0..80 {
+        ready = harness.engine.agent_config(&harness.parent_id).await;
+        if !ready.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        !ready.is_empty(),
+        "the options must still arrive in the background"
     );
 }
