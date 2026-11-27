@@ -14,15 +14,15 @@ import type { AgentConfigOption, Conversation } from "@/lib/types";
 export function AgentConfigPicker({
   conversation,
   disabled = false,
-  only,
-  except,
+  categories,
+  withoutCategories,
 }: {
   conversation: Conversation;
   disabled?: boolean;
-  /** When set, show only these option ids. */
-  only?: string[];
-  /** When set, hide these option ids. */
-  except?: string[];
+  /** When set, show only options in these categories. */
+  categories?: string[];
+  /** When set, hide options in these categories. */
+  withoutCategories?: string[];
 }) {
   const options = useApp((state) => state.agentConfig);
   const setConfig = useApp((state) => state.setAgentConfig);
@@ -38,13 +38,17 @@ export function AgentConfigPicker({
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
 
-  // The composer splits these by importance: the model stays beside the
-  // message, the rest move to the quieter row below. `only`/`except` keep that
-  // arrangement out of the picker itself.
+  // The composer splits these by importance: the model and thinking level stay
+  // beside the message, the rest move to the quieter row below. The split is by
+  // category because option ids differ between agents while the categories come
+  // from the protocol; agents that send no category fall back to their id.
+  const categoryOf = (option: AgentConfigOption) => option.category ?? option.id;
   const selectable = options
     .filter((option) => option.kind === "select" && option.choices.length > 0)
-    .filter((option) => (only ? only.includes(option.id) : true))
-    .filter((option) => (except ? !except.includes(option.id) : true));
+    .filter((option) => (categories ? categories.includes(categoryOf(option)) : true))
+    .filter((option) =>
+      withoutCategories ? !withoutCategories.includes(categoryOf(option)) : true,
+    );
   if (selectable.length === 0) return null;
 
   const label = (option: AgentConfigOption) =>
@@ -52,14 +56,14 @@ export function AgentConfigPicker({
     option.currentValue;
 
   return (
-    <div ref={ref} className="flex min-w-0 flex-wrap items-center gap-1 sm:flex-nowrap">
+    <div ref={ref} className="flex min-w-0 items-center gap-1">
       {selectable.map((option) => (
-        <div key={option.id} className="relative min-w-0">
+        <div key={option.id} className="relative min-w-0 shrink">
           <button
             type="button"
             onClick={() => setOpen((value) => (value === option.id ? null : option.id))}
             disabled={disabled}
-            className="focus-ring flex max-w-[190px] items-center gap-1 rounded-md border border-transparent px-1.5 py-1 text-[10px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="focus-ring flex min-w-0 max-w-full items-center gap-1 rounded-md border border-transparent px-1.5 py-1 text-[10px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50 sm:max-w-[260px]"
             style={{ color: "var(--muted)" }}
             title={option.description ?? option.name}
           >

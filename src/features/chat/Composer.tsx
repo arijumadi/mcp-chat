@@ -550,7 +550,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
                 <AgentConfigPicker
                   conversation={conversation}
                   disabled={active}
-                  only={["model"]}
+                  categories={["model", "thought_level"]}
                 />
               ) : (
                 <ModelPicker conversation={conversation} disabled={active} />
@@ -610,7 +610,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
             <AgentConfigPicker
               conversation={conversation}
               disabled={active}
-              except={["model"]}
+              withoutCategories={["model", "thought_level"]}
             />
           ) : (
             <ReasoningPicker conversation={conversation} disabled={active} />
