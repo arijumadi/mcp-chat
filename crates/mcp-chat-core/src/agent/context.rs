@@ -471,6 +471,98 @@ pub fn estimate_tokens(messages: &[ChatMessage], tools: &[ToolDef], system: Opti
     (chars / 4).max(1)
 }
 
+/// A compact transcript to carry a chat across an agent switch.
+///
+/// Two ACP agents cannot share a session: the session id belongs to one agent,
+/// and its history lives inside that agent's own store. Switching therefore
+/// starts a fresh session, and without this the new agent would answer as if the
+/// conversation had just begun.
+///
+/// The transcript is built from parts Jarvis already stores, so no model call
+/// is involved and switching stays instant and free. Tool output is trimmed hard
+/// because the new agent can re-read files itself; what it needs is what was
+/// asked, what was decided, and what changed.
+pub fn transcript_for_handoff(history: &[MessageWithParts], limit: usize) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for message in history {
+        // Synthetic rows and tool transcript rows are attachment points for the
+        // provider, not part of the conversation a person would recognise.
+        if message.message.status == "synthetic" || message.message.role == "tool" {
+            continue;
+        }
+        let mut text = String::new();
+        for part in &message.parts {
+            let payload = part.payload();
+            match part.kind.as_str() {
+                "text" => {
+                    if let Some(value) = payload.get("text").and_then(|v| v.as_str()) {
+                        if !text.is_empty() {
+                            text.push('\n');
+                        }
+                        text.push_str(value);
+                    }
+                }
+                "tool_call" => {
+                    let name = payload
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("tool");
+                    let arguments = payload.get("args").cloned().unwrap_or_default();
+                    let arguments =
+                        truncate_chars(&serde_json::to_string(&arguments).unwrap_or_default(), 160)
+                            .0;
+                    let state = payload.get("state").and_then(|v| v.as_str()).unwrap_or("");
+                    text.push_str(&format!("\n[tool {name} {state} {arguments}]"));
+                }
+                "summary" => {
+                    if let Some(value) = payload.get("text").and_then(|v| v.as_str()) {
+                        text.push_str(&format!("\n[earlier summary] {value}"));
+                    }
+                }
+                "context" => {
+                    let path = payload.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    text.push_str(&format!("\n[file context {path}]"));
+                }
+                "attachment" => {
+                    let name = payload
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("file");
+                    let path = payload.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    text.push_str(&format!("\n[attached {name} at {path}]"));
+                }
+                _ => {}
+            }
+        }
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let role = match message.message.role.as_str() {
+            "assistant" => "Assistant",
+            "system" => "System",
+            _ => "User",
+        };
+        lines.push(format!("{role}: {text}"));
+    }
+    // Keep the end of the conversation: the most recent decisions are what the
+    // next agent needs, and the start is usually a greeting.
+    let joined = lines.join("\n\n");
+    let (trimmed, _) = truncate_chars(&joined, limit);
+    trimmed
+}
+
+/// The block prepended to the first prompt of a newly opened session.
+pub fn handoff_block(transcript: &str) -> String {
+    format!(
+        "You are taking over this conversation from another agent. Nothing you \
+         remember is available from it, so here is what has happened so far, \
+         oldest first. Carry on from the last message; do not repeat the summary \
+         back unless asked.\n\n<previous_conversation>\n{transcript}\n\
+         </previous_conversation>"
+    )
+}
+
 pub fn transcript_for_summary(history: &[MessageWithParts]) -> String {
     let mut out = String::new();
     for message in history {
@@ -780,5 +872,130 @@ mod tests {
         let text = messages[0].text_content();
         assert!(text.contains("notes.txt"));
         assert!(text.contains("hello"));
+    }
+
+    /// Switching agents starts a new ACP session, and a new session knows
+    /// nothing. The transcript is what stops the next agent from answering as
+    /// if the chat had just begun.
+    #[tokio::test]
+    async fn a_handoff_carries_the_conversation_forward() {
+        let history = vec![
+            message_with_parts(vec![Part {
+                id: "u1".into(),
+                message_id: "m1".into(),
+                idx: 0,
+                kind: "text".into(),
+                payload_json: json!({"text": "refactor the parser"}).to_string(),
+            }]),
+            MessageWithParts {
+                message: Message {
+                    id: "m2".into(),
+                    conversation_id: "c1".into(),
+                    role: "assistant".into(),
+                    created_at: 1,
+                    status: "completed".into(),
+                    error: None,
+                },
+                parts: vec![
+                    Part {
+                        id: "a1".into(),
+                        message_id: "m2".into(),
+                        idx: 0,
+                        kind: "text".into(),
+                        payload_json: json!({"text": "I moved parse() into parser.rs."})
+                            .to_string(),
+                    },
+                    Part {
+                        id: "t1".into(),
+                        message_id: "m2".into(),
+                        idx: 1,
+                        kind: "tool_call".into(),
+                        payload_json: json!({
+                            "name": "write",
+                            "state": "completed",
+                            "callId": "c-1",
+                            "args": {"filePath": "src/parser.rs"}
+                        })
+                        .to_string(),
+                    },
+                ],
+            },
+        ];
+
+        let transcript = transcript_for_handoff(&history, 24_000);
+        assert!(transcript.contains("refactor the parser"), "{transcript}");
+        assert!(transcript.contains("moved parse()"), "{transcript}");
+        assert!(
+            transcript.contains("src/parser.rs"),
+            "the new agent needs to know which files were touched: {transcript}"
+        );
+
+        let block = handoff_block(&transcript);
+        assert!(block.contains("<previous_conversation>"), "{block}");
+        assert!(block.contains("taking over"), "{block}");
+    }
+
+    /// Tool transcripts and synthetic rows are provider scaffolding, not
+    /// conversation; carrying them would spend the budget on noise.
+    #[tokio::test]
+    async fn a_handoff_skips_tool_and_synthetic_rows() {
+        let history = vec![
+            MessageWithParts {
+                message: Message {
+                    id: "t".into(),
+                    conversation_id: "c1".into(),
+                    role: "tool".into(),
+                    created_at: 0,
+                    status: "completed".into(),
+                    error: None,
+                },
+                parts: vec![Part {
+                    id: "p".into(),
+                    message_id: "t".into(),
+                    idx: 0,
+                    kind: "text".into(),
+                    payload_json: json!({"text": "raw provider payload"}).to_string(),
+                }],
+            },
+            MessageWithParts {
+                message: Message {
+                    id: "s".into(),
+                    conversation_id: "c1".into(),
+                    role: "user".into(),
+                    created_at: 1,
+                    status: "synthetic".into(),
+                    error: None,
+                },
+                parts: vec![Part {
+                    id: "p2".into(),
+                    message_id: "s".into(),
+                    idx: 0,
+                    kind: "text".into(),
+                    payload_json: json!({"text": "continue please"}).to_string(),
+                }],
+            },
+        ];
+        assert!(transcript_for_handoff(&history, 24_000).is_empty());
+    }
+
+    /// A long chat must not blow the budget; the recent end is what matters.
+    #[tokio::test]
+    async fn a_handoff_keeps_the_recent_end_when_it_is_long() {
+        let mut history = Vec::new();
+        for index in 0..50 {
+            history.push(message_with_parts(vec![Part {
+                id: format!("p{index}"),
+                message_id: "m1".into(),
+                idx: 0,
+                kind: "text".into(),
+                payload_json: json!({"text": format!("message number {index}")}).to_string(),
+            }]));
+        }
+        let transcript = transcript_for_handoff(&history, 400);
+        assert!(transcript.chars().count() < 600, "{transcript}");
+        assert!(
+            transcript.contains("message number 49"),
+            "the newest messages must survive the trim: {transcript}"
+        );
     }
 }

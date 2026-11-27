@@ -45,6 +45,10 @@ pub struct TurnSpec<'a> {
     /// Absolute working directory, already checked to be inside the parent's
     /// workspace.
     pub cwd: &'a std::path::Path,
+    /// Prepended to the prompt when this turn opens a brand-new session, so an
+    /// agent that was switched to mid-conversation is not starting from zero.
+    /// Empty means "nothing to carry over" and changes nothing.
+    pub handoff: &'a str,
 }
 
 /// Run one prompt turn against the agent, reusing its live session if any.
@@ -78,8 +82,21 @@ pub async fn run_turn(
         images: active.handle.accepts_images,
         embedded_context: active.handle.accepts_embedded_context,
     };
-    let blocks =
-        crate::acp::prompt::build_prompt(spec.prompt, &spec.attachments, &spec.contexts, caps);
+    // A session that neither existed nor could be resumed has no memory of this
+    // conversation. Only then is the transcript worth its tokens; a resumed
+    // session already knows, and repeating it would duplicate the history.
+    let fresh = !active.handle.resumed();
+    let prompt = if fresh && !spec.handoff.trim().is_empty() {
+        let carried = crate::agent::context::handoff_block(spec.handoff);
+        if spec.prompt.trim().is_empty() {
+            carried
+        } else {
+            format!("{carried}\n\n{}", spec.prompt)
+        }
+    } else {
+        spec.prompt.to_owned()
+    };
+    let blocks = crate::acp::prompt::build_prompt(&prompt, &spec.attachments, &spec.contexts, caps);
 
     let events = stream_turn(
         engine.clone(),

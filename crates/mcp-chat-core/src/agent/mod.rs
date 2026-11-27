@@ -59,6 +59,14 @@ impl Drop for TurnSlot {
     }
 }
 
+/// How much of a conversation is carried across an agent switch.
+///
+/// A model context is tens of thousands of tokens and the transcript is only
+/// the seed for a new agent, not the whole history: it can re-read files with
+/// its own tools. Roughly six thousand tokens keeps the shape of the
+/// conversation without crowding out the work.
+const HANDOFF_TRANSCRIPT_CHARS: usize = 24_000;
+
 pub struct ChatEngine {
     pub db: Db,
     pub secrets: Arc<dyn SecretStore>,
@@ -641,6 +649,17 @@ impl ChatEngine {
         let workspace =
             crate::agent::tools::workspace_root_for_conversation(&self.db.pool, conversation_id)
                 .await?;
+        // Everything before this message is the context a freshly opened
+        // session would otherwise miss. `history` already ends with the message
+        // being sent, so drop it to avoid repeating the prompt.
+        let carried = history
+            .split_last()
+            .map(|(_, earlier)| earlier)
+            .filter(|earlier| !earlier.is_empty())
+            .map(|earlier| {
+                crate::agent::context::transcript_for_handoff(earlier, HANDOFF_TRANSCRIPT_CHARS)
+            })
+            .unwrap_or_default();
         acp_turn::run_turn(
             self.clone(),
             acp_turn::TurnSpec {
@@ -650,6 +669,7 @@ impl ChatEngine {
                 contexts,
                 agent: &agent,
                 cwd: &workspace,
+                handoff: &carried,
             },
             cancel,
         )
