@@ -65,7 +65,20 @@ impl Drop for TurnSlot {
 /// the seed for a new agent, not the whole history: it can re-read files with
 /// its own tools. Roughly six thousand tokens keeps the shape of the
 /// conversation without crowding out the work.
-const HANDOFF_TRANSCRIPT_CHARS: usize = 24_000;
+/// Default size of the transcript carried across an agent switch.
+///
+/// Unlike the built-in tools, an ACP agent does not publish its context window:
+/// the protocol has no field for it, and the agent's model is its own business.
+/// A share of the window therefore cannot be computed, so this is a budget the
+/// user can raise or lower with `acp.handoff_chars`. 48k characters is roughly
+/// twelve thousand tokens, which carries a long conversation's decisions without
+/// crowding out the agent's own tools and prompt.
+const HANDOFF_DEFAULT_CHARS: usize = 48_000;
+
+/// Never send a transcript larger than this, whatever the setting says. A
+/// handoff that fills the window would make the first turn fail, which is worse
+/// than a shorter summary.
+const HANDOFF_MAX_CHARS: usize = 200_000;
 
 pub struct ChatEngine {
     pub db: Db,
@@ -652,14 +665,24 @@ impl ChatEngine {
         // Everything before this message is the context a freshly opened
         // session would otherwise miss. `history` already ends with the message
         // being sent, so drop it to avoid repeating the prompt.
-        let carried = history
+        let earlier = history
             .split_last()
             .map(|(_, earlier)| earlier)
-            .filter(|earlier| !earlier.is_empty())
-            .map(|earlier| {
-                crate::agent::context::transcript_for_handoff(earlier, HANDOFF_TRANSCRIPT_CHARS)
-            })
-            .unwrap_or_default();
+            .filter(|earlier| !earlier.is_empty());
+        let carried = match earlier {
+            Some(earlier) => {
+                let configured = settings::get_i64(
+                    &self.db.pool,
+                    "acp.handoff_chars",
+                    HANDOFF_DEFAULT_CHARS as i64,
+                )
+                .await
+                .unwrap_or(HANDOFF_DEFAULT_CHARS as i64);
+                let budget = (configured.max(1) as usize).min(HANDOFF_MAX_CHARS);
+                crate::agent::context::transcript_for_handoff(earlier, budget)
+            }
+            None => String::new(),
+        };
         acp_turn::run_turn(
             self.clone(),
             acp_turn::TurnSpec {

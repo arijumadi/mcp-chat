@@ -57,11 +57,76 @@ use std::time::Instant;
 use tokio::sync::{Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
 
-const MODEL_OUTPUT_LIMIT: usize = 12_000;
+/// How much of one tool result reaches the model.
+///
+/// These were fixed numbers (12k/16k/24k), chosen when a large context was
+/// expensive to assume. They do not scale: 12k characters is about 3k tokens,
+/// which is under 3% of a 128k window and under 1% of a 1M one, so a capable
+/// model was being fed a preview and asked to page in the rest with extra tool
+/// calls. The limits are now a share of the model's own window, which keeps a
+/// small model safe and stops handicapping a large one.
+#[derive(Debug, Clone, Copy)]
+pub struct OutputLimits {
+    pub shell: usize,
+    pub read: usize,
+    pub other: usize,
+}
 
-const SHELL_OUTPUT_LIMIT: usize = 16_000;
+/// Share of the context window one result may occupy, in percent.
+const SHELL_SHARE: usize = 6;
+const READ_SHARE: usize = 10;
+const OTHER_SHARE: usize = 6;
 
-const READ_OUTPUT_LIMIT: usize = 24_000;
+/// A result is never larger than this many characters, whatever the window.
+/// Even a 1M-token model should not receive a hundred thousand characters of one
+/// command's output in a single message.
+const MAX_RESULT_CHARS: usize = 60_000;
+
+/// Below this the share is too small to be useful; a 16k-window model still
+/// deserves to see a few thousand characters before it is asked to page.
+const MIN_RESULT_CHARS: usize = 4_000;
+
+impl Default for OutputLimits {
+    fn default() -> Self {
+        Self {
+            shell: 16_000,
+            read: 24_000,
+            other: 12_000,
+        }
+    }
+}
+
+impl OutputLimits {
+    /// Derive limits from the model's window, honouring a user override.
+    ///
+    /// `scale` comes from the settings and is a percentage: 100 keeps the
+    /// computed value, 200 doubles it, 50 halves it. It exists because "how much
+    /// output do I want to see" is a working preference, not a fact about the
+    /// model.
+    pub fn for_context(context_window: i64, scale: i64) -> Self {
+        // `context_window` is in tokens; results are measured in characters, and
+        // four characters per token is the usual rough ratio. A 128k window with
+        // a 6% share is therefore about 30k characters.
+        let window = context_window.max(1) as usize;
+        let chars_for = |share: usize| -> usize {
+            let tokens = window.saturating_mul(share) / 100;
+            tokens
+                .saturating_mul(4)
+                .clamp(MIN_RESULT_CHARS, MAX_RESULT_CHARS)
+        };
+        let scaled = |value: usize| -> usize {
+            if scale <= 0 {
+                return value;
+            }
+            (value.saturating_mul(scale as usize) / 100).clamp(MIN_RESULT_CHARS, MAX_RESULT_CHARS)
+        };
+        Self {
+            shell: scaled(chars_for(SHELL_SHARE)),
+            read: scaled(chars_for(READ_SHARE)),
+            other: scaled(chars_for(OTHER_SHARE)),
+        }
+    }
+}
 
 const PREVIEW_LIMIT: usize = 4_000;
 
@@ -115,6 +180,9 @@ pub struct ToolExecRequest {
     pub disabled: bool,
     pub cancel: CancellationToken,
     pub active_server_slugs: Vec<String>,
+    /// How much of this result may reach the model, derived from the model's
+    /// own context window by the caller that resolved it.
+    pub output_limits: OutputLimits,
 }
 
 #[derive(Debug, Clone)]
@@ -458,11 +526,11 @@ impl ToolExecutor {
                 let output_limit = if is_pager {
                     usize::MAX
                 } else if matches!(req.remote_name.as_str(), "bash" | "python") {
-                    SHELL_OUTPUT_LIMIT
+                    req.output_limits.shell
                 } else if req.remote_name == "read" {
-                    READ_OUTPUT_LIMIT
+                    req.output_limits.read
                 } else {
-                    MODEL_OUTPUT_LIMIT
+                    req.output_limits.other
                 };
                 if content.chars().count() > output_limit {
                     let (cut, _) = truncate_chars(&full_text, output_limit);

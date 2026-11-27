@@ -352,6 +352,7 @@ impl ToolExecutor {
             disabled: false,
             cancel: req.cancel.clone(),
             active_server_slugs: req.active_server_slugs.clone(),
+            output_limits: req.output_limits,
         };
         let outcome = self.run_mcp(&target_request, &tool).await;
         self.finish(req, started, outcome).await
@@ -571,6 +572,7 @@ impl ToolExecutor {
             disabled: false,
             cancel: req.cancel.clone(),
             active_server_slugs: req.active_server_slugs.clone(),
+            output_limits: req.output_limits,
         };
         match self.run_mcp(&target_request, &tool).await {
             Ok(Rendered {
