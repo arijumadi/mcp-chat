@@ -77,17 +77,31 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const canSteer = hasContent && active && !disabled && !steering;
   const showDrop = dragging && !active && !disabled;
 
+  // `acpAgent` is part of the dependency list on purpose: switching agents
+  // keeps the same conversation id, so id alone never re-ran this and the
+  // model picker stayed empty until the first message.
   useEffect(() => {
     void refreshAgentCommands(conversation.id);
     void refreshAgentConfig(conversation.id);
-  }, [conversation.id, refreshAgentCommands, refreshAgentConfig]);
+  }, [
+    conversation.id,
+    conversation.acpAgent,
+    refreshAgentCommands,
+    refreshAgentConfig,
+  ]);
 
   useEffect(() => {
     if (!active) {
       void refreshAgentCommands(conversation.id);
       void refreshAgentConfig(conversation.id);
     }
-  }, [active, conversation.id, refreshAgentCommands, refreshAgentConfig]);
+  }, [
+    active,
+    conversation.id,
+    conversation.acpAgent,
+    refreshAgentCommands,
+    refreshAgentConfig,
+  ]);
 
   useEffect(() => {
     const textarea = ref.current;

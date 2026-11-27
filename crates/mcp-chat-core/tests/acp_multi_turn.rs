@@ -409,3 +409,42 @@ async fn session_config_options_are_available_and_changeable() {
 
     manager.close("child-config").await.unwrap();
 }
+
+/// Switching between a binding and the built-in model must reuse the process,
+/// not leak one per switch, and the options must survive the round trip.
+#[tokio::test]
+async fn options_survive_a_take_and_put_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    let manager = AcpManager::new();
+    let mut active = manager
+        .open(SessionSpec {
+            local_id: "child-reuse".into(),
+            command: &mock_agent(),
+            args: &["echo".to_owned()],
+            env: &[],
+            cwd: &cwd,
+            resume: None,
+            permissions: no_permissions(),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(manager.count().await, 1);
+    let before = active.handle.config_options();
+    assert!(!before.is_empty(), "the agent publishes options at setup");
+
+    // What the manager does between turns.
+    let events = std::mem::replace(&mut active.events, tokio::sync::mpsc::unbounded_channel().1);
+    manager.put_events("child-reuse", events).await;
+
+    let again = manager.take("child-reuse").await.expect("still registered");
+    assert_eq!(
+        again.handle.config_options(),
+        before,
+        "the same process must still report its options"
+    );
+    assert_eq!(manager.count().await, 1, "no second session was opened");
+
+    manager.close("child-reuse").await.unwrap();
+}
