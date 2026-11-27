@@ -14,9 +14,15 @@ import type { AgentConfigOption, Conversation } from "@/lib/types";
 export function AgentConfigPicker({
   conversation,
   disabled = false,
+  only,
+  except,
 }: {
   conversation: Conversation;
   disabled?: boolean;
+  /** When set, show only these option ids. */
+  only?: string[];
+  /** When set, hide these option ids. */
+  except?: string[];
 }) {
   const options = useApp((state) => state.agentConfig);
   const setConfig = useApp((state) => state.setAgentConfig);
@@ -32,7 +38,13 @@ export function AgentConfigPicker({
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
 
-  const selectable = options.filter((option) => option.kind === "select" && option.choices.length > 0);
+  // The composer splits these by importance: the model stays beside the
+  // message, the rest move to the quieter row below. `only`/`except` keep that
+  // arrangement out of the picker itself.
+  const selectable = options
+    .filter((option) => option.kind === "select" && option.choices.length > 0)
+    .filter((option) => (only ? only.includes(option.id) : true))
+    .filter((option) => (except ? !except.includes(option.id) : true));
   if (selectable.length === 0) return null;
 
   const label = (option: AgentConfigOption) =>

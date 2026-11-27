@@ -545,16 +545,16 @@ export function Composer({ conversation }: { conversation: Conversation }) {
                 <Paperclip size={13} />
               )}
             </button>
-            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 sm:flex-nowrap">
+            <div className="flex min-w-0 flex-1 items-center gap-1">
               {conversation.acpAgent ? (
-                <AgentConfigPicker conversation={conversation} disabled={active} />
+                <AgentConfigPicker
+                  conversation={conversation}
+                  disabled={active}
+                  only={["model"]}
+                />
               ) : (
-                <>
-                  <ModelPicker conversation={conversation} disabled={active} />
-                  <ReasoningPicker conversation={conversation} disabled={active} />
-                </>
+                <ModelPicker conversation={conversation} disabled={active} />
               )}
-              <AutoApproveButton />
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-2">
               {active ? (
@@ -605,7 +605,18 @@ export function Composer({ conversation }: { conversation: Conversation }) {
           that change rarely, and sitting next to the composer buttons they made
           the input look crowded for no benefit while typing.
         */}
-        <div className="mt-1 flex min-w-0 items-center gap-1 px-0.5">
+        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 px-0.5 sm:flex-nowrap">
+          {conversation.acpAgent ? (
+            <AgentConfigPicker
+              conversation={conversation}
+              disabled={active}
+              except={["model"]}
+            />
+          ) : (
+            <ReasoningPicker conversation={conversation} disabled={active} />
+          )}
+          <AutoApproveButton />
+          <span className="mx-0.5 hidden h-3 w-px sm:block" style={{ background: "var(--border)" }} />
           <AgentPicker conversation={conversation} disabled={active} />
           <WorkspacePicker conversation={conversation} disabled={active} />
         </div>
