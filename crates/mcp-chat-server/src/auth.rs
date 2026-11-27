@@ -28,15 +28,17 @@ pub struct Auth {
     /// intended deployment is a loopback bind behind an SSH tunnel, where an
     /// HTTPS-only cookie would never come back.
     secure_cookie: bool,
-    allowed_host: Option<String>,
+    /// Accepted `Host` values. Empty means "accept anything", which is the
+    /// right default on a loopback bind where only this machine can reach us.
+    allowed_hosts: Vec<String>,
 }
 
 impl Auth {
-    pub fn new(token: String, secure_cookie: bool, allowed_host: Option<String>) -> Self {
+    pub fn new(token: String, secure_cookie: bool, allowed_hosts: Vec<String>) -> Self {
         Self {
             token,
             secure_cookie,
-            allowed_host,
+            allowed_hosts,
         }
     }
 
@@ -89,10 +91,13 @@ impl Auth {
 
     /// `Host` checking is a cheap defense against DNS rebinding: a page on
     /// `evil.example` that resolves to 127.0.0.1 still sends its own Host.
+    ///
+    /// More than one name is normal: a Tailscale host answers to its IP, its
+    /// MagicDNS name, and sometimes a short hostname.
     pub fn host_allowed(&self, headers: &HeaderMap) -> bool {
-        let Some(expected) = self.allowed_host.as_deref() else {
+        if self.allowed_hosts.is_empty() {
             return true;
-        };
+        }
         let Some(host) = headers
             .get(header::HOST)
             .and_then(|value| value.to_str().ok())
@@ -100,7 +105,9 @@ impl Auth {
             return false;
         };
         let host = host.split(':').next().unwrap_or(host);
-        host.eq_ignore_ascii_case(expected)
+        self.allowed_hosts
+            .iter()
+            .any(|allowed| host.eq_ignore_ascii_case(allowed))
     }
 }
 

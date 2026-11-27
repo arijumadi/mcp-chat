@@ -54,7 +54,7 @@ struct Config {
     bind: SocketAddr,
     token: String,
     secure_cookie: bool,
-    allowed_host: Option<String>,
+    allowed_hosts: Vec<String>,
 }
 
 impl Config {
@@ -75,10 +75,18 @@ impl Config {
         let secure_cookie = std::env::var("JARVIS_SECURE_COOKIE")
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-        let allowed_host = std::env::var("JARVIS_ALLOWED_HOST")
+        // Comma separated. A Tailscale host legitimately answers to several
+        // names (its address and its MagicDNS name), and pinning one makes the
+        // other return 403 for no security gain.
+        let allowed_hosts = std::env::var("JARVIS_ALLOWED_HOST")
             .ok()
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty());
+            .map(|raw| {
+                raw.split(',')
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let token = load_or_create_token(&data_dir)?;
         Ok(Self {
             data_dir,
@@ -87,7 +95,7 @@ impl Config {
             bind,
             token,
             secure_cookie,
-            allowed_host,
+            allowed_hosts,
         })
     }
 }
@@ -295,7 +303,7 @@ async fn bootstrap(config: &Config) -> Result<Arc<AppState>, String> {
         auth: Auth::new(
             config.token.clone(),
             config.secure_cookie,
-            config.allowed_host.clone(),
+            config.allowed_hosts.clone(),
         ),
     });
 
