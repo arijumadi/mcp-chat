@@ -725,6 +725,39 @@ mod tests {
         ));
     }
 
+    /// Reported: an attached spreadsheet made the model answer "there is no
+    /// such file". The prompt only had a name and a size, so there was nothing
+    /// to open.
+    #[tokio::test]
+    async fn a_binary_attachment_tells_the_model_where_it_is() {
+        let history = vec![message_with_parts(vec![Part {
+            id: "attachment".into(),
+            message_id: "m1".into(),
+            idx: 0,
+            kind: "attachment".into(),
+            payload_json: json!({
+                "id": "a1",
+                "name": "laporan.xlsx",
+                "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "size": 41_234,
+                "fileKind": "file",
+                "path": "/var/lib/jarvis/attachments/c1/m1/laporan.xlsx",
+            })
+            .to_string(),
+        }])];
+        let (messages, _) = build_messages(&history).await;
+        let text = messages[0].text_content();
+        assert!(text.contains("laporan.xlsx"), "{text}");
+        assert!(
+            text.contains("/var/lib/jarvis/attachments/c1/m1/laporan.xlsx"),
+            "the model needs the real path, not just the name: {text}"
+        );
+        assert!(
+            text.contains("readable"),
+            "it must know the path is allowed: {text}"
+        );
+    }
+
     #[tokio::test]
     async fn text_attachments_are_inlined_for_the_model() {
         let history = vec![message_with_parts(vec![Part {
