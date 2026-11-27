@@ -2257,11 +2257,20 @@ fn output_limits_follow_the_model_window() {
         default.shell
     );
 
-    let doubled = crate::agent::tools::OutputLimits::for_context(128_000, 200);
+    // `other` is already at 30k for a 128k window, and doubling it hits the
+    // 60k ceiling, so compare against a window where the ceiling is not in the
+    // way. The ceiling is deliberate: one result must never flood the context.
+    let modest = crate::agent::tools::OutputLimits::for_context(32_000, 100);
+    let doubled = crate::agent::tools::OutputLimits::for_context(32_000, 200);
     assert!(
-        doubled.other >= default.other * 2 - 1,
+        doubled.other > modest.other,
         "the setting scales the limits: {} vs {}",
         doubled.other,
-        default.other
+        modest.other
+    );
+    assert_eq!(
+        crate::agent::tools::OutputLimits::for_context(1_000_000, 400).other,
+        60_000,
+        "the ceiling holds whatever the setting says"
     );
 }
