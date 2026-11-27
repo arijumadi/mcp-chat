@@ -190,6 +190,7 @@ pub async fn delete_conversation(state: &AppState, args: Value) -> Result<Value,
     let params: ByConversation = parse(args)?;
     let conversation_id = params.conversation_id;
     state.engine.stop(&conversation_id);
+    state.engine.close_acp_session(&conversation_id).await;
     state.engine.set_auto_approve(&conversation_id, false);
     let history = messages::list_for_conversation(&state.db.pool, &conversation_id)
         .await
@@ -282,12 +283,29 @@ pub async fn set_conversation_workspace(state: &AppState, args: Value) -> Result
     let path =
         mcp_chat_core::agent::tools::resolve_workspace_path(&params.workspace_root).map_err(err)?;
     let value = path.display().to_string();
+    // An ACP session's working directory is fixed when it is opened: the
+    // protocol has no way to move it. Reusing the session after a workspace
+    // change would keep the agent in the old folder, so drop it and let the
+    // next message open a fresh one in the new place.
+    state
+        .engine
+        .close_acp_session(&params.conversation_id)
+        .await;
+    conversations::set_acp_session_id(&state.db.pool, &params.conversation_id, "")
+        .await
+        .ok();
     conversations::set_workspace(&state.db.pool, &params.conversation_id, Some(&value))
         .await
         .map_err(err)?;
     settings::set(&state.db.pool, "workspace.last", &value)
         .await
         .map_err(err)?;
+    // Re-open in the new folder so the pickers keep their options instead of
+    // staying empty until the next message.
+    state
+        .engine
+        .reopen_acp_session_if_bound(&params.conversation_id)
+        .await;
     let mut recent: Vec<String> = settings::get(&state.db.pool, "workspace.recent")
         .await
         .map_err(err)?

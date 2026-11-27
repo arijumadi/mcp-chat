@@ -656,3 +656,50 @@ async fn switching_returns_before_the_agent_is_ready() {
         "the options must still arrive in the background"
     );
 }
+
+/// Reported: after a few switches the pickers went empty and the transcript
+/// stopped, because the session cap was reached by leaked processes.
+///
+/// `ensure_session` keys on the conversation id alone, so switching agents used
+/// to reuse the old session and leave its process running. Four switches filled
+/// the cap.
+#[tokio::test]
+async fn switching_agents_does_not_leak_sessions() {
+    let harness = Harness::new().await;
+    harness.register_agent("first", "echo").await;
+    harness.register_agent("second", "echo").await;
+
+    for _ in 0..3 {
+        harness
+            .engine
+            .set_conversation_agent(&harness.parent_id, Some("first"))
+            .await
+            .expect("bind first");
+        wait_for_sessions(&harness, 1).await;
+        harness
+            .engine
+            .set_conversation_agent(&harness.parent_id, Some("second"))
+            .await
+            .expect("bind second");
+        wait_for_sessions(&harness, 1).await;
+    }
+
+    assert_eq!(
+        harness.engine.acp.count().await,
+        1,
+        "each switch must replace the session, not add one"
+    );
+
+    harness.engine.close_acp_session(&harness.parent_id).await;
+    assert_eq!(harness.engine.acp.count().await, 0);
+}
+
+/// Waiting for the background open to finish without depending on its timing.
+async fn wait_for_sessions(harness: &Harness, want: usize) {
+    for _ in 0..100 {
+        if harness.engine.acp.count().await == want {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}

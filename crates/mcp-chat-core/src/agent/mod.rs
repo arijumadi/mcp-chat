@@ -358,10 +358,7 @@ impl ChatEngine {
             // Unbinding mid-conversation keeps the live session until it ends;
             // the next turn simply goes back to the LLM.
             conversations::set_acp(&self.db.pool, conversation_id, "", None).await?;
-            if let Some(session) = self.acp.get(conversation_id).await {
-                let _ = session.close();
-            }
-            self.acp.close(conversation_id).await.ok();
+            self.close_acp_session(conversation_id).await;
             let _ = self.events.send(CoreEvent::ConversationUpdated {
                 conversation_id: conversation_id.to_owned(),
             });
@@ -379,6 +376,12 @@ impl ChatEngine {
                 "The ACP agent {slug:?} is disabled."
             )));
         }
+        // Switching agents replaces the session, so close the old one first.
+        // `ensure_session` keys on the conversation id alone, so a stale entry
+        // would be reused and the new agent's process would never start — and
+        // the manager's four-session cap would be reached by leaked processes.
+        self.close_acp_session(conversation_id).await;
+
         conversations::set_acp(&self.db.pool, conversation_id, &agent.slug, None).await?;
 
         // Tell the UI immediately. Opening the agent takes seconds — a real
@@ -389,12 +392,28 @@ impl ChatEngine {
             conversation_id: conversation_id.to_owned(),
         });
 
-        // Open the session in the background. The options still arrive without
-        // the first message: the pump announces them, and a second
-        // `ConversationUpdated` makes the pickers ask again.
+        self.open_acp_session_in_background(conversation_id.to_owned(), agent.id.clone())
+            .await;
+
+        Ok(())
+    }
+
+    /// Open the bound agent's session without blocking the caller.
+    ///
+    /// Used when a chat is bound to an agent and again when its workspace
+    /// moves, because a session's working directory is fixed at creation. The
+    /// pickers load on the `ConversationUpdated` this sends at the end, which
+    /// is why the options appear without sending a message.
+    pub async fn open_acp_session_in_background(
+        self: &Arc<Self>,
+        conversation_id: String,
+        agent_id: String,
+    ) {
         let engine = self.clone();
-        let conversation_id = conversation_id.to_owned();
         tokio::spawn(async move {
+            let Ok(agent) = acp_agents::get(&engine.db.pool, &agent_id).await else {
+                return;
+            };
             let workspace = match crate::agent::tools::workspace_root_for_conversation(
                 &engine.db.pool,
                 &conversation_id,
@@ -426,8 +445,6 @@ impl ChatEngine {
             {
                 Ok(active) => {
                     engine.acp.put_events(&conversation_id, active.events).await;
-                    // The pickers load on this event; without it they would
-                    // wait for the first turn, which is what felt broken.
                     let _ = engine.events.send(CoreEvent::ConversationUpdated {
                         conversation_id: conversation_id.clone(),
                     });
@@ -436,13 +453,45 @@ impl ChatEngine {
                     tracing::warn!(
                         conversation = %conversation_id,
                         error = %error.user_message(),
-                        "could not open the ACP session while binding"
+                        "could not open the ACP session"
                     );
                 }
             }
         });
+    }
 
-        Ok(())
+    /// Re-open the session after something moved its working directory.
+    ///
+    /// A session's cwd is fixed at `session/new` and the protocol cannot change
+    /// it, so a workspace change closes the session. Reopening keeps the
+    /// pickers populated; a chat that is not bound to an agent does nothing.
+    pub async fn reopen_acp_session_if_bound(self: &Arc<Self>, conversation_id: &str) {
+        let Ok(conversation) = conversations::get(&self.db.pool, conversation_id).await else {
+            return;
+        };
+        let Some(slug) = conversation
+            .acp_agent
+            .filter(|slug| !slug.trim().is_empty())
+        else {
+            return;
+        };
+        let Ok(Some(agent)) = acp_agents::get_by_slug(&self.db.pool, &slug).await else {
+            return;
+        };
+        self.open_acp_session_in_background(conversation_id.to_owned(), agent.id)
+            .await;
+    }
+
+    /// Drop the live session for a conversation, if any.
+    ///
+    /// `AcpManager::close` also removes the registry entry, which is what makes
+    /// the four-session cap meaningful: without this, every switch, workspace
+    /// change and deletion leaves a process behind until the cap is hit.
+    pub async fn close_acp_session(&self, conversation_id: &str) {
+        if let Some(session) = self.acp.get(conversation_id).await {
+            let _ = session.close();
+        }
+        self.acp.close(conversation_id).await.ok();
     }
 
     /// Launch a child backed by an external ACP agent.
