@@ -139,14 +139,18 @@ impl AgentProcess {
 
 #[cfg(windows)]
 fn kill_tree(pid: Option<u32>) {
-    if let Some(pid) = pid {
-        // `taskkill /T` walks the child tree, which the SDK does not do.
-        let _ = std::process::Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
+    let Some(pid) = pid else { return };
+    // `taskkill /T` walks the child tree, which the SDK does not do. Without
+    // CREATE_NO_WINDOW this spawns a visible console window for a moment —
+    // the "terminal flashes when I switch away" report.
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _ = std::process::Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
 }
 
 /// Build the platform command, wrapping package runners and `.cmd` shims.

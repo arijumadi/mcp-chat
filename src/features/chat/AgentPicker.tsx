@@ -20,6 +20,8 @@ export function AgentPicker({
 }) {
   const toast = useApp((state) => state.toast);
   const refreshConversations = useApp((state) => state.refreshConversations);
+  const refreshAgentConfig = useApp((state) => state.refreshAgentConfig);
+  const refreshAgentCommands = useApp((state) => state.refreshAgentCommands);
   const [agents, setAgents] = useState<AcpAgentView[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -62,6 +64,12 @@ export function AgentPicker({
         slug,
       });
       await refreshConversations();
+      // Fetch the new agent's options now. ACP sessions are opened when the
+      // binding is written, so they are available immediately.
+      await Promise.all([
+        refreshAgentConfig(conversation.id),
+        refreshAgentCommands(conversation.id),
+      ]);
       toast(
         slug
           ? "This chat now runs on the ACP agent."
