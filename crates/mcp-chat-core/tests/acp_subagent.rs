@@ -703,3 +703,52 @@ async fn wait_for_sessions(harness: &Harness, want: usize) {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
+
+/// Reported: with an agent whose provider key is missing, sending a message
+/// left only the user message in the chat — no answer, no error, no spinner.
+///
+/// The agent failed before emitting anything, and the failure was only recorded
+/// when an assistant message already existed. A chat that never started a
+/// message therefore showed nothing at all.
+#[tokio::test]
+async fn a_turn_that_fails_before_any_output_is_reported() {
+    let harness = Harness::new().await;
+    harness.register_agent("mock", "crash").await;
+    harness
+        .engine
+        .set_conversation_agent(&harness.parent_id, Some("mock"))
+        .await
+        .unwrap();
+
+    harness
+        .engine
+        .send_message(&harness.parent_id, "this will fail")
+        .await
+        .expect("send is accepted");
+
+    // The transcript must gain an assistant row carrying the error, otherwise
+    // the user sees a message that was silently swallowed.
+    let mut found = None;
+    for _ in 0..120 {
+        let history = messages::list_for_conversation(&harness.db.pool, &harness.parent_id)
+            .await
+            .unwrap();
+        if let Some(message) = history
+            .iter()
+            .find(|item| item.message.role == "assistant" && item.message.status == "error")
+        {
+            found = Some(message.clone());
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let message = found.expect("a failed turn must leave a visible error in the transcript");
+    assert!(
+        message
+            .message
+            .error
+            .as_deref()
+            .is_some_and(|error| !error.trim().is_empty()),
+        "the row must say what went wrong"
+    );
+}

@@ -437,6 +437,13 @@ impl TurnRun<'_> {
 
     /// Settle the message and its status.
     async fn finish(&mut self) {
+        // A failure that happens before the agent emits anything leaves no
+        // assistant message behind. Without this the chat keeps only the user
+        // message and the run looks like it silently did nothing — which is
+        // exactly how an authentication error in the agent presented itself.
+        if self.message_id.is_none() && self.failure.is_some() && !self.cancelled {
+            self.message().await;
+        }
         if let Some(message_id) = self.message_id.clone() {
             let (status, error) = if self.cancelled {
                 // The same status the built-in runner uses, so the transcript
