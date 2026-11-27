@@ -233,18 +233,41 @@ pub async fn build_messages(history: &[MessageWithParts]) -> (Vec<ChatMessage>, 
                             .get("truncated")
                             .and_then(|value| value.as_bool())
                             .unwrap_or(false);
-                        blocks.push(ContentBlock::Text(format!(
-                            "[Attached file: {name} ({mime}){}]\n{content}\n[/Attached file]",
-                            if truncated { ", truncated" } else { "" }
-                        )));
+                        // The path matters even when the text is inlined: it
+                        // lets the model re-read ranges, or the original file,
+                        // instead of guessing names in the workspace.
+                        let path = payload.get("path").and_then(|value| value.as_str());
+                        blocks.push(ContentBlock::Text(match path {
+                            Some(path) => format!(
+                                "[Attached file: {name} ({mime}){}\nStored at: {path}\n{content}\n[/Attached file]",
+                                if truncated { ", truncated" } else { "" }
+                            ),
+                            None => format!(
+                                "[Attached file: {name} ({mime}){}]\n{content}\n[/Attached file]",
+                                if truncated { ", truncated" } else { "" }
+                            ),
+                        }));
                     } else {
                         let size = payload
                             .get("size")
                             .and_then(|value| value.as_i64())
                             .unwrap_or(0);
-                        blocks.push(ContentBlock::Text(format!(
-                            "[Attached binary file: {name} ({mime}, {size} bytes). Its binary content is not included in this message.]"
-                        )));
+                        // Without the path a binary attachment is only a name
+                        // and a size, and the model reasonably concludes the
+                        // file is missing. It is on disk; say where.
+                        match payload.get("path").and_then(|value| value.as_str()) {
+                            Some(path) => blocks.push(ContentBlock::Text(format!(
+                                "[Attached file: {name} ({mime}, {size} bytes). Its content is not \
+                                 inlined because it is binary. The file exists at: {path}\nThat \
+                                 path is readable. `read` only handles text, so use `bash` (for \
+                                 example `unzip -l` for an Office file, or a Python library) to \
+                                 inspect it.]"
+                            ))),
+                            None => blocks.push(ContentBlock::Text(format!(
+                                "[Attached binary file: {name} ({mime}, {size} bytes). Its binary \
+                                 content is not included in this message.]"
+                            ))),
+                        }
                     }
                 }
                 messages.push(ChatMessage {

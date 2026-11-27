@@ -30,7 +30,9 @@ pub use skills::{
     skill_catalog_infos, skill_roots,
 };
 pub(crate) use workspace::path_is_within;
-pub(crate) use workspace::{display_relative, path_is_outside, resolve_write_path};
+pub(crate) use workspace::{
+    display_relative, path_is_outside, path_is_outside_of, resolve_write_path,
+};
 pub use workspace::{resolve_workspace_path, workspace_root, workspace_root_for_conversation};
 
 use self::guards::auto_effective_effect;
@@ -286,7 +288,12 @@ impl ToolExecutor {
         let outside_read = if builtin {
             if let Some(raw) = outside_read_target(&req.remote_name, &req.args) {
                 match workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await {
-                    Ok(workspace) => path_is_outside(&workspace, raw),
+                    // The attachments directory is app-owned and already
+                    // approved by the act of attaching, so reading it is not an
+                    // outside-workspace request.
+                    Ok(workspace) => {
+                        path_is_outside_of(&workspace, Some(&self.attachments_dir), raw)
+                    }
                     Err(_) => false,
                 }
             } else {

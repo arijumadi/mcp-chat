@@ -2170,3 +2170,52 @@ async fn an_empty_options_list_is_refused_before_the_user_is_asked() {
         assert!(!matches!(event, CoreEvent::InputRequest { .. }));
     }
 }
+
+/// A file the user attached lives in the app's attachments directory, not in
+/// the workspace. The model is told that path, so `read` has to accept it
+/// without asking for outside-workspace approval.
+#[tokio::test]
+async fn read_accepts_an_attached_file_by_its_stored_path() {
+    let workspace = tempfile::tempdir().unwrap();
+    let attachments = tempfile::tempdir().unwrap();
+    let mut executor = test_executor(workspace.path()).await;
+    // Point the executor at a separate attachments root, as the real app does:
+    // attachments live beside the database, not inside the project.
+    executor.attachments_dir = attachments.path().to_path_buf();
+    let file = attachments.path().join("notes.txt");
+    tokio::fs::write(&file, "row one\nrow two\n").await.unwrap();
+
+    let result = executor
+        .execute(request("read", json!({"filePath": file.to_str().unwrap()})))
+        .await;
+
+    assert!(result.ok, "read failed: {}", result.content);
+    assert!(result.content.contains("row one"), "{}", result.content);
+    // Completing without an approval answer proves the path was accepted as
+    // readable.
+}
+
+/// A path that is neither in the workspace nor in attachments is still outside
+/// and still needs a decision.
+#[tokio::test]
+async fn read_still_treats_a_foreign_path_as_outside() {
+    let workspace = tempfile::tempdir().unwrap();
+    let attachments = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let mut executor = test_executor(workspace.path()).await;
+    executor.attachments_dir = attachments.path().to_path_buf();
+    let file = other.path().join("secret.txt");
+    tokio::fs::write(&file, "nope").await.unwrap();
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        executor.execute(request("read", json!({"filePath": file.to_str().unwrap()}))),
+    )
+    .await
+    .expect("the call should stop at the approval gate, not hang");
+
+    // No answer arrives for the approval request, so the call must not return
+    // the file's contents.
+    assert!(!result.ok, "a foreign path must not be read implicitly");
+    assert!(!result.content.contains("nope"), "{}", result.content);
+}

@@ -2,7 +2,7 @@
 
 use super::guards::overwrite_guard;
 use super::workspace::{
-    MAX_TEXT_BYTES, display_relative, read_text_file, resolve_read_path, resolve_write_path,
+    MAX_TEXT_BYTES, display_relative, read_text_file, resolve_read_path_with, resolve_write_path,
     workspace_root_for_conversation,
 };
 use super::{Rendered, ToolExecRequest, ToolExecutor};
@@ -193,8 +193,9 @@ impl ToolExecutor {
             .clamp(1, 5_000) as usize;
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
-        let path = resolve_read_path(
+        let path = resolve_read_path_with(
             &workspace,
+            Some(&self.attachments_dir),
             raw,
             req.auto_approve || req.allow_outside_workspace,
         )?;
@@ -385,8 +386,9 @@ impl ToolExecutor {
             .clamp(1, 1_000) as usize;
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
-        let search = resolve_read_path(
+        let search = resolve_read_path_with(
             &workspace,
+            Some(&self.attachments_dir),
             req.args.get("path").and_then(Value::as_str).unwrap_or("."),
             req.auto_approve || req.allow_outside_workspace,
         )?;
@@ -512,8 +514,9 @@ impl ToolExecutor {
             .unwrap_or(true);
         let workspace =
             workspace_root_for_conversation(&self.db.pool, &req.conversation_id).await?;
-        let search = resolve_read_path(
+        let search = resolve_read_path_with(
             &workspace,
+            Some(&self.attachments_dir),
             req.args.get("path").and_then(Value::as_str).unwrap_or("."),
             req.auto_approve || req.allow_outside_workspace,
         )?;
