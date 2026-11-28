@@ -142,8 +142,9 @@ export function AgentSessionPicker({
       <div className="flex flex-col gap-3">
         <p className="text-[length:var(--fs-status)] leading-relaxed" style={{ color: "var(--muted)" }}>
           Sessions made in the agent&apos;s own CLI are listed here when that
-          agent supports it. This chat keeps its own transcript; the agent
-          replays its history when attached, and Jarvis does not copy it in.
+          agent supports it. Attaching copies the agent&apos;s history into this
+          chat, so it stays readable and moves with you if you switch agents
+          later. Very long sessions are imported from the most recent turns.
         </p>
 
         <div className="flex flex-wrap items-center gap-2">

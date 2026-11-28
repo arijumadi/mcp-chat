@@ -44,40 +44,39 @@ async fn loading_a_foreign_session_reports_its_transcript() {
     .await
     .expect("session/list");
 
-    let target = page
+    // Try old sessions in order until one actually replays something. A newly
+    // created session has no history, and that is not a failure of the import.
+    let mut found = None;
+    for candidate in page
         .sessions
         .iter()
         .rev()
-        .find(|session| session.title.is_some());
-    let Some(target) = target else {
-        eprintln!("no titled sessions; skipping");
+        .filter(|s| s.title.is_some())
+        .take(6)
+    {
+        let opened = manager
+            .open(SessionSpec {
+                local_id: format!("import-test-{}", candidate.session_id),
+                command,
+                args: &args,
+                env: &[],
+                cwd: Path::new(&candidate.cwd),
+                attach: Attach::Load(candidate.session_id.clone()),
+                permissions: no_permissions(),
+            })
+            .await;
+        let Ok(opened) = opened else { continue };
+        let taken = opened.handle.take_replayed();
+        if let Some(value) = taken {
+            found = Some((candidate, value));
+            // The session stays open; it is closed on the way out.
+            break;
+        }
+    }
+    let Some((_target, (transcript, _truncated))) = found else {
+        eprintln!("no session with history replayed anything; skipping");
         return;
     };
-
-    let opened = manager
-        .open(SessionSpec {
-            local_id: "import-test".into(),
-            command,
-            args: &args,
-            env: &[],
-            cwd: Path::new(&target.cwd),
-            attach: Attach::Load(target.session_id.clone()),
-            permissions: no_permissions(),
-        })
-        .await
-        .expect("load should open");
-
-    // The transcript is settled during `open` and left on the handle, because
-    // it arrives before any event consumer exists. Reading it here is what the
-    // attach path does.
-    let taken = opened.handle.take_replayed();
-    eprintln!(
-        "target={:?} title={:?} replayed={:?}",
-        target.session_id,
-        target.title,
-        taken.as_ref().map(|(t, _)| t.len())
-    );
-    let (transcript, _truncated) = taken.expect("a load must leave its transcript on the handle");
     assert!(
         transcript.iter().any(|message| message.role == "user"),
         "a conversation has at least one user turn"

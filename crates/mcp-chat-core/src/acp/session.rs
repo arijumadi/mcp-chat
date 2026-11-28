@@ -710,7 +710,7 @@ where
             // reads prompts and updates in one `select!`, so a later drain would
             // race the first turn.
             if resumed {
-                let replayed = settle_replay(
+                let mut replayed = settle_replay(
                     &mut session,
                     &events,
                     &permissions,
@@ -719,6 +719,7 @@ where
                     &cwd,
                 )
                 .await;
+                replayed.finish();
                 let mut held = None;
                 if replayed.messages() > 0 || !replayed.transcript.is_empty() {
                     // A load is the only case where Jarvis has no copy.
@@ -926,39 +927,91 @@ struct Replayed {
     truncated: bool,
 }
 
-/// How much replayed text is kept. A long coding session can replay millions of
-/// characters; the transcript is for display and for a later handoff, and a
-/// handoff summarises anything past its own budget anyway.
-const REPLAY_TEXT_LIMIT: usize = 400_000;
+/// How much replayed text is kept, counted from the **end** of the conversation.
+///
+/// The newest turns are what matter: what is being worked on, what was decided,
+/// what is still open. A long coding session replays millions of characters
+/// (12.6M in the largest measured here), and the first turns of it are the least
+/// useful part of the history.
+const REPLAY_KEEP_CHARS: usize = 400_000;
+
+/// Hard ceiling while collecting, so a pathological replay cannot exhaust memory
+/// before the tail is selected. Twice the budget leaves room to pick a clean
+/// message boundary.
+const REPLAY_COLLECT_CHARS: usize = REPLAY_KEEP_CHARS * 2;
 
 impl Replayed {
     /// Append text, merging with the previous message when the role matches.
+    ///
     /// Chunks arrive as fragments of one turn, so this keeps one row per turn
-    /// rather than one per token.
+    /// rather than one per token. The cap here only bounds memory; which part of
+    /// the conversation survives is decided by [`Self::finish`], from the end.
     fn push(&mut self, role: &str, text: &str) {
         if text.is_empty() {
             return;
         }
-        let room = REPLAY_TEXT_LIMIT.saturating_sub(
-            self.transcript
-                .iter()
-                .map(|message| message.text.len())
-                .sum::<usize>(),
-        );
-        if room == 0 {
+        // Chunks arrive as fragments of one turn, so a matching role extends the
+        // last entry. Keeping only a trailing window matters here: `finish`
+        // trims to the real budget from the end, and stopping at the collection
+        // cap would discard exactly the turns that matter.
+        match self.transcript.last_mut() {
+            Some(last) if last.role == role => last.text.push_str(text),
+            _ => self.transcript.push(ReplayMessage {
+                role: role.to_owned(),
+                text: text.to_owned(),
+            }),
+        }
+        let mut total: usize = self.transcript.iter().map(|m| m.text.len()).sum();
+        while total > REPLAY_COLLECT_CHARS && self.transcript.len() > 1 {
+            let dropped = self.transcript.remove(0).text.len();
+            total -= dropped;
             self.truncated = true;
+        }
+    }
+
+    /// Cut the transcript down to the newest [`REPLAY_KEEP_CHARS`].
+    ///
+    /// Truncating as the chunks arrive kept the *oldest* turns, which are the
+    /// least useful: what matters is the last thing being worked on. This keeps
+    /// the tail, and drops a partly-kept leading message rather than showing
+    /// half a sentence.
+    fn finish(&mut self) {
+        let total: usize = self.transcript.iter().map(|m| m.text.len()).sum();
+        if total <= REPLAY_KEEP_CHARS {
             return;
         }
-        let text: String = text.chars().take(room).collect();
-        match self.transcript.last_mut() {
-            Some(last) if last.role == role => last.text.push_str(&text),
-            _ => {
-                self.transcript.push(ReplayMessage {
-                    role: role.to_owned(),
-                    text,
+        self.truncated = true;
+
+        let mut kept: Vec<ReplayMessage> = Vec::new();
+        let mut budget = REPLAY_KEEP_CHARS;
+        for message in self.transcript.iter().rev() {
+            let len = message.text.len();
+            if len <= budget {
+                kept.push(message.clone());
+                budget -= len;
+                continue;
+            }
+            // This message straddles the boundary. Keep its tail if it is the
+            // first one we are keeping at all, so the transcript does not start
+            // mid-sentence for no reason.
+            if kept.is_empty() {
+                // Keep the tail of this one message rather than nothing, so a
+                // single huge turn still contributes its end.
+                let total_chars = message.text.chars().count();
+                let tail: String = message
+                    .text
+                    .chars()
+                    .skip(total_chars.saturating_sub(budget))
+                    .collect();
+                kept.push(ReplayMessage {
+                    role: message.role.clone(),
+                    text: tail,
                 });
             }
+            break;
         }
+        kept.reverse();
+        self.transcript = kept;
     }
 
     fn messages(&self) -> usize {
@@ -1580,6 +1633,79 @@ mod tests {
             "cancel must not look like a rejection: {json}"
         );
         assert!(json["outcome"].get("optionId").is_none());
+    }
+
+    /// A truncated replay must keep the newest turns, not the oldest.
+    ///
+    /// The first version truncated as chunks arrived, so a long session filled
+    /// the budget with its opening turns and dropped the part the user is
+    /// actually working on.
+    #[test]
+    fn a_long_replay_keeps_the_newest_turns() {
+        let mut replayed = Replayed::default();
+        // One turn per step, each `step` characters wide.
+        let chunk = "x".repeat(1_000);
+        for step in 0..1_000 {
+            let role = if step % 2 == 0 { "user" } else { "assistant" };
+            replayed.push(role, &format!("{step:04}{chunk}"));
+        }
+        replayed.finish();
+
+        assert!(replayed.truncated, "the transcript was over budget");
+        assert!(
+            replayed.transcript.len() < 1_000,
+            "the transcript should have been cut, got {} entries",
+            replayed.transcript.len()
+        );
+
+        // The last turn written must still be the last turn present.
+        let last = replayed.transcript.last().expect("something is kept");
+        assert!(
+            last.text.starts_with("0999"),
+            "the newest turn must survive, got {:?}",
+            &last.text[..8.min(last.text.len())]
+        );
+        // And the opening turn must be gone.
+        assert!(
+            !replayed
+                .transcript
+                .iter()
+                .any(|message| message.text.starts_with("0000")),
+            "the oldest turn should have been dropped"
+        );
+        // The budget is respected.
+        let total: usize = replayed.transcript.iter().map(|m| m.text.len()).sum();
+        assert!(
+            total <= REPLAY_KEEP_CHARS,
+            "kept {total} characters, budget is {REPLAY_KEEP_CHARS}"
+        );
+    }
+
+    /// A short replay is untouched and not marked truncated.
+    #[test]
+    fn a_short_replay_is_kept_whole() {
+        let mut replayed = Replayed::default();
+        replayed.push("user", "hello");
+        replayed.push("assistant", "hi");
+        replayed.finish();
+
+        assert!(!replayed.truncated);
+        assert_eq!(replayed.transcript.len(), 2);
+        assert_eq!(replayed.transcript[0].text, "hello");
+        assert_eq!(replayed.transcript[1].text, "hi");
+    }
+
+    /// Chunks of one turn merge; a change of role starts a new entry.
+    #[test]
+    fn chunks_merge_into_one_entry_per_turn() {
+        let mut replayed = Replayed::default();
+        replayed.push("user", "one ");
+        replayed.push("user", "two");
+        replayed.push("assistant", "three");
+
+        assert_eq!(replayed.transcript.len(), 2);
+        assert_eq!(replayed.transcript[0].text, "one two");
+        assert_eq!(replayed.transcript[1].text, "three");
     }
 
     #[test]

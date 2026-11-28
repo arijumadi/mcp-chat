@@ -804,6 +804,27 @@ impl ChatEngine {
             }
         }
 
+        // Say so in the transcript before the first kept message. A chat that
+        // silently starts mid-conversation is worse than one that admits it.
+        if truncated {
+            if let Ok(notice) =
+                messages::create(&self.db.pool, conversation_id, "assistant", "completed").await
+            {
+                let _ = messages::append_part(
+                    &self.db.pool,
+                    &notice.id,
+                    "text",
+                    &PartPayload::Text {
+                        text: "_The earlier part of this conversation was longer than \
+                               Jarvis imports in one go, so it starts partway through. \
+                               The most recent turns are all here._"
+                            .to_owned(),
+                    },
+                )
+                .await;
+            }
+        }
+
         let mut imported = 0usize;
         for message in transcript {
             if message.text.trim().is_empty() {
