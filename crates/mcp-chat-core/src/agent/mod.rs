@@ -80,8 +80,8 @@ impl Drop for TurnSlot {
 /// enormous.
 const HANDOFF_DEFAULT_TOKENS: i64 = 200_000;
 
-/// Rough characters per token, matching the estimator elsewhere.
-const CHARS_PER_TOKEN: usize = 4;
+/// Rough characters per token, matching `util::estimate_tokens`.
+pub(crate) const CHARS_PER_TOKEN: usize = 4;
 
 pub struct ChatEngine {
     pub db: Db,

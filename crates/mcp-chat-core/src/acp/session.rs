@@ -929,11 +929,16 @@ struct Replayed {
 
 /// How much replayed text is kept, counted from the **end** of the conversation.
 ///
-/// The newest turns are what matter: what is being worked on, what was decided,
-/// what is still open. A long coding session replays millions of characters
-/// (12.6M in the largest measured here), and the first turns of it are the least
-/// useful part of the history.
-const REPLAY_KEEP_CHARS: usize = 400_000;
+/// The newest turns matter: what is being worked on, what was decided, what is
+/// still open. A long coding session replays millions of characters (12.6M in
+/// the largest measured here), and the opening turns are the least useful part.
+///
+/// 220k tokens, so it matches the handoff budget rather than undercutting it.
+/// Continuing in the same session never reads this text; only attaching does,
+/// and a chat whose transcript is under the handoff budget is carried verbatim
+/// instead of summarised. Past that, `acp.handoff_tokens` compacts the head and
+/// keeps the tail -- the same trade this makes, one layer up.
+const REPLAY_KEEP_CHARS: usize = 220_000 * crate::agent::CHARS_PER_TOKEN;
 
 /// Hard ceiling while collecting, so a pathological replay cannot exhaust memory
 /// before the tail is selected. Twice the budget leaves room to pick a clean
@@ -1643,8 +1648,8 @@ mod tests {
     #[test]
     fn a_long_replay_keeps_the_newest_turns() {
         let mut replayed = Replayed::default();
-        // One turn per step, each `step` characters wide.
-        let chunk = "x".repeat(1_000);
+        // One turn per step, sized so the run is several times the budget.
+        let chunk = "x".repeat(10_000);
         for step in 0..1_000 {
             let role = if step % 2 == 0 { "user" } else { "assistant" };
             replayed.push(role, &format!("{step:04}{chunk}"));
