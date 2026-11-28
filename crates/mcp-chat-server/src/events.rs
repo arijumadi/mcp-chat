@@ -48,9 +48,24 @@ pub async fn events(State(state): State<Arc<AppState>>, headers: HeaderMap) -> R
         Some((Ok(frame(event)), (receiver, None)))
     });
 
-    Sse::new(stream)
+    let mut response = Sse::new(stream)
         .keep_alive(KeepAlive::default())
-        .into_response()
+        .into_response();
+    // A reverse proxy buffers by default, which turns a token stream into one
+    // delivery at the end. `no-cache` alone is not enough: nginx (and NPM,
+    // which runs nginx) only honours `X-Accel-Buffering` for this.
+    //
+    // The proxy still has to have buffering off for the connection -- this
+    // header is the app's half of the contract, not a substitute for it.
+    response.headers_mut().insert(
+        "x-accel-buffering",
+        axum::http::HeaderValue::from_static("no"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache, no-transform"),
+    );
+    response
 }
 
 fn frame(event: CoreEvent) -> Event {
