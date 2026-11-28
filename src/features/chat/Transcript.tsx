@@ -12,6 +12,7 @@ export function Transcript() {
   const status = useApp((state) => state.status);
   const activeId = useApp((state) => state.activeId);
   const container = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   const followBottom = useRef(true);
   const loadingEarlier = useRef(false);
   const lastScrollTop = useRef(-1);
@@ -101,6 +102,17 @@ export function Transcript() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, status]);
 
+  useEffect(() => {
+    const element = content.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    // The smooth reveal adds characters between deltas, so the transcript can
+    // grow without `messages` changing. Observe the content box instead.
+    const observer = new ResizeObserver(() => scheduleScrollToBottom());
+    observer.observe(element);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const loadEarlier = () => {
     if (!messageHasMore || loadingOlder || loadingEarlier.current) return;
     const element = container.current;
@@ -160,7 +172,10 @@ export function Transcript() {
         onWheel={onWheel}
         className="h-full overflow-y-auto"
       >
-        <div className="mx-auto w-full max-w-(--chat-width) px-6 pt-8 pb-10">
+        <div
+          ref={content}
+          className="mx-auto w-full max-w-(--chat-width) px-6 pt-8 pb-10"
+        >
           {messageHasMore || loadingOlder ? (
             <div className="mb-4 flex justify-center">
               {loadingOlder ? (

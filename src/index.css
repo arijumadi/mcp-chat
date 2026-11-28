@@ -170,6 +170,23 @@ button {
   animation: cursor-blink 1s steps(2, start) infinite;
 }
 
+/*
+ * Put the cursor at the end of the last rendered block. As a sibling of the
+ * markdown root it sat on a line of its own, which read as a stray blue bar
+ * rather than a caret.
+ */
+.md.streaming > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: cursor-blink 1s steps(2, start) infinite;
+}
+
 @keyframes cursor-blink {
   50% {
     opacity: 0.15;

@@ -11,6 +11,7 @@ import rehypeHighlight from "rehype-highlight";
 import { Check, Copy } from "lucide-react";
 import { call } from "@/lib/ipc";
 import { useApp } from "@/app/store";
+import { useSmoothText } from "@/features/chat/useSmoothText";
 
 function languageOf(children: ReactNode): string | null {
   const child = Array.isArray(children) ? children[0] : children;
@@ -101,10 +102,20 @@ function safeUrl(url: string): string {
  * on every render. Streaming re-renders the transcript on each token, so without
  * this memo every finished message in the history was re-parsed many times a
  * second. `text` is a string, so the default shallow comparison is enough.
+ *
+ * Text that grows while the component is mounted is paced out; text present on
+ * the first render (a transcript loaded from disk) appears at once.
  */
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({
+  text,
+  streaming = false,
+}: {
+  text: string;
+  streaming?: boolean;
+}) {
+  const shown = useSmoothText(text);
   return (
-    <div className="md">
+    <div className={streaming ? "md streaming" : "md"}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeHighlight, { detect: false, ignoreMissing: true }]]}
@@ -112,7 +123,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
         urlTransform={safeUrl}
         skipHtml
       >
-        {text}
+        {shown}
       </ReactMarkdown>
     </div>
   );

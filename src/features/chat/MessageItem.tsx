@@ -212,10 +212,10 @@ export const MessageItem = memo(function MessageItem({
           if (!text) return null;
           return (
             <div key={part.id} className="relative" data-markdown-copy>
-              <Markdown text={text} />
-              {streaming && part.id === lastTextId ? (
-                <span className="stream-cursor" aria-hidden />
-              ) : null}
+              <Markdown
+                text={text}
+                streaming={streaming && part.id === lastTextId}
+              />
             </div>
           );
         }
