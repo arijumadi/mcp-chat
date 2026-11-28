@@ -102,7 +102,7 @@ async fn a_replayed_resume_reaches_the_caller_as_a_notice() {
     let notices: Vec<String> = seen
         .iter()
         .filter_map(|event| match event {
-            AcpEvent::HistoryReplayed { messages } => Some(messages.clone()),
+            AcpEvent::HistoryReplayed { messages, .. } => Some(messages.clone()),
             _ => None,
         })
         .collect();

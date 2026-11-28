@@ -45,6 +45,14 @@ pub struct ConfigOption {
     pub kind: String,
 }
 
+/// One message recovered from a replayed session.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ReplayMessage {
+    /// `user` or `assistant`.
+    pub role: String,
+    pub text: String,
+}
+
 /// One update streamed by an ACP agent.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AcpEvent {
@@ -74,10 +82,22 @@ pub enum AcpEvent {
     /// `session/resume` and `session/load` both stream the stored transcript as
     /// `session/update` notifications *before* they respond (the spec requires
     /// it for `load`, and Hermes also does it for `resume`). Those chunks are
-    /// indistinguishable from live ones, so the pump counts them and reports
-    /// them here; the turn runner must not append them to the transcript it
-    /// already has. `messages` is a short human-readable summary.
-    HistoryReplayed { messages: String },
+    /// indistinguishable from live ones, so the pump collects them and reports
+    /// them here instead of appending them to a transcript.
+    ///
+    /// `messages` is a short human-readable summary. `transcript` is the text
+    /// itself, in order, which is what makes a session from outside Jarvis
+    /// visible: for a `Load` there is no local copy to fall back on.
+    HistoryReplayed {
+        messages: String,
+        transcript: Vec<ReplayMessage>,
+        /// True when the transcript was cut at the size limit.
+        truncated: bool,
+        /// True for `session/load`: Jarvis never saw this conversation, so the
+        /// transcript is the only record of it and has to be stored. False for
+        /// `session/resume`, where the local transcript already has it.
+        import: bool,
+    },
     /// A permission request that needs an answer.
     PermissionRequested {
         request_id: String,

@@ -22,7 +22,9 @@ pub mod sessions;
 
 pub use config::AgentPreset;
 pub use error::AcpError;
-pub use events::{AcpEvent, AgentCommand, ConfigChoice, ConfigOption, TurnOutcome, TurnTranscript};
+pub use events::{
+    AcpEvent, AgentCommand, ConfigChoice, ConfigOption, ReplayMessage, TurnOutcome, TurnTranscript,
+};
 pub use manager::{AcpManager, MAX_ACTIVE_SESSIONS};
 pub use session::{AcpSession, PermissionDecision, PermissionHandler, PermissionRequestInfo};
 pub use sessions::{AgentSession, AgentSessionPage, list_sessions};

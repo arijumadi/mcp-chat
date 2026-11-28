@@ -499,6 +499,14 @@ impl ChatEngine {
             Some(agent_session_id),
         )
         .await?;
+
+        // The pump kept the replayed transcript on the handle, because it
+        // arrives during open -- before any event consumer exists. Import it now
+        // so the chat has its history immediately, not only after a turn.
+        if let Some((transcript, truncated)) = active.handle.take_replayed() {
+            self.import_transcript(conversation_id, transcript, truncated)
+                .await;
+        }
         self.acp.put_events(conversation_id, active.events).await;
         let _ = self.events.send(CoreEvent::ConversationUpdated {
             conversation_id: conversation_id.to_owned(),
@@ -766,6 +774,73 @@ impl ChatEngine {
             child.id
         );
         Ok((child.id, content))
+    }
+
+    /// Store a transcript replayed by `session/load`.
+    ///
+    /// The transcript is the only record of a conversation Jarvis did not
+    /// create, so it becomes ordinary messages: searchable, and available to a
+    /// later handoff when the chat switches agents.
+    ///
+    /// Nothing is written when the conversation already has messages. Landing on
+    /// an existing chat must not duplicate what is on screen.
+    async fn import_transcript(
+        &self,
+        conversation_id: &str,
+        transcript: Vec<crate::acp::ReplayMessage>,
+        truncated: bool,
+    ) {
+        if transcript.is_empty() {
+            return;
+        }
+        if let Ok(existing) = messages::list_for_conversation(&self.db.pool, conversation_id).await
+        {
+            if !existing.is_empty() {
+                tracing::info!(
+                    conversation = %conversation_id,
+                    "skipping replayed transcript: this conversation already has messages"
+                );
+                return;
+            }
+        }
+
+        let mut imported = 0usize;
+        for message in transcript {
+            if message.text.trim().is_empty() {
+                continue;
+            }
+            let role = if message.role == "assistant" {
+                "assistant"
+            } else {
+                "user"
+            };
+            let Ok(row) = messages::create(&self.db.pool, conversation_id, role, "completed").await
+            else {
+                continue;
+            };
+            let _ = messages::append_part(
+                &self.db.pool,
+                &row.id,
+                "text",
+                &PartPayload::Text { text: message.text },
+            )
+            .await;
+            imported += 1;
+        }
+
+        if imported > 0 {
+            if truncated {
+                tracing::warn!(
+                    conversation = %conversation_id,
+                    "the replayed transcript was cut at the size limit"
+                );
+            }
+            tracing::info!(
+                conversation = %conversation_id,
+                messages = imported,
+                "imported the replayed transcript"
+            );
+        }
     }
 
     /// Run one ACP turn for `conversation_id`.

@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::error::AcpError;
-use super::events::{AcpEvent, AgentCommand, ConfigChoice, ConfigOption};
+use super::events::{AcpEvent, AgentCommand, ConfigChoice, ConfigOption, ReplayMessage};
 use super::process::AgentProcess;
 
 /// How to answer one permission request.
@@ -67,6 +67,12 @@ pub struct ConfigChange {
     pub value: String,
 }
 
+/// A replayed transcript and whether it was cut at the size limit.
+pub type ReplayedHistory = (Vec<ReplayMessage>, bool);
+
+/// Where the pump leaves a replayed transcript for the handle to pick up.
+type ReplaySlot = Arc<std::sync::Mutex<Option<ReplayedHistory>>>;
+
 /// Handle to one live session.
 pub struct AcpSession {
     pub local_id: String,
@@ -99,6 +105,12 @@ pub struct AcpSession {
     prompts: mpsc::UnboundedSender<Command>,
     connection: ConnectionTo<Agent>,
     acp_id: String,
+    /// The transcript a `session/load` replayed, kept for the caller.
+    ///
+    /// It arrives during `open`, before anyone is reading the event channel, so
+    /// holding it here is the difference between a chat that opens with its
+    /// history and one that opens empty.
+    replayed: ReplaySlot,
 }
 
 impl AcpSession {
@@ -186,6 +198,14 @@ impl AcpSession {
     ///
     /// The agent is asked to close only when it advertised support; either way
     /// the pump stops and the child process is torn down.
+    /// Take the transcript a `load` replayed, if there is one.
+    ///
+    /// Consumed once: a second attach to the same conversation would otherwise
+    /// import the same history again.
+    pub fn take_replayed(&self) -> Option<ReplayedHistory> {
+        self.replayed.lock().ok().and_then(|mut held| held.take())
+    }
+
     pub fn close(&self) -> Result<(), AcpError> {
         // A closed channel means the pump is already gone, so the session is
         // already closed; that is success, not a failure to report.
@@ -279,6 +299,8 @@ pub async fn open(
     let (change_tx, change_rx) = mpsc::unbounded_channel();
     let (ready_tx, ready_rx) = oneshot::channel::<Result<SessionReady, AcpError>>();
     let permissions = spec.permissions.clone();
+    let replayed_store: ReplaySlot = Arc::new(std::sync::Mutex::new(None));
+    let pump_replayed = replayed_store.clone();
     let cwd = spec.cwd.to_path_buf();
     let attach = spec.attach.clone();
     let spec_command = spec.command.to_owned();
@@ -299,6 +321,7 @@ pub async fn open(
                 permissions,
                 cwd,
                 attach,
+                replay_store: pump_replayed,
                 spec_command,
                 commands: pump_commands,
                 config: pump_config,
@@ -357,6 +380,7 @@ pub async fn open(
         prompts: prompt_tx,
         connection: ready.connection,
         acp_id: ready.session_id,
+        replayed: replayed_store,
     })
 }
 
@@ -509,6 +533,8 @@ struct Pump {
     permissions: PermissionHandler,
     cwd: std::path::PathBuf,
     attach: Attach,
+    /// Where the replayed transcript is left for the handle.
+    replay_store: ReplaySlot,
     /// Kept only to name the agent in an error.
     spec_command: String,
     commands: CommandStore,
@@ -527,6 +553,7 @@ where
         permissions,
         cwd,
         attach,
+        replay_store,
         spec_command,
         commands,
         config,
@@ -577,6 +604,7 @@ where
                 || async { cx.build_session(&cwd).block_task().start_session().await };
             // Both arms must yield the same pair, so the option list always
             // belongs to the session that actually opened.
+            let importing = matches!(attach, Attach::Load(_));
             let (mut session, session_config) = match attach {
                 // Best effort: a stale id (the agent deleted the session, or
                 // the app restarted against different agent state) must fall
@@ -674,17 +702,6 @@ where
                 let _ = events.send(AcpEvent::ConfigOptions(session_config));
             }
 
-            let _ = ready.send(Ok(SessionReady {
-                connection: session.connection().clone(),
-                session_id: session.session_id().to_string(),
-                supports_close,
-                supports_listing,
-                resumed,
-                agent_info,
-                accepts_images,
-                accepts_embedded_context,
-            }));
-
             // A resumed session replays its stored transcript before the resume
             // response, so by now those chunks are already queued. They look
             // exactly like live output, and Jarvis already has that transcript,
@@ -702,12 +719,34 @@ where
                     &cwd,
                 )
                 .await;
-                if replayed.messages() > 0 {
+                let mut held = None;
+                if replayed.messages() > 0 || !replayed.transcript.is_empty() {
+                    // A load is the only case where Jarvis has no copy.
+                    if importing {
+                        held = Some((replayed.transcript.clone(), replayed.truncated));
+                    }
                     let _ = events.send(AcpEvent::HistoryReplayed {
                         messages: replayed.summary(),
+                        transcript: replayed.transcript,
+                        truncated: replayed.truncated,
+                        import: importing,
                     });
                 }
+                if let Ok(mut slot) = replay_store.lock() {
+                    *slot = held;
+                }
             }
+
+            let _ = ready.send(Ok(SessionReady {
+                connection: session.connection().clone(),
+                session_id: session.session_id().to_string(),
+                supports_close,
+                supports_listing,
+                resumed,
+                agent_info,
+                accepts_images,
+                accepts_embedded_context,
+            }));
 
             // Every turn failure is reported exactly once, right where it
             // becomes known; the pump wrapper only reports transport failures.
@@ -879,9 +918,49 @@ struct Replayed {
     agent_messages: usize,
     thoughts: usize,
     tool_calls: usize,
+    /// The user/assistant text, in order. Kept because a `Load` has no local
+    /// copy: the whole point of attaching is a conversation Jarvis never saw.
+    transcript: Vec<ReplayMessage>,
+    /// Set when the transcript hit [`REPLAY_TEXT_LIMIT`] and the rest was
+    /// counted but not kept.
+    truncated: bool,
 }
 
+/// How much replayed text is kept. A long coding session can replay millions of
+/// characters; the transcript is for display and for a later handoff, and a
+/// handoff summarises anything past its own budget anyway.
+const REPLAY_TEXT_LIMIT: usize = 400_000;
+
 impl Replayed {
+    /// Append text, merging with the previous message when the role matches.
+    /// Chunks arrive as fragments of one turn, so this keeps one row per turn
+    /// rather than one per token.
+    fn push(&mut self, role: &str, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let room = REPLAY_TEXT_LIMIT.saturating_sub(
+            self.transcript
+                .iter()
+                .map(|message| message.text.len())
+                .sum::<usize>(),
+        );
+        if room == 0 {
+            self.truncated = true;
+            return;
+        }
+        let text: String = text.chars().take(room).collect();
+        match self.transcript.last_mut() {
+            Some(last) if last.role == role => last.text.push_str(&text),
+            _ => {
+                self.transcript.push(ReplayMessage {
+                    role: role.to_owned(),
+                    text,
+                });
+            }
+        }
+    }
+
     fn messages(&self) -> usize {
         self.user_messages + self.agent_messages
     }
@@ -1064,16 +1143,20 @@ fn emit_update(
             // Counted during a replay; ignored otherwise. Jarvis's transcript
             // already carries the user's own messages, so a live chunk is never
             // new text.
-            if content_text(&chunk.content).is_some() {
+            if let Some(text) = content_text(&chunk.content) {
                 if let Some(counted) = replay.as_deref_mut() {
                     counted.user_messages += 1;
+                    counted.push("user", &text);
                 }
             }
         }
         SessionUpdate::AgentMessageChunk(chunk) => {
             if let Some(text) = content_text(&chunk.content) {
                 match replay.as_deref_mut() {
-                    Some(counted) => counted.agent_messages += 1,
+                    Some(counted) => {
+                        counted.agent_messages += 1;
+                        counted.push("assistant", &text);
+                    }
                     None => {
                         let _ = events.send(AcpEvent::Text(text));
                     }
