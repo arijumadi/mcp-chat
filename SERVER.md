@@ -63,13 +63,37 @@ need it: the ACP agents (`opencode`, `agy`, …) keep their credentials under
 | `JARVIS_DATA_DIR` | `$XDG_DATA_HOME/jarvis` | database, attachments, tool output, secrets |
 | `JARVIS_WORKSPACE` | `$JARVIS_DATA_DIR/workspace` | default workspace for new chats |
 | `JARVIS_STATIC_DIR` | `dist/` beside the binary | the web UI bundle |
-| `JARVIS_BIND` | `127.0.0.1:8787` | listen address |
+| `JARVIS_BIND` | `127.0.0.1:8787` | listen address(es), comma separated |
 | `JARVIS_TOKEN` | generated once into `server-token` | the access token |
+| `JARVIS_PASSWORD` | from `server-password` | optional password, an alternative to the token |
 | `JARVIS_SECURE_COOKIE` | `0` | set to `1` when serving over HTTPS |
 | `JARVIS_ALLOWED_HOST` | unset | pins the `Host` header against DNS rebinding |
 
 On first start the server prints a token. Open `http://<host>:8787/login/`,
 paste it, and the browser keeps an HttpOnly cookie.
+
+### Password instead of the token
+
+The token is 32 hex characters and fine for a script, awkward on a phone. A
+password can be configured alongside it; both work, and neither removes the
+other.
+
+```bash
+JARVIS_PASSWORD='something you can type'
+```
+
+or put it in `server-password` inside the data directory, which is how a
+systemd unit avoids putting it in a world-readable environment file.
+
+The password is hashed at startup with a per-installation salt from
+`server-salt`, and the cookie carries a hash rather than the password itself.
+Twenty thousand rounds of SHA-256 is not Argon2; the honest summary is that it
+raises the cost of guessing from a stolen data directory and is not a substitute
+for keeping the port off the internet. `server-salt` and `server-token` are
+written 0600.
+
+Removing `server-password` and restarting turns the password off; the token
+keeps working either way.
 
 ## Reaching it from another computer
 
@@ -89,6 +113,18 @@ Recommended, in order of least risk:
    ```bash
    JARVIS_BIND=100.x.y.z:8787
    ```
+
+   A host that should answer on both a LAN and a tailnet takes a list. Naming
+   each address is deliberate: `0.0.0.0` would also expose Docker bridges and
+   tunnels you never asked to publish.
+   ```bash
+   JARVIS_BIND=192.168.1.10:8787,100.x.y.z:8787
+   JARVIS_ALLOWED_HOST=192.168.1.10,100.x.y.z,host.tailnet-name.ts.net
+   ```
+
+   An address that is not up when the server starts is logged as an error and
+   skipped; the others still serve. That keeps boot from failing because DHCP
+   has not landed yet.
 
 3. **Reverse proxy with TLS** — Caddy in front of the loopback bind:
    ```
@@ -131,6 +167,8 @@ $JARVIS_DATA_DIR/
   tool-output/     spilled tool results
   secrets.json     API keys and MCP tokens (0600)
   server-token     the access token
+  server-salt      salt for the password hash
+  server-password  optional password (plain text, 0600; hashed at startup)
   uploads/         transient, cleaned per upload
 ```
 

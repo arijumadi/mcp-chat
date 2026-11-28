@@ -51,8 +51,14 @@ struct Config {
     data_dir: PathBuf,
     workspace: Option<PathBuf>,
     static_dir: PathBuf,
-    bind: SocketAddr,
+    /// Every address to listen on. A host that is reachable over both a LAN and
+    /// Tailscale needs both, and one socket cannot cover them.
+    binds: Vec<SocketAddr>,
     token: String,
+    /// Optional password, hashed. See `Auth::hash_password`.
+    password: Option<String>,
+    /// Per-installation salt for the password hash.
+    salt: String,
     secure_cookie: bool,
     allowed_hosts: Vec<String>,
 }
@@ -68,10 +74,23 @@ impl Config {
             Some(path) => path,
             None => default_static_dir()?,
         };
-        let bind: SocketAddr = std::env::var("JARVIS_BIND")
+        // Comma separated. `0.0.0.0:8787` covers every interface, but it also
+        // exposes Docker bridges and tunnels the user did not ask for; naming
+        // each address is explicit.
+        let binds = std::env::var("JARVIS_BIND")
             .unwrap_or_else(|_| "127.0.0.1:8787".into())
-            .parse()
-            .map_err(|error| format!("JARVIS_BIND is not a socket address: {error}"))?;
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                value.parse::<SocketAddr>().map_err(|error| {
+                    format!("JARVIS_BIND has an invalid address {value:?}: {error}")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if binds.is_empty() {
+            return Err("JARVIS_BIND is empty".into());
+        }
         let secure_cookie = std::env::var("JARVIS_SECURE_COOKIE")
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
@@ -88,12 +107,23 @@ impl Config {
             })
             .unwrap_or_default();
         let token = load_or_create_token(&data_dir)?;
+        let salt = load_or_create_salt(&data_dir)?;
+        let password = match std::env::var("JARVIS_PASSWORD") {
+            Ok(value) if !value.trim().is_empty() => Some(value),
+            _ => std::fs::read_to_string(data_dir.join("server-password"))
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
+        };
+        let password = password.map(|plain| crate::auth::hash_password_with(&salt, &plain));
         Ok(Self {
             data_dir,
             workspace,
             static_dir,
-            bind,
+            binds,
             token,
+            password,
+            salt,
             secure_cookie,
             allowed_hosts,
         })
@@ -167,6 +197,32 @@ fn load_or_create_token(data_dir: &std::path::Path) -> Result<String, String> {
     Ok(token)
 }
 
+/// A stable per-installation salt, created on first use.
+///
+/// Kept next to the token in the data directory, which is already the thing an
+/// attacker would need. Its purpose is not secrecy but uniqueness: two hosts with
+/// the same password must not produce the same hash.
+fn load_or_create_salt(data_dir: &std::path::Path) -> Result<String, String> {
+    let path = data_dir.join("server-salt");
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let existing = existing.trim().to_owned();
+        if !existing.is_empty() {
+            return Ok(existing);
+        }
+    }
+    let salt = uuid::Uuid::new_v4().simple().to_string();
+    std::fs::create_dir_all(data_dir)
+        .map_err(|error| format!("cannot create {}: {error}", data_dir.display()))?;
+    std::fs::write(&path, &salt)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(salt)
+}
+
 async fn run() -> Result<(), String> {
     let config = Config::from_env()?;
     let state = bootstrap(&config).await?;
@@ -183,31 +239,75 @@ async fn run() -> Result<(), String> {
         ))
         .with_state(state.clone());
 
-    let listener = tokio::net::TcpListener::bind(config.bind)
-        .await
-        .map_err(|error| format!("cannot listen on {}: {error}", config.bind))?;
-    let address = listener.local_addr().unwrap_or(config.bind);
+    // One listener per address. A host on both a LAN and a Tailscale tailnet
+    // needs two: 0.0.0.0 would also cover Docker bridges and tunnels the user
+    // never asked to expose.
+    //
+    // An address that is not up yet (a DHCP lease that has not landed, a
+    // Tailscale daemon still starting) must not take the whole server down, but
+    // it must be loud: the configured address simply will not answer.
+    let mut listeners = Vec::with_capacity(config.binds.len());
+    for bind in &config.binds {
+        match tokio::net::TcpListener::bind(bind).await {
+            Ok(listener) => {
+                let address = listener.local_addr().unwrap_or(*bind);
+                listeners.push((listener, address));
+            }
+            Err(error) => {
+                tracing::error!(
+                    "cannot listen on {bind}: {error}. That address will not answer; \
+                     the others still will."
+                );
+            }
+        }
+    }
+    if listeners.is_empty() {
+        return Err("no address could be bound; check JARVIS_BIND".into());
+    }
 
-    auth::announce(address, state.auth.token(), address.ip().is_loopback());
+    for (_, address) in &listeners {
+        auth::announce(*address, state.auth.token(), address.ip().is_loopback());
+    }
     tracing::info!(data_dir = %config.data_dir.display(), "data directory");
     tracing::info!(static_dir = %config.static_dir.display(), "web UI");
     if let Ok(workspace) = mcp_chat_core::agent::tools::workspace_root(&state.db.pool).await {
         tracing::info!(workspace = %workspace.display(), "workspace");
     }
 
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown())
-        .await
-        .map_err(|error| format!("server stopped: {error}"))?;
+    // One signal for every listener: dropping a receiver ends that server.
+    let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+    let mut servers = Vec::with_capacity(listeners.len());
+    for (listener, address) in listeners {
+        let router = router.clone();
+        let mut shutdown_rx = shutdown_tx.subscribe();
+        servers.push(tokio::spawn(async move {
+            let result = axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.recv().await;
+                    tracing::info!("shutting down {address}");
+                })
+                .await;
+            result.map_err(|error| format!("server on {address} stopped: {error}"))
+        }));
+    }
+
+    // Serve until Ctrl-C, then let each listener finish and stop the agents.
+    let _ = tokio::signal::ctrl_c().await;
+    tracing::info!("shutting down");
+    let _ = shutdown_tx.send(());
+
+    for server in servers {
+        match server.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(error),
+            Err(error) => return Err(format!("a listener task failed: {error}")),
+        }
+    }
 
     // Child processes (ACP agents, stdio MCP servers) must not outlive us.
     state.engine.acp.close_all().await;
     Ok(())
-}
-
-async fn shutdown() {
-    let _ = tokio::signal::ctrl_c().await;
-    tracing::info!("shutting down");
 }
 
 async fn bootstrap(config: &Config) -> Result<Arc<AppState>, String> {
@@ -302,6 +402,8 @@ async fn bootstrap(config: &Config) -> Result<Arc<AppState>, String> {
         static_dir: config.static_dir.clone(),
         auth: Auth::new(
             config.token.clone(),
+            config.password.clone(),
+            config.salt.clone(),
             config.secure_cookie,
             config.allowed_hosts.clone(),
         ),
@@ -357,7 +459,7 @@ mod tests {
             data_dir: dir.path().to_path_buf(),
             output_dir: dir.path().join("tool-output"),
             static_dir: dir.path().to_path_buf(),
-            auth: crate::auth::Auth::new("t".into(), false, Vec::new()),
+            auth: crate::auth::Auth::new("t".into(), None, "s".into(), false, Vec::new()),
         });
         (state, dir)
     }
