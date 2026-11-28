@@ -68,6 +68,16 @@ pub enum AcpEvent {
     Commands(Vec<AgentCommand>),
     /// The agent's configurable options, replaced wholesale.
     ConfigOptions(Vec<ConfigOption>),
+    /// The agent replayed rows of an existing conversation instead of producing
+    /// new output.
+    ///
+    /// `session/resume` and `session/load` both stream the stored transcript as
+    /// `session/update` notifications *before* they respond (the spec requires
+    /// it for `load`, and Hermes also does it for `resume`). Those chunks are
+    /// indistinguishable from live ones, so the pump counts them and reports
+    /// them here; the turn runner must not append them to the transcript it
+    /// already has. `messages` is a short human-readable summary.
+    HistoryReplayed { messages: String },
     /// A permission request that needs an answer.
     PermissionRequested {
         request_id: String,

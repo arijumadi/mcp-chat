@@ -597,6 +597,30 @@ where
                 accepts_embedded_context,
             }));
 
+            // A resumed session replays its stored transcript before the resume
+            // response, so by now those chunks are already queued. They look
+            // exactly like live output, and Jarvis already has that transcript,
+            // so appending them would show the conversation twice. Drain them
+            // here, before the first prompt can be accepted: the loop below
+            // reads prompts and updates in one `select!`, so a later drain would
+            // race the first turn.
+            if resumed {
+                let replayed = settle_replay(
+                    &mut session,
+                    &events,
+                    &permissions,
+                    &commands,
+                    &config,
+                    &cwd,
+                )
+                .await;
+                if replayed.messages() > 0 {
+                    let _ = events.send(AcpEvent::HistoryReplayed {
+                        messages: replayed.summary(),
+                    });
+                }
+            }
+
             // Every turn failure is reported exactly once, right where it
             // becomes known; the pump wrapper only reports transport failures.
             //
@@ -664,6 +688,7 @@ where
                                 &commands,
                                 &config,
                                 &cwd,
+                                None,
                             )
                             .await;
                         }
@@ -730,6 +755,7 @@ where
                                         &commands,
                                         &config,
                                         &cwd,
+                                        None,
                                     )
                                     .await;
                                 }
@@ -758,6 +784,104 @@ where
     outcome.map_err(|error| map_error(error, &AgentFacts::default()))
 }
 
+/// What a replay put back on the wire.
+#[derive(Default)]
+struct Replayed {
+    user_messages: usize,
+    agent_messages: usize,
+    thoughts: usize,
+    tool_calls: usize,
+}
+
+impl Replayed {
+    fn messages(&self) -> usize {
+        self.user_messages + self.agent_messages
+    }
+
+    fn summary(&self) -> String {
+        let mut parts = Vec::new();
+        if self.messages() > 0 {
+            parts.push(format!(
+                "{} message{}",
+                self.messages(),
+                if self.messages() == 1 { "" } else { "s" }
+            ));
+        }
+        if self.thoughts > 0 {
+            parts.push(format!(
+                "{} thought{}",
+                self.thoughts,
+                if self.thoughts == 1 { "" } else { "s" }
+            ));
+        }
+        if self.tool_calls > 0 {
+            parts.push(format!(
+                "{} tool call{}",
+                self.tool_calls,
+                if self.tool_calls == 1 { "" } else { "s" }
+            ));
+        }
+        if parts.is_empty() {
+            return String::new();
+        }
+        format!(
+            "The agent replayed {} from this session; it is already in the transcript, so it was not added again.",
+            parts.join(", ")
+        )
+    }
+}
+
+/// Count and drop the history a `resume` replays.
+///
+/// Must run before any prompt is sent, or the replayed chunks and the live turn
+/// interleave. Bounded by a deadline: an agent that replays a very large
+/// session keeps streaming, and an unbounded drain would delay every reopen.
+///
+/// Returns once the queue is quiet for `REPLAY_QUIET` or the deadline passes.
+async fn settle_replay(
+    session: &mut agent_client_protocol::v1::ActiveSession<'static, Agent>,
+    events: &mpsc::UnboundedSender<AcpEvent>,
+    permissions: &PermissionHandler,
+    commands: &CommandStore,
+    config: &ConfigStore,
+    cwd: &Path,
+) -> Replayed {
+    const REPLAY_QUIET: std::time::Duration = std::time::Duration::from_millis(150);
+    const REPLAY_MAX: std::time::Duration = std::time::Duration::from_secs(3);
+
+    let mut counted = Replayed::default();
+    let deadline = tokio::time::Instant::now() + REPLAY_MAX;
+
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        let wait = left.min(REPLAY_QUIET);
+        match tokio::time::timeout(wait, session.read_update()).await {
+            // Quiet for REPLAY_QUIET: whatever was going to arrive has.
+            Err(_) => break,
+            Ok(Ok(SessionMessage::Message(dispatch))) => {
+                handle_dispatch(
+                    dispatch.into_raw(),
+                    events,
+                    permissions,
+                    commands,
+                    config,
+                    cwd,
+                    Some(&mut counted),
+                )
+                .await;
+            }
+            Ok(Ok(SessionMessage::PromptResponse(_))) => {}
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) => break,
+        }
+    }
+
+    counted
+}
+
 /// What the idle pump can wake up for.
 enum Next {
     Command(Command),
@@ -774,6 +898,10 @@ async fn handle_dispatch(
     commands: &CommandStore,
     config: &ConfigStore,
     workspace: &std::path::Path,
+    // `Some` while settling the history a resume replays. Transcript updates
+    // are counted and dropped: Jarvis already has them, and appending would
+    // show the conversation twice.
+    replay: Option<&mut Replayed>,
 ) {
     let cwd = workspace.to_path_buf();
     let events_for_update = events.clone();
@@ -787,6 +915,7 @@ async fn handle_dispatch(
                 &events_for_update,
                 &commands_for_update,
                 &config_for_update,
+                replay,
             );
             Ok(())
         })
@@ -834,16 +963,55 @@ fn emit_update(
     events: &mpsc::UnboundedSender<AcpEvent>,
     commands: &CommandStore,
     config: &ConfigStore,
+    mut replay: Option<&mut Replayed>,
 ) {
+    // While settling a replayed resume, the transcript parts are counted and
+    // dropped. Everything else (config options, slash commands, usage) still
+    // goes through: the pickers need it and none of it duplicates history.
+    let dropping = replay.is_some();
     match update {
+        SessionUpdate::UserMessageChunk(chunk) => {
+            // Jarvis never rendered replayed user turns before, so this arm is
+            // new; outside a replay the text belongs on the transcript.
+            // Counted during a replay; ignored otherwise. Jarvis's transcript
+            // already carries the user's own messages, so a live chunk is never
+            // new text.
+            if content_text(&chunk.content).is_some() {
+                if let Some(counted) = replay.as_deref_mut() {
+                    counted.user_messages += 1;
+                }
+            }
+        }
         SessionUpdate::AgentMessageChunk(chunk) => {
             if let Some(text) = content_text(&chunk.content) {
-                let _ = events.send(AcpEvent::Text(text));
+                match replay.as_deref_mut() {
+                    Some(counted) => counted.agent_messages += 1,
+                    None => {
+                        let _ = events.send(AcpEvent::Text(text));
+                    }
+                }
             }
         }
         SessionUpdate::AgentThoughtChunk(chunk) => {
             if let Some(text) = content_text(&chunk.content) {
-                let _ = events.send(AcpEvent::Thought(text));
+                match replay.as_deref_mut() {
+                    Some(counted) => counted.thoughts += 1,
+                    None => {
+                        let _ = events.send(AcpEvent::Thought(text));
+                    }
+                }
+            }
+        }
+        SessionUpdate::ToolCall(call) if dropping => {
+            let _ = call;
+            if let Some(counted) = replay {
+                counted.tool_calls += 1;
+            }
+        }
+        SessionUpdate::ToolCallUpdate(update) if dropping => {
+            let _ = update;
+            if let Some(counted) = replay {
+                counted.tool_calls += 1;
             }
         }
         SessionUpdate::ToolCall(call) => {

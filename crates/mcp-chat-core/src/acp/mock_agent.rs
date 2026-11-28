@@ -56,6 +56,21 @@ fn mock_config_options(current: &str) -> Value {
     ])
 }
 
+/// Emit a replayed user turn, as agents do when they replay history.
+fn user_chunk(session: &str, text: &str) {
+    write(json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session,
+            "update": {
+                "sessionUpdate": "user_message_chunk",
+                "content": { "type": "text", "text": text }
+            }
+        }
+    }));
+}
+
 fn chunk(session: &str, text: &str) {
     write(json!({
         "jsonrpc": "2.0",
@@ -118,6 +133,8 @@ struct PendingTurn {
 /// - `permission`: request permission, wait for the answer, then report which
 ///   option the client selected.
 /// - `crash`: exit in the middle of the first prompt.
+/// - `replay`: `session/resume` replays an old turn before answering, the way
+///   Hermes does. A client must not append the replay to the transcript.
 ///
 /// A second argument of `close` makes the agent advertise
 /// `sessionCapabilities.close`, so the client is allowed to call it.
@@ -234,6 +251,13 @@ pub fn run(scenario: &str) {
                     .and_then(Value::as_str)
                     .unwrap_or("mock-session")
                     .to_owned();
+                // Hermes replays history on resume as well as load, streaming it
+                // before the response. A client that treats those chunks as new
+                // output duplicates the transcript.
+                if scenario == "replay" {
+                    user_chunk(&session_id, "old question from the history");
+                    chunk(&session_id, "old answer from the history");
+                }
                 write(json!({
                     "jsonrpc": "2.0",
                     "id": id,

@@ -250,6 +250,15 @@ async fn stream_turn(
             | AcpEvent::PermissionRequested { .. }
             | AcpEvent::Commands(_)
             | AcpEvent::ConfigOptions(_) => {}
+            // The agent handed back history Jarvis already has. The pump
+            // dropped the chunks; say so once instead of staying silent, so a
+            // user whose transcript looks incomplete knows why.
+            AcpEvent::HistoryReplayed { messages } => {
+                tracing::info!(
+                    conversation = %child_id,
+                    "ACP resume replayed: {messages}"
+                );
+            }
             AcpEvent::TurnEnded { stop_reason } => {
                 match stop_reason.as_str() {
                     "end_turn" => {}
