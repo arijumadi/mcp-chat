@@ -135,6 +135,8 @@ pub async fn dispatch(state: &AppState, command: &str, args: Value) -> Result<Va
         "get_conversation_acp_agent" => acp::get_conversation_acp_agent(state, args).await,
         "get_agent_commands" => acp::get_agent_commands(state, args).await,
         "get_agent_config" => acp::get_agent_config(state, args).await,
+        "list_agent_sessions" => acp::list_agent_sessions(state, args).await,
+        "attach_agent_session" => acp::attach_agent_session(state, args).await,
         "set_agent_config" => acp::set_agent_config(state, args).await,
 
         // --- workspace, attachments, settings, skills, updates --------------

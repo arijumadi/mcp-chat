@@ -75,6 +75,9 @@ pub struct AcpSession {
     /// Whether the agent advertised `sessionCapabilities.close`. Most do not,
     /// and sending the request anyway would report a method-not-found error.
     pub supports_close: bool,
+    /// Whether the agent advertised `sessionCapabilities.list`, which is what
+    /// makes `session/list` legal. Not the same as having no sessions.
+    pub supports_listing: bool,
     /// Name and version the agent reported during `initialize`, if any.
     pub agent_info: Option<(String, String)>,
     /// What the agent accepts beyond plain text. Sending an image block to an
@@ -117,6 +120,14 @@ impl AcpSession {
         self.prompts
             .send(Command::Prompt(blocks))
             .map_err(|_| AcpError::Inactive)
+    }
+
+    /// The live connection, for requests outside the turn protocol.
+    ///
+    /// Only `session/list` uses this today: it is a one-off query with no turn
+    /// in flight, so it does not belong in the pump.
+    pub fn connection(&self) -> &ConnectionTo<Agent> {
+        &self.connection
     }
 
     /// Ask the agent to stop the current turn. The session stays usable.
@@ -191,10 +202,30 @@ pub struct SessionSpec<'a> {
     pub env: &'a [(String, String)],
     /// Absolute working directory for the child and for the session request.
     pub cwd: &'a Path,
-    /// Resume an existing ACP session instead of creating a new one. Only
-    /// honoured when the agent advertises `sessionCapabilities.resume`.
-    pub resume: Option<String>,
+    /// Reattach to an existing ACP session instead of creating a new one.
+    ///
+    /// `Resume` calls `session/resume` and falls back to a new session when the
+    /// agent refuses; `Load` calls `session/load`, which is the only way to open
+    /// a session this client did not create, and fails instead of silently
+    /// starting over when the agent refuses.
+    pub attach: Attach,
     pub permissions: PermissionHandler,
+}
+
+/// How to open a session that already exists.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Attach {
+    /// Start a new session.
+    #[default]
+    New,
+    /// Continue a session Jarvis opened earlier. Best effort: a stale id falls
+    /// back to `New`, because the chat still needs to work.
+    Resume(String),
+    /// Open a session somebody else created, identified by `session/list`.
+    ///
+    /// Unlike `Resume` this does not fall back. Attaching to the wrong
+    /// conversation silently would be worse than reporting the failure.
+    Load(String),
 }
 
 /// Spawn the agent, initialize, create a session, and leave the pump running.
@@ -249,7 +280,8 @@ pub async fn open(
     let (ready_tx, ready_rx) = oneshot::channel::<Result<SessionReady, AcpError>>();
     let permissions = spec.permissions.clone();
     let cwd = spec.cwd.to_path_buf();
-    let resume = spec.resume.clone();
+    let attach = spec.attach.clone();
+    let spec_command = spec.command.to_owned();
 
     let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let pump_alive = alive.clone();
@@ -266,7 +298,8 @@ pub async fn open(
                 events: events.clone(),
                 permissions,
                 cwd,
-                resume,
+                attach,
+                spec_command,
                 commands: pump_commands,
                 config: pump_config,
                 changes: change_rx,
@@ -312,6 +345,7 @@ pub async fn open(
         acp_session_id: ready.session_id.clone(),
         command: spec.command.to_owned(),
         supports_close: ready.supports_close,
+        supports_listing: ready.supports_listing,
         agent_info: ready.agent_info,
         commands,
         config,
@@ -402,6 +436,16 @@ fn config_from_resume(
         .unwrap_or_default()
 }
 
+fn config_from_load(
+    response: &agent_client_protocol::v1::schema::LoadSessionResponse,
+) -> Vec<ConfigOption> {
+    response
+        .config_options
+        .as_ref()
+        .map(|options| options.iter().map(normalise_option).collect())
+        .unwrap_or_default()
+}
+
 /// Also fold in the legacy `modes` field, which older agents send instead of a
 /// `mode` config option.
 fn modes_as_option(
@@ -449,6 +493,7 @@ struct SessionReady {
     connection: ConnectionTo<Agent>,
     session_id: String,
     supports_close: bool,
+    supports_listing: bool,
     /// True when the agent accepted the requested resume id, false when a new
     /// session was created (including after a failed resume).
     resumed: bool,
@@ -463,7 +508,9 @@ struct Pump {
     events: mpsc::UnboundedSender<AcpEvent>,
     permissions: PermissionHandler,
     cwd: std::path::PathBuf,
-    resume: Option<String>,
+    attach: Attach,
+    /// Kept only to name the agent in an error.
+    spec_command: String,
     commands: CommandStore,
     config: ConfigStore,
     changes: mpsc::UnboundedReceiver<ConfigChange>,
@@ -479,7 +526,8 @@ where
         events,
         permissions,
         cwd,
-        resume,
+        attach,
+        spec_command,
         commands,
         config,
         mut changes,
@@ -509,6 +557,10 @@ where
             let session_caps = &initialized.agent_capabilities.session_capabilities;
             let supports_close = session_caps.close.is_some();
             let supports_resume = session_caps.resume.is_some();
+            let supports_listing = session_caps.list.is_some();
+            // `session/load` is still a top-level capability; the spec notes it
+            // will move into `sessionCapabilities` later.
+            let supports_load = initialized.agent_capabilities.load_session;
             let agent_info = initialized
                 .agent_info
                 .as_ref()
@@ -520,17 +572,16 @@ where
             // ACP requires an absolute cwd; callers canonicalize it.
             // `start_session` returns a `'static` session, so the pump can loop
             // here without borrowing the closure's stack frame.
-            //
-            // Resume is best effort: a stale id (the agent deleted the session,
-            // or the app was restarted against a different agent state) must
-            // fall back to a fresh session rather than fail the turn.
             let mut resumed = false;
             let new_session =
                 || async { cx.build_session(&cwd).block_task().start_session().await };
             // Both arms must yield the same pair, so the option list always
             // belongs to the session that actually opened.
-            let (mut session, session_config) = match (resume, supports_resume) {
-                (Some(session_id), true) => {
+            let (mut session, session_config) = match attach {
+                // Best effort: a stale id (the agent deleted the session, or
+                // the app restarted against different agent state) must fall
+                // back to a fresh session rather than fail the turn.
+                Attach::Resume(session_id) if supports_resume => {
                     match cx
                         .resume_session(session_id, &cwd)
                         .block_task()
@@ -565,7 +616,43 @@ where
                         }
                     }
                 }
-                _ => match new_session().await {
+                // No fallback on purpose: attaching to the wrong conversation
+                // silently would be worse than saying it did not work.
+                Attach::Load(session_id) if supports_load => {
+                    match cx
+                        .load_session(session_id, &cwd)
+                        .block_task()
+                        .start_session()
+                        .await
+                    {
+                        Ok(setup) => {
+                            resumed = true;
+                            let config = merge_modes(
+                                config_from_load(&setup.response),
+                                &setup.response.modes,
+                            );
+                            (setup.session, config)
+                        }
+                        Err(error) => {
+                            let _ = ready.send(Err(map_error(error, &facts)));
+                            return Ok(());
+                        }
+                    }
+                }
+                // An agent that cannot do what was asked is a real failure, not
+                // something to paper over with an empty new session.
+                Attach::Resume(_) | Attach::Load(_) => {
+                    let _ = ready.send(Err(AcpError::SpawnFailed {
+                        command: spec_command.clone(),
+                        message: if matches!(attach, Attach::Load(_)) {
+                            "this agent cannot open a session from outside Jarvis: it does not advertise session/load.".into()
+                        } else {
+                            "this agent cannot continue a saved session: it does not advertise session/resume.".into()
+                        },
+                    }));
+                    return Ok(());
+                }
+                Attach::New => match new_session().await {
                     Ok(setup) => {
                         let config =
                             merge_modes(config_from_new(&setup.response), &setup.response.modes);
@@ -591,6 +678,7 @@ where
                 connection: session.connection().clone(),
                 session_id: session.session_id().to_string(),
                 supports_close,
+                supports_listing,
                 resumed,
                 agent_info,
                 accepts_images,

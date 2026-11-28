@@ -14,7 +14,7 @@ use std::sync::Arc;
 use mcp_chat_core::acp::AcpEvent;
 use mcp_chat_core::acp::manager::AcpManager;
 use mcp_chat_core::acp::session::{
-    PermissionDecision, PermissionHandler, PermissionRequestInfo, SessionSpec,
+    Attach, PermissionDecision, PermissionHandler, PermissionRequestInfo, SessionSpec,
 };
 
 fn mock_agent() -> String {
@@ -44,7 +44,10 @@ async fn open(
             args: &argv,
             env: &[],
             cwd,
-            resume: resume.map(str::to_owned),
+            attach: match resume {
+                Some(id) => Attach::Resume(id.to_owned()),
+                None => Attach::New,
+            },
             permissions: no_permissions(),
         })
         .await

@@ -18,12 +18,14 @@ pub mod mock_agent;
 pub mod process;
 pub mod prompt;
 pub mod session;
+pub mod sessions;
 
 pub use config::AgentPreset;
 pub use error::AcpError;
 pub use events::{AcpEvent, AgentCommand, ConfigChoice, ConfigOption, TurnOutcome, TurnTranscript};
 pub use manager::{AcpManager, MAX_ACTIVE_SESSIONS};
 pub use session::{AcpSession, PermissionDecision, PermissionHandler, PermissionRequestInfo};
+pub use sessions::{AgentSession, AgentSessionPage, list_sessions};
 
 /// Result of probing a configured agent, used by the settings UI.
 #[derive(Debug, Clone, serde::Serialize)]

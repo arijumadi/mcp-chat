@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use mcp_chat_core::acp::AcpEvent;
 use mcp_chat_core::acp::session::{
-    PermissionDecision, PermissionHandler, PermissionRequestInfo, SessionSpec, open,
+    Attach, PermissionDecision, PermissionHandler, PermissionRequestInfo, SessionSpec, open,
 };
 
 fn agent_binary() -> Option<PathBuf> {
@@ -56,7 +56,7 @@ async fn a_real_antigravity_agent_reports_its_capabilities() {
             args: &args,
             env: &[],
             cwd: &cwd,
-            resume: None,
+            attach: Attach::New,
             permissions: no_permissions(),
         },
         events_tx,
@@ -116,7 +116,7 @@ async fn a_real_antigravity_agent_answers_a_prompt_and_remembers_it() {
             args: &args,
             env: &[],
             cwd: &cwd,
-            resume: None,
+            attach: Attach::New,
             permissions: no_permissions(),
         },
         events_tx,

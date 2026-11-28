@@ -11,7 +11,7 @@ use std::sync::Arc;
 use mcp_chat_core::acp::AcpEvent;
 use mcp_chat_core::acp::manager::AcpManager;
 use mcp_chat_core::acp::session::{
-    PermissionDecision, PermissionHandler, PermissionRequestInfo, SessionSpec,
+    Attach, PermissionDecision, PermissionHandler, PermissionRequestInfo, SessionSpec,
 };
 
 fn no_permissions() -> PermissionHandler {
@@ -84,7 +84,7 @@ async fn a_reopen_then_immediate_prompt_does_not_mix_the_replay() {
             args: &args,
             env: &[],
             cwd: &cwd,
-            resume: None,
+            attach: Attach::New,
             permissions: no_permissions(),
         })
         .await
@@ -107,7 +107,7 @@ async fn a_reopen_then_immediate_prompt_does_not_mix_the_replay() {
             args: &args,
             env: &[],
             cwd: &cwd,
-            resume: Some(session_id),
+            attach: Attach::Resume(session_id),
             permissions: no_permissions(),
         })
         .await

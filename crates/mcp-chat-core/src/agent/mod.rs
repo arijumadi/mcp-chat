@@ -329,7 +329,7 @@ impl ChatEngine {
                 args: &args,
                 env: &env,
                 cwd: workspace,
-                resume: None,
+                attach: crate::acp::session::Attach::New,
                 permissions: no_permissions,
             },
             events_tx,
@@ -419,6 +419,90 @@ impl ChatEngine {
         self.open_acp_session_in_background(conversation_id.to_owned(), agent.id.clone())
             .await;
 
+        Ok(())
+    }
+
+    /// Attach a chat to a session that already exists on the agent.
+    ///
+    /// Used by the session picker: the conversation is bound to the agent and
+    /// given the session id, so the next turn calls `session/load` instead of
+    /// `session/new`. `cwd` must be the directory the session reports, never the
+    /// chat's workspace -- OpenCode rejects a mismatch, and Antigravity would
+    /// silently move the session.
+    ///
+    /// Blocking on purpose: the caller needs to know the load worked before it
+    /// shows the conversation as attached. A failure here leaves the previous
+    /// binding untouched.
+    pub async fn attach_conversation_session(
+        self: &Arc<Self>,
+        conversation_id: &str,
+        slug: &str,
+        agent_session_id: &str,
+        cwd: &str,
+    ) -> Result<()> {
+        if self.in_flight(conversation_id) {
+            return Err(CoreError::Message(
+                "Stop the current turn before attaching a session.".into(),
+            ));
+        }
+        let agent = acp_agents::get_by_slug(&self.db.pool, slug)
+            .await?
+            .ok_or_else(|| {
+                CoreError::Message(format!(
+                    "No ACP agent is registered with the slug {slug:?}."
+                ))
+            })?;
+        if !agent.enabled {
+            return Err(CoreError::Message(format!(
+                "The ACP agent {slug:?} is disabled."
+            )));
+        }
+
+        let workspace = std::path::PathBuf::from(cwd);
+        if !workspace.is_absolute() {
+            return Err(CoreError::Message(
+                "The session directory must be an absolute path.".into(),
+            ));
+        }
+
+        // The old process must go first: the manager keys on the conversation
+        // id, so a live session would be reused and the load would never run.
+        self.close_acp_session(conversation_id).await;
+
+        let policy = crate::db::repo::acp_agents::PermissionPolicy::parse(&agent.permission_policy)
+            .unwrap_or(crate::db::repo::acp_agents::PermissionPolicy::Ask);
+        let active = acp_turn::ensure_session_at(
+            self.clone(),
+            conversation_id,
+            &agent,
+            &workspace,
+            crate::acp::session::Attach::Load(agent_session_id.to_owned()),
+            &tokio_util::sync::CancellationToken::new(),
+            policy,
+        )
+        .await?;
+
+        // `ensure_session_at` stored the id it opened; assert it is the one that
+        // was asked for, so a silent fallback can never bind the wrong chat.
+        if active.handle.acp_session_id != agent_session_id {
+            self.close_acp_session(conversation_id).await;
+            return Err(CoreError::Message(format!(
+                "The agent opened session {} instead of the requested one.",
+                active.handle.acp_session_id
+            )));
+        }
+
+        conversations::set_acp(
+            &self.db.pool,
+            conversation_id,
+            &agent.slug,
+            Some(agent_session_id),
+        )
+        .await?;
+        self.acp.put_events(conversation_id, active.events).await;
+        let _ = self.events.send(CoreEvent::ConversationUpdated {
+            conversation_id: conversation_id.to_owned(),
+        });
         Ok(())
     }
 

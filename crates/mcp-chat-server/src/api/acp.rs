@@ -343,3 +343,79 @@ pub async fn set_agent_config(state: &AppState, args: Value) -> Result<Value, St
         .map_err(err)?;
     to_value(config_view(options))
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListAgentSessions {
+    /// Registry id of the agent to ask.
+    agent_id: String,
+    /// Filter. Omitted means "every session the agent will show".
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    cursor: Option<String>,
+}
+
+/// List the sessions an agent already has, including the ones Jarvis did not
+/// create.
+///
+/// Read-only: the agent is started, asked, and stopped. Nothing is bound to a
+/// conversation -- that is a separate step, and it must use the `cwd` reported
+/// here rather than the chat's workspace.
+pub async fn list_agent_sessions(state: &AppState, args: Value) -> Result<Value, String> {
+    let params: ListAgentSessions = parse(args)?;
+    let agent = acp_agents::get(&state.db.pool, &params.agent_id)
+        .await
+        .map_err(err)?;
+    let agent_args = acp_agents::agent_args(&agent).map_err(err)?;
+    let env = acp_agents::agent_env(&agent).map_err(err)?;
+
+    let cwd = params.cwd.map(std::path::PathBuf::from);
+    let page = mcp_chat_core::acp::list_sessions(
+        &state.engine.acp,
+        &agent.command,
+        &agent_args,
+        &env,
+        cwd.as_deref(),
+        params.cursor,
+        std::time::Duration::from_secs(30),
+    )
+    .await
+    .map_err(|error| error.user_message())?;
+
+    to_value(page)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachSession {
+    conversation_id: String,
+    agent_id: String,
+    session_id: String,
+    /// The session's own directory, as reported by `session/list`. Required
+    /// because the agent's `session/load` compares against it.
+    cwd: String,
+}
+
+/// Bind a chat to a session that already exists on the agent.
+///
+/// The conversation adopts that session: the next turn continues it instead of
+/// starting a new one. Jarvis does not copy the history -- the agent replays it
+/// on load, and the pump drops the replay because the transcript already has it.
+pub async fn attach_agent_session(state: &AppState, args: Value) -> Result<Value, String> {
+    let params: AttachSession = parse(args)?;
+    let agent = acp_agents::get(&state.db.pool, &params.agent_id)
+        .await
+        .map_err(err)?;
+    state
+        .engine
+        .attach_conversation_session(
+            &params.conversation_id,
+            &agent.slug,
+            &params.session_id,
+            &params.cwd,
+        )
+        .await
+        .map_err(|error| error.user_message())?;
+    to_value(())
+}

@@ -127,14 +127,6 @@ pub async fn ensure_session(
     cancel: &CancellationToken,
     policy: crate::db::repo::acp_agents::PermissionPolicy,
 ) -> Result<crate::acp::manager::ActiveSession> {
-    if let Some(active) = engine.acp.take(conversation_id).await {
-        return Ok(active);
-    }
-
-    let args = acp_agents::agent_args(agent)?;
-    let env = acp_agents::agent_env(agent)?;
-    let handler = permission_handler(engine.clone(), conversation_id, cancel, policy);
-
     // A stored id lets the agent continue the conversation after an app
     // restart; the client falls back to a fresh session when the agent no
     // longer knows it.
@@ -142,6 +134,33 @@ pub async fn ensure_session(
         .await
         .ok()
         .and_then(|conversation| conversation.acp_session_id);
+    let attach = match resume {
+        Some(id) => crate::acp::session::Attach::Resume(id),
+        None => crate::acp::session::Attach::New,
+    };
+    ensure_session_at(engine, conversation_id, agent, cwd, attach, cancel, policy).await
+}
+
+/// [`ensure_session`], but with an explicit attach mode.
+///
+/// The session picker needs `Attach::Load` plus a `cwd` that is the session's
+/// own, not the chat's workspace.
+pub async fn ensure_session_at(
+    engine: Arc<ChatEngine>,
+    conversation_id: &str,
+    agent: &crate::models::AcpAgent,
+    cwd: &std::path::Path,
+    attach: crate::acp::session::Attach,
+    cancel: &CancellationToken,
+    policy: crate::db::repo::acp_agents::PermissionPolicy,
+) -> Result<crate::acp::manager::ActiveSession> {
+    if let Some(active) = engine.acp.take(conversation_id).await {
+        return Ok(active);
+    }
+
+    let args = acp_agents::agent_args(agent)?;
+    let env = acp_agents::agent_env(agent)?;
+    let handler = permission_handler(engine.clone(), conversation_id, cancel, policy);
     let active = engine
         .acp
         .open(crate::acp::session::SessionSpec {
@@ -150,7 +169,7 @@ pub async fn ensure_session(
             args: &args,
             env: &env,
             cwd,
-            resume,
+            attach,
             permissions: handler,
         })
         .await

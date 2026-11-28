@@ -9,7 +9,7 @@ use std::sync::Arc;
 use mcp_chat_core::acp::AcpEvent;
 use mcp_chat_core::acp::manager::AcpManager;
 use mcp_chat_core::acp::session::{
-    PermissionDecision, PermissionHandler, PermissionRequestInfo, SessionSpec,
+    Attach, PermissionDecision, PermissionHandler, PermissionRequestInfo, SessionSpec,
 };
 
 fn no_permissions() -> PermissionHandler {
@@ -80,7 +80,7 @@ async fn hermes_does_not_duplicate_history_on_resume() {
             args: &args,
             env: &[],
             cwd: &cwd,
-            resume: None,
+            attach: Attach::New,
             permissions: no_permissions(),
         })
         .await
@@ -109,7 +109,7 @@ async fn hermes_does_not_duplicate_history_on_resume() {
             args: &args,
             env: &[],
             cwd: &cwd,
-            resume: Some(session_id.clone()),
+            attach: Attach::Resume(session_id.clone()),
             permissions: no_permissions(),
         })
         .await

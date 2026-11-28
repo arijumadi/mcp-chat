@@ -9,7 +9,7 @@ use std::sync::Arc;
 use mcp_chat_core::acp::AcpEvent;
 use mcp_chat_core::acp::manager::AcpManager;
 use mcp_chat_core::acp::session::{
-    PermissionDecision, PermissionHandler, PermissionRequestInfo, SessionSpec,
+    Attach, PermissionDecision, PermissionHandler, PermissionRequestInfo, SessionSpec,
 };
 
 /// Path to the mock agent built alongside the tests.
@@ -58,7 +58,7 @@ async fn open_session_with(
             args: &argv,
             env: &[],
             cwd,
-            resume: None,
+            attach: Attach::New,
             permissions,
         })
         .await
@@ -138,7 +138,7 @@ async fn missing_binary_is_reported_as_not_found() {
             args: &args,
             env: &[],
             cwd: &cwd,
-            resume: None,
+            attach: Attach::New,
             permissions: no_permissions(),
         })
         .await
@@ -353,7 +353,7 @@ async fn a_stored_session_id_is_resumed() {
             args: &args,
             env: &[],
             cwd: &cwd,
-            resume: Some("previous-session".into()),
+            attach: Attach::Resume("previous-session".into()),
             permissions: no_permissions(),
         })
         .await
@@ -424,7 +424,7 @@ async fn options_survive_a_take_and_put_round_trip() {
             args: &["echo".to_owned()],
             env: &[],
             cwd: &cwd,
-            resume: None,
+            attach: Attach::New,
             permissions: no_permissions(),
         })
         .await

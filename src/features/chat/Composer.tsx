@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ClipboardEvent } from "react";
 import {
   ArrowUp,
   FileText,
+  History,
   Loader2,
   MessageSquareText,
   Paperclip,
@@ -27,6 +28,7 @@ import { AttachmentGrid } from "./Attachments";
 import { parseCompactCommand } from "./slashCommands";
 import { AgentCommandMenu } from "./AgentCommandMenu";
 import { AgentConfigPicker } from "./AgentConfigPicker";
+import { AgentSessionPicker } from "./AgentSessionPicker";
 
 function contextRange(context: Pick<ContextItem, "startLine" | "endLine">): string {
   if (context.startLine == null) return "";
@@ -63,6 +65,7 @@ export function Composer({ conversation }: { conversation: Conversation }) {
   const editingContext = contexts.find((context) => context.id === editingContextId) ?? null;
   const [attaching, setAttaching] = useState(false);
   const [steering, setSteering] = useState(false);
+  const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [dragCount, setDragCount] = useState(0);
   const active = BUSY_STATUSES.includes(status);
@@ -618,6 +621,21 @@ export function Composer({ conversation }: { conversation: Conversation }) {
           <AutoApproveButton />
           <span className="mx-0.5 hidden h-3 w-px sm:block" style={{ background: "var(--border)" }} />
           <AgentPicker conversation={conversation} disabled={active} />
+          {conversation.acpAgent ? (
+            <button
+              type="button"
+              onClick={() => setSessionPickerOpen(true)}
+              disabled={active}
+              className="focus-ring flex shrink-0 items-center gap-1 rounded-md border border-transparent px-1.5 py-1 text-[10px] transition hover:bg-[var(--panel-2)] disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ color: "var(--muted)" }}
+              title="Continue a session that already exists on the agent"
+            >
+              <History size={10} className="shrink-0" />
+              <span className="truncate font-medium" style={{ color: "var(--fg)" }}>
+                Sessions
+              </span>
+            </button>
+          ) : null}
           <WorkspacePicker conversation={conversation} disabled={active} />
         </div>
         <div
@@ -647,6 +665,11 @@ export function Composer({ conversation }: { conversation: Conversation }) {
           </span>
         </div>
       </div>
+      <AgentSessionPicker
+        conversation={conversation}
+        open={sessionPickerOpen}
+        onClose={() => setSessionPickerOpen(false)}
+      />
     </div>
   );
 }

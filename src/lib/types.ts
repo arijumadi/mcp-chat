@@ -536,6 +536,41 @@ export interface AcpPresetView {
   notes: string;
 }
 
+/** One session an agent already has, from `session/list`. */
+export interface AgentSession {
+  sessionId: string;
+  /** The directory the session belongs to. Attaching must use exactly this. */
+  cwd: string;
+  title?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface AgentSessionPage {
+  sessions: AgentSession[];
+  nextCursor?: string | null;
+  /** False when the agent does not implement `session/list` at all. */
+  supported: boolean;
+}
+
+/** One session an agent already has, as `session/list` reports it. */
+export interface AgentSessionView {
+  sessionId: string;
+  /** The directory the session belongs to. Loading must use exactly this. */
+  cwd: string;
+  title?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface AgentSessionPageView {
+  sessions: AgentSessionView[];
+  nextCursor?: string | null;
+  /**
+   * False when the agent does not support `session/list` at all, which is not
+   * the same as having no sessions.
+   */
+  supported: boolean;
+}
+
 export interface AcpProbe {
   ok: boolean;
   message: string;

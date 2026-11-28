@@ -435,4 +435,19 @@ mod tests {
         .await
         .expect("the attachment id must be accepted by send_message");
     }
+
+    #[tokio::test]
+    async fn list_agent_sessions_reports_support_separately_from_emptiness() {
+        let (state, _dir) = harness().await;
+
+        // An agent that does not exist must fail loudly, not return a page that
+        // looks like "you have no sessions".
+        let missing = api::dispatch(
+            &state,
+            "list_agent_sessions",
+            serde_json::json!({ "agentId": "does-not-exist" }),
+        )
+        .await;
+        assert!(missing.is_err(), "an unknown agent id must be an error");
+    }
 }
